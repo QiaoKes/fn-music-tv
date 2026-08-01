@@ -1,0 +1,27 @@
+.detail
+docs
+.trellis
+
+# Android Studio and local SDK configuration
+.idea/
+*.iml
+local.properties
+captures/
+
+# Gradle and Kotlin build state
+.gradle/
+.kotlin/
+**/build/
+
+# Native build intermediates
+**/.cxx/
+**/.externalNativeBuild/
+
+# Signing material must stay local
+*.jks
+*.keystore
+keystore.properties
+
+# Operating system metadata
+.DS_Store
+Thumbs.db
