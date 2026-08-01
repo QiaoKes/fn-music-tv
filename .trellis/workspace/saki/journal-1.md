@@ -106,3 +106,24 @@ Refined TV player and media cards, improved the home now-playing entry, added st
 ### Status
 
 [OK] **Completed**
+
+
+## Session 5: Refine player metadata and lyrics layout
+
+**Date**: 2026-08-01
+**Task**: Refine player metadata and lyrics layout
+**Branch**: `main`
+
+### Summary
+
+Updated the immersive player title, artist, audio format badge, and lyric hierarchy; added real audio format propagation and wrapping lyrics; verified with tests, lint, and a 1920x1080 TV emulator.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d2b6e41` | (see git log) |
+
+### Status
+
+[OK] **Completed**
