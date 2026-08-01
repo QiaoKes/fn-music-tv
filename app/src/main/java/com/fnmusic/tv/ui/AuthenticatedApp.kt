@@ -3,6 +3,12 @@ package com.fnmusic.tv.ui
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
@@ -48,6 +54,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -1067,6 +1074,7 @@ private fun ImmersivePlayer(
         val samples = artworkBitmap?.let(::sampleArtworkPixels) ?: IntArray(0)
         dominantArtworkColor(samples, "$title|$artist")
     }
+    val posterPanelColor = remember(ambienceColor) { posterSurfaceColor(ambienceColor) }
     val previousEnabled = if (roaming) roamWindow?.previous != null else playback.currentIndex > 0
     val nextEnabled = if (roaming) roamWindow?.next != null else playback.currentIndex + 1 < playback.itemCount
     LaunchedEffect(interactionEpoch, controlsVisible) {
@@ -1106,11 +1114,16 @@ private fun ImmersivePlayer(
             }
             .focusable(),
     ) {
-        PlayerBackdrop(ambienceColor, Modifier.fillMaxSize())
+        if (poster) {
+            PlayerPosterBackdrop(posterPanelColor, Modifier.fillMaxSize())
+        } else {
+            PlayerBackdrop(ambienceColor, Modifier.fillMaxSize())
+        }
         PlayerMainContent(
             poster = poster,
             artworkBitmap = artworkBitmap,
             placeholderAccent = ambienceColor,
+            posterPanelColor = posterPanelColor,
             title = title,
             artist = artist,
             isPlaying = playback.isPlaying,
@@ -1238,10 +1251,33 @@ private fun PlayerBackdrop(targetColor: Color, modifier: Modifier = Modifier) {
 }
 
 @Composable
+private fun PlayerPosterBackdrop(targetColor: Color, modifier: Modifier = Modifier) {
+    var fromColor by remember { mutableStateOf(targetColor) }
+    var toColor by remember { mutableStateOf(targetColor) }
+    val progress = remember { Animatable(1f) }
+    LaunchedEffect(targetColor) {
+        fromColor = androidx.compose.ui.graphics.lerp(fromColor, toColor, progress.value)
+        toColor = targetColor
+        progress.snapTo(0f)
+        progress.animateTo(1f, tween(durationMillis = 650, easing = LinearEasing))
+    }
+    val animatedColor = androidx.compose.ui.graphics.lerp(fromColor, toColor, progress.value)
+    Canvas(modifier) {
+        drawRect(
+            brush = Brush.horizontalGradient(
+                0f to animatedColor,
+                1f to androidx.compose.ui.graphics.lerp(animatedColor, FnColors.Background, 0.05f),
+            ),
+        )
+    }
+}
+
+@Composable
 private fun PlayerMainContent(
     poster: Boolean,
     artworkBitmap: Bitmap?,
     placeholderAccent: Color,
+    posterPanelColor: Color,
     title: String,
     artist: String,
     isPlaying: Boolean,
@@ -1255,55 +1291,126 @@ private fun PlayerMainContent(
     canRetryQueue: Boolean,
     onRetryQueue: () -> Unit,
 ) {
-    Row(Modifier.fillMaxSize()) {
-        BoxWithConstraints(
-            Modifier.weight(0.49f).fillMaxHeight().padding(end = 14.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            val placeholder = title.take(1).ifBlank { "音" }
-            if (poster) {
-                if (artworkBitmap != null) {
-                    Image(
-                        artworkBitmap.asImageBitmap(),
-                        null,
-                        Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit,
-                    )
-                } else {
-                    PlayerArtworkPlaceholder(placeholder, placeholderAccent, Modifier.fillMaxSize(), RectangleShape)
-                }
+    val placeholder = title.take(1).ifBlank { "音" }
+    if (poster) {
+        Box(Modifier.fillMaxSize()) {
+            if (artworkBitmap != null) {
+                Image(
+                    artworkBitmap.asImageBitmap(),
+                    null,
+                    Modifier.fillMaxWidth(0.58f).fillMaxHeight(),
+                    contentScale = ContentScale.Crop,
+                )
             } else {
+                PlayerArtworkPlaceholder(
+                    placeholder,
+                    placeholderAccent,
+                    Modifier.fillMaxWidth(0.58f).fillMaxHeight(),
+                    RectangleShape,
+                )
+            }
+            Box(
+                Modifier.fillMaxSize().background(
+                    Brush.horizontalGradient(
+                        0.34f to Color.Transparent,
+                        0.50f to posterPanelColor,
+                    ),
+                ),
+            )
+            Box(
+                Modifier.fillMaxWidth(0.50f).fillMaxHeight().align(Alignment.CenterEnd)
+                    .background(posterPanelColor),
+            )
+            PlayerDetails(
+                title = title,
+                artist = artist,
+                lyricLines = lyricLines,
+                activeLyricIndex = activeLyricIndex,
+                staticLyric = staticLyric,
+                lyricsLoading = lyricsLoading,
+                lyricsFailed = lyricsFailed,
+                playbackError = playbackError,
+                queueError = queueError,
+                canRetryQueue = canRetryQueue,
+                onRetryQueue = onRetryQueue,
+                poster = true,
+                modifier = Modifier.fillMaxWidth(0.46f).fillMaxHeight().align(Alignment.CenterEnd)
+                    .padding(start = 10.dp, end = 40.dp, top = 64.dp, bottom = 132.dp),
+            )
+        }
+    } else {
+        Row(Modifier.fillMaxSize()) {
+            BoxWithConstraints(
+                Modifier.weight(0.49f).fillMaxHeight().padding(end = 14.dp),
+                contentAlignment = Alignment.Center,
+            ) {
                 val discSize = minOf(maxWidth, maxHeight).coerceAtMost(430.dp)
                 DiscArtwork(artworkBitmap, placeholder, placeholderAccent, isPlaying, discSize)
             }
+            PlayerDetails(
+                title = title,
+                artist = artist,
+                lyricLines = lyricLines,
+                activeLyricIndex = activeLyricIndex,
+                staticLyric = staticLyric,
+                lyricsLoading = lyricsLoading,
+                lyricsFailed = lyricsFailed,
+                playbackError = playbackError,
+                queueError = queueError,
+                canRetryQueue = canRetryQueue,
+                onRetryQueue = onRetryQueue,
+                poster = false,
+                modifier = Modifier.weight(0.51f).fillMaxHeight()
+                    .padding(start = 26.dp, end = 44.dp, top = 30.dp, bottom = 132.dp),
+            )
         }
-        Column(
-            Modifier.weight(0.51f).fillMaxHeight().padding(start = 26.dp, end = 44.dp, top = 30.dp, bottom = 132.dp),
-        ) {
-            Text(
-                title,
-                fontSize = 32.sp,
-                lineHeight = 38.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                artist,
-                color = FnColors.Muted,
-                fontSize = 20.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.height(14.dp))
+    }
+}
+
+@Composable
+private fun PlayerDetails(
+    title: String,
+    artist: String,
+    lyricLines: List<com.fnmusic.tv.core.model.lyric.LyricLine>,
+    activeLyricIndex: Int,
+    staticLyric: String?,
+    lyricsLoading: Boolean,
+    lyricsFailed: Boolean,
+    playbackError: String?,
+    queueError: String?,
+    canRetryQueue: Boolean,
+    onRetryQueue: () -> Unit,
+    poster: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier) {
+        Text(
+            title,
+            fontSize = if (poster) 22.sp else 32.sp,
+            lineHeight = if (poster) 28.sp else 38.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            artist,
+            color = FnColors.Muted,
+            fontSize = if (poster) 16.sp else 20.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(if (poster) 40.dp else 14.dp))
+        if (poster) {
+            PosterLyrics(lyricLines, activeLyricIndex, staticLyric, lyricsLoading, lyricsFailed)
+        } else {
             PlayerLyrics(lyricLines, activeLyricIndex, staticLyric, lyricsLoading, lyricsFailed)
-            val statusMessage = queueError ?: playbackError?.let { "播放失败：$it" }
-            if (statusMessage != null) {
-                Row(Modifier.fillMaxWidth().height(42.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(statusMessage, color = FnColors.Coral, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    if (queueError != null && canRetryQueue) {
-                        Button(onClick = onRetryQueue, modifier = Modifier.height(40.dp)) { Text("重试", maxLines = 1) }
-                    }
+        }
+        val statusMessage = queueError ?: playbackError?.let { "播放失败：$it" }
+        if (statusMessage != null) {
+            Row(Modifier.fillMaxWidth().height(42.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(statusMessage, color = FnColors.Coral, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                if (queueError != null && canRetryQueue) {
+                    Button(onClick = onRetryQueue, modifier = Modifier.height(40.dp)) { Text("重试", maxLines = 1) }
                 }
             }
         }
@@ -1446,6 +1553,107 @@ private fun DiscArtwork(
             }
             drawPath(arm, Color(0xFFD9DDD8), style = Stroke(width = 6.dp.toPx(), cap = StrokeCap.Round))
             drawLine(Color(0xFF8CA39E), needle, needle + androidx.compose.ui.geometry.Offset(12.dp.toPx(), 7.dp.toPx()), 7.dp.toPx(), StrokeCap.Round)
+        }
+    }
+}
+
+@Composable
+private fun PosterLyrics(
+    lyricLines: List<com.fnmusic.tv.core.model.lyric.LyricLine>,
+    activeIndex: Int,
+    staticLyric: String?,
+    loading: Boolean,
+    failed: Boolean,
+) {
+    Box(Modifier.fillMaxWidth().height(286.dp), contentAlignment = Alignment.TopStart) {
+        when {
+            lyricLines.isNotEmpty() -> AnimatedContent(
+                targetState = activeIndex,
+                transitionSpec = {
+                    val forward = targetState >= initialState
+                    val enterOffset: (Int) -> Int = { height -> if (forward) height / 10 else -height / 10 }
+                    val exitOffset: (Int) -> Int = { height -> if (forward) -height / 10 else height / 10 }
+                    (fadeIn(tween(220)) + slideInVertically(tween(220), enterOffset)) togetherWith
+                        (fadeOut(tween(160)) + slideOutVertically(tween(180), exitOffset))
+                },
+                label = "poster lyrics",
+            ) { animatedActiveIndex ->
+                PosterLyricSlots(lyricLines, animatedActiveIndex)
+            }
+            !staticLyric.isNullOrBlank() -> Text(
+                staticLyric,
+                fontSize = 22.sp,
+                lineHeight = 28.sp,
+                maxLines = 8,
+                overflow = TextOverflow.Clip,
+            )
+            loading -> Text("歌词加载中", color = FnColors.Text.copy(alpha = 0.4f), fontSize = 20.sp)
+            failed -> Text("歌词暂时无法加载", color = FnColors.Text.copy(alpha = 0.4f), fontSize = 20.sp)
+            else -> Text("纯音乐或暂无歌词", color = FnColors.Text.copy(alpha = 0.4f), fontSize = 20.sp)
+        }
+    }
+}
+
+@Composable
+private fun PosterLyricSlots(
+    lyricLines: List<com.fnmusic.tv.core.model.lyric.LyricLine>,
+    activeIndex: Int,
+) {
+    val indices = posterLyricIndices(lyricLines.size, activeIndex)
+    val topOffsets = listOf(16.dp, 64.dp, 162.dp, 242.dp)
+    val heights = listOf(44.dp, 78.dp, 52.dp, 44.dp)
+    Box(Modifier.fillMaxSize()) {
+        indices.forEachIndexed { slot, index ->
+            if (index != null) {
+                val current = index == activeIndex
+                val alpha = when {
+                    current -> 1f
+                    activeIndex < 0 -> 0.16f
+                    slot == 2 -> 0.38f
+                    else -> 0.12f
+                }
+                PosterLyricGroup(
+                    texts = lyricLines[index].texts,
+                    current = current,
+                    alpha = alpha,
+                    modifier = Modifier.fillMaxWidth().align(Alignment.TopStart)
+                        .padding(top = topOffsets[slot]).height(heights[slot]),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PosterLyricGroup(
+    texts: List<String>,
+    current: Boolean,
+    alpha: Float,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier.clipToBounds(), contentAlignment = Alignment.CenterStart) {
+        Column {
+            posterLyricTexts(texts).forEachIndexed { index, text ->
+                Text(
+                    text,
+                    color = FnColors.Text.copy(alpha = alpha),
+                    fontSize = when {
+                        current && index == 0 -> 24.sp
+                        current -> 22.sp
+                        index == 0 -> 18.sp
+                        else -> 17.sp
+                    },
+                    lineHeight = when {
+                        current && index == 0 -> 28.sp
+                        current -> 26.sp
+                        index == 0 -> 22.sp
+                        else -> 21.sp
+                    },
+                    fontWeight = if (current) FontWeight.Bold else FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
@@ -1815,6 +2023,29 @@ private fun hsvColor(hue: Float, saturation: Float, value: Float): Color {
     }
     val match = value - chroma
     return Color(red + match, green + match, blue + match)
+}
+
+internal fun posterSurfaceColor(color: Color): Color {
+    val peak = maxOf(color.red, color.green, color.blue)
+    if (peak <= 0f) return color
+    val scale = 0.44f / peak
+    return Color(
+        red = (color.red * scale).coerceIn(0f, 1f),
+        green = (color.green * scale).coerceIn(0f, 1f),
+        blue = (color.blue * scale).coerceIn(0f, 1f),
+        alpha = color.alpha,
+    )
+}
+
+internal fun posterLyricTexts(texts: List<String>): List<String> =
+    texts.map(String::trim).filter(String::isNotEmpty).distinct().take(2)
+
+internal fun posterLyricIndices(lineCount: Int, activeIndex: Int): List<Int?> {
+    if (lineCount <= 0) return List(4) { null }
+    if (activeIndex < 0) return listOf(null, 0, 1, 2).map { it?.takeIf { index -> index < lineCount } }
+    return listOf(-1, 0, 1, 2).map { offset ->
+        (activeIndex + offset).takeIf { it in 0 until lineCount }
+    }
 }
 
 internal fun playerLyricWindow(lineCount: Int, activeIndex: Int, visibleCount: Int = 4): IntRange {

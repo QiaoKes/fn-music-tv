@@ -16,6 +16,20 @@ class PlayerUiStateTest {
         assertEquals(0..2, playerLyricWindow(lineCount = 3, activeIndex = 1))
     }
 
+    @Test fun `poster lyric keeps current line in the second slot at boundaries`() {
+        assertEquals(listOf(null, 0, 1, 2), posterLyricIndices(lineCount = 4, activeIndex = -1))
+        assertEquals(listOf(null, 0, 1, 2), posterLyricIndices(lineCount = 4, activeIndex = 0))
+        assertEquals(listOf(2, 3, null, null), posterLyricIndices(lineCount = 4, activeIndex = 3))
+    }
+
+    @Test fun `poster lyric supports single lines and deduplicates translations`() {
+        assertEquals(listOf("Plain lyric"), posterLyricTexts(listOf(" Plain lyric ")))
+        assertEquals(
+            listOf("Hello", "你好"),
+            posterLyricTexts(listOf("Hello", "你好", "Hello", "第三行")),
+        )
+    }
+
     @Test fun `progress fraction handles invalid duration and clamps endpoints`() {
         assertEquals(0f, playerProgressFraction(positionMs = 1_000, durationMs = 0), 0f)
         assertEquals(0f, playerProgressFraction(positionMs = -1_000, durationMs = 10_000), 0f)
@@ -58,5 +72,14 @@ class PlayerUiStateTest {
 
         assertTrue(color.green > color.red)
         assertTrue(color.green > color.blue)
+    }
+
+    @Test fun `poster surface preserves hue while lifting ambience`() {
+        val source = androidx.compose.ui.graphics.Color(0.1f, 0.2f, 0.34f)
+        val surface = posterSurfaceColor(source)
+
+        assertEquals(0.44f, maxOf(surface.red, surface.green, surface.blue), 0.001f)
+        assertTrue(surface.blue > surface.green)
+        assertTrue(surface.green > surface.red)
     }
 }
