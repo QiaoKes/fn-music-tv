@@ -4,12 +4,17 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class CacheBudgetTest {
-    @Test fun `budgets split media and artwork without preallocation`() {
+    @Test fun `budgets are artwork-only tiers with stable persisted names`() {
+        assertEquals(listOf("Small", "Medium", "Default", "Large"), CacheBudget.entries.map(CacheBudget::name))
+        assertEquals(listOf(32, 64, 128, 256), CacheBudget.entries.map(CacheBudget::megabytes))
         CacheBudget.entries.forEach { budget ->
-            val total = budget.megabytes * 1024L * 1024L
-            assertEquals(total * 3 / 4, budget.mediaBytes)
-            assertEquals(total / 4, budget.artworkBytes)
-            assertEquals(total, budget.mediaBytes + budget.artworkBytes)
+            assertEquals(budget.megabytes * 1024L * 1024L, budget.artworkBytes)
         }
+    }
+
+    @Test fun `usage combines artwork and metadata bytes`() {
+        val usage = CacheUsage(artworkBytes = 12L, indexBytes = 7L)
+
+        assertEquals(19L, usage.totalBytes)
     }
 }

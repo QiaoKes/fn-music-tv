@@ -1,0 +1,12 @@
+{"file":".trellis/spec/backend/index.md","reason":"Locate backend quality checks and active Android client contract."}
+{"file":".trellis/spec/backend/android-client-contracts.md","reason":"Verify namespaces, Room, snapshot compatibility, auth, and CI; D1 overrides persistent-media-cache clauses and D8 overrides generic non-success mapping for HTTP 404 only."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Apply backend quality gate conventions."}
+{"file":".trellis/spec/frontend/index.md","reason":"Locate frontend quality checks and active TV contract."}
+{"file":".trellis/spec/frontend/android-tv-interaction.md","reason":"Verify explicit focus, queue/player Back order, and target-device behavior."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Apply frontend quality gate conventions."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Audit full API-to-persistence-to-player-to-UI data flow."}
+{"file":".trellis/tasks/08-01-player-cache-playback-ux/research/cache.md","reason":"Check implementation against established cache facts and risk matrix."}
+{"file":".trellis/tasks/08-01-player-cache-playback-ux/research/playback.md","reason":"Check all identified playback defects and race tests are addressed."}
+{"file":".trellis/tasks/08-01-player-cache-playback-ux/research/tv-ux.md","reason":"Check queue, focus, and reference-derived behavior without copying assets; apply D2 instead of its three-mode/direct-exit recommendations."}
+{"file":".trellis/tasks/08-01-player-cache-playback-ux/research/decisions.md","reason":"Treat final product and architecture conflict resolutions as authoritative during review."}
+{"file":".trellis/tasks/08-01-player-cache-playback-ux/research/track-change-assets.md","reason":"Verify coherent transition identity, cancellable HTTP, same-key recovery, stale-result rejection, and A-B-A regression coverage."}
