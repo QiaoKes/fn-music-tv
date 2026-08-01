@@ -47,6 +47,12 @@ The player control row owns stable requesters for `previous`, `playPause`, `next
   it must not seek or move to another action. Center toggles play/pause and reveals controls.
 - With controls visible, use explicit left/right focus routing for previous -> play/pause -> next ->
   exit roam. Disabled previous/next actions must not become focus targets.
+- For TV Material `Button`, declare D-pad neighbors with `focusProperties` before
+  `focusRequester`. An outer `onPreviewKeyEvent` modifier does not reliably attach to the
+  button's internal focus target on a real TV device.
+- For a custom control that owns its own focus target, such as the Canvas progress bar, place
+  `onPreviewKeyEvent` before `focusable()` and use it only for actions such as 10-second seek;
+  declare Up/Down neighbors with `focusProperties` as well.
 - The progress control consumes left/right to seek by 10 seconds. Back hides controls before it
   navigates away from the player.
 - Roam next/previous actions are single-flight. A successful response replaces the one-item roam
@@ -65,6 +71,8 @@ The player control row owns stable requesters for `previous`, `playPause`, `next
 | HTTP selected with no error | Show the unencrypted-LAN warning in the same slot |
 | Direction pressed while player controls are hidden | Reveal controls, focus play/pause, consume key |
 | Left/right pressed on visible player controls | Move through the explicit transport focus graph |
+| Up pressed on a transport `Button` | Move to progress through `focusProperties`, not an outer key listener |
+| Left/right pressed while progress is focused | Seek exactly 10 seconds and keep progress focused |
 | Back pressed while player controls are visible | Hide controls and stay on the player |
 | Exit roam with no frozen normal queue | Stop playback and return home |
 
@@ -88,6 +96,9 @@ The player control row owns stable requesters for `previous`, `playPause`, `next
   non-overlapping in both base and error states.
 - Player device test: hide controls, inject Down/Right/Center, and assert next replaces MediaSession
   metadata; repeat with Left for previous and Right/Right for exit roam.
+- Player progress device test: hide controls, inject Down then Up, assert the progress node is
+  focused; inject Right and assert position increases by 10 seconds; inject Down and assert
+  play/pause is focused again.
 - Player state test: exit roam restores the previous queue paused, and an empty frozen queue produces
   `STATE_NONE` with queue size zero.
 - Theme test: assert primary/muted/status colors maintain readable contrast on the root background.
@@ -112,14 +123,25 @@ LaunchedEffect(editing) {
 ```
 
 ```kotlin
-// Wrong: compact transport actions depend on spatial focus search.
-Button(onClick = onNext) { Text("Next") }
-
-// Correct: consume Right and request the known neighboring action.
-Modifier.onPreviewKeyEvent { event ->
-    if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionRight) {
+// Wrong: TV Material Button's internal focus target may bypass this outer handler.
+Button(
+    onClick = onNext,
+    modifier = Modifier.onPreviewKeyEvent {
         nextFocus.requestFocus()
         true
-    } else false
-}
+    },
+) { Text("Next") }
+
+// Correct: route the Button's internal focus target through the focus graph.
+Button(
+    onClick = onNext,
+    modifier = Modifier
+        .focusProperties {
+            left = playFocus
+            right = exitRoamFocus
+            up = progressFocus
+            down = FocusRequester.Cancel
+        }
+        .focusRequester(nextFocus),
+) { Text("Next") }
 ```
