@@ -29,6 +29,15 @@ through both `focusProperties` and the field's preview-key dispatcher.
 The player control row owns stable requesters for `previous`, `playPause`, `next`, and optional
 `exitRoam`. When controls become visible, focus is requested on `playPause`.
 
+The persistent player re-entry surface is:
+
+```kotlin
+NowPlayingPill(
+    playback: PlaybackUiState,
+    onClick: () -> Unit,
+)
+```
+
 ## 3. Contracts
 
 - Browse state: the field is focused and `readOnly`; D-pad keys request the declared neighbor.
@@ -55,6 +64,13 @@ The player control row owns stable requesters for `previous`, `playPause`, `next
   declare Up/Down neighbors with `focusProperties` as well.
 - The progress control consumes left/right to seek by 10 seconds. Back hides controls before it
   navigates away from the player.
+- The Home/My now-playing entry is a compact music pill, not a generic title button. It shows a
+  circular compact cover, playing/paused state, title, artist, and a trailing navigation cue.
+  Focus changes border, surface, and scale without changing the pill's measured bounds.
+- Archived HTML prototype measurements are physical pixels on a 1920x1080 canvas. Translate them
+  through the target density before using Compose dimensions. At 320 dpi, the prototype's
+  `372px x 74px` now-playing pill is `186dp x 37dp`; copying those pixel numbers as dp doubles its
+  physical size and weakens the top-bar hierarchy.
 - Roam next/previous actions are single-flight. A successful response replaces the one-item roam
   queue; exiting restores the frozen normal queue paused, or stops playback when no queue existed.
 
@@ -75,15 +91,21 @@ The player control row owns stable requesters for `previous`, `playPause`, `next
 | Left/right pressed while progress is focused | Seek exactly 10 seconds and keep progress focused |
 | Back pressed while player controls are visible | Hide controls and stay on the player |
 | Exit roam with no frozen normal queue | Stop playback and return home |
+| Now-playing title or artist is long | Ellipsize each field independently; keep cover, state, and chevron visible |
+| Now-playing artwork is unavailable | Show the restrained circular fallback at the same size |
 
 ## 5. Good / Base / Bad Cases
 
 - Good: center, type an address, Back, Down; account receives focus and the address has no prefix.
 - Base: an empty password disables Login but leaves every prior control reachable.
 - Good: hidden controls + Down + Right + Center invokes next exactly once.
+- Good: focused now-playing pill gains a coral border without moving the Home/My navigation.
 - Base: roam has no previous node, so previous remains disabled and play/pause is the first focus.
+- Base: a paused track changes the state label and dot color but keeps the pill dimensions stable.
 - Bad: showing the IME on center-key down without delay inserts `q` from the same key release.
 - Bad: adding warning and error as separate conditional rows clips the Login label at 1080p.
+- Bad: using the HTML prototype's `372 x 74` pixel size as dp on a 320 dpi target renders a
+  `744 x 148` physical-pixel button.
 - Bad: relying on geometric focus search for the compact transport row; focus can jump or activate
   play/pause after the user visibly selected next.
 
@@ -101,6 +123,10 @@ The player control row owns stable requesters for `previous`, `playPause`, `next
   play/pause is focused again.
 - Player state test: exit roam restores the previous queue paused, and an empty frozen queue produces
   `STATE_NONE` with queue size zero.
+- Home screenshot test at 1920x1080/320 dpi: assert the now-playing surface is 372x74 physical
+  pixels, real artwork/fallback and metadata do not overlap, and focused/unfocused bounds are stable.
+- Home device test: focus the now-playing pill, press Center once, and assert the immersive player
+  title and progress semantics are present.
 - Theme test: assert primary/muted/status colors maintain readable contrast on the root background.
 
 ## 7. Wrong vs Correct
