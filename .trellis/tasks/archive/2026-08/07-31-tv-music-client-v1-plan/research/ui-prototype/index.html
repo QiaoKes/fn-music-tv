@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>&#x56DE;&#x58F0;&#x53F0; TV &#x539F;&#x578B;</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="scale-root">
+    <main id="tv-app" aria-live="polite">
+      <header class="tv-header" data-shell="standard">
+        <button class="now-playing focusable" type="button" data-focusable data-action="open-default-player" aria-label="&#x8FD4;&#x56DE;&#x6B63;&#x5728;&#x64AD;&#x653E;">
+          <span class="mini-cover cover-art art-night" aria-hidden="true">
+            <span class="cover-axis"></span>
+            <span class="cover-disc"></span>
+          </span>
+          <span class="now-playing-copy">
+            <span class="now-playing-state"><span class="playing-dot"></span>&#x6B63;&#x5728;&#x64AD;&#x653E;</span>
+            <strong data-current-title>&#x591C;&#x822A;</strong>
+            <span data-current-artist>&#x6797;&#x5C7F;</span>
+          </span>
+          <span class="chevron" aria-hidden="true">&#8250;</span>
+        </button>
+
+        <nav class="primary-nav" aria-label="&#x4E00;&#x7EA7;&#x5BFC;&#x822A;">
+          <button class="nav-item focusable" type="button" data-focusable data-route="home">&#x9996;&#x9875;</button>
+          <button class="nav-item focusable" type="button" data-focusable data-route="my">&#x6211;&#x7684;</button>
+        </nav>
+
+        <div class="system-status" aria-label="&#x7CFB;&#x7EDF;&#x72B6;&#x6001;">
+          <span class="network-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <time id="clock">20:48</time>
+        </div>
+      </header>
+
+      <section class="page page-home" data-page="home" aria-labelledby="home-title">
+        <div class="page-heading">
+          <p class="eyebrow">&#x56DE;&#x58F0;&#x53F0;</p>
+          <h1 id="home-title">&#x9996;&#x9875;</h1>
+        </div>
+
+        <button class="roam-entry focusable" type="button" data-focusable data-autofocus data-action="start-roam">
+          <span class="roam-copy">
+            <span class="roam-icon" aria-hidden="true">&#8644;</span>
+            <span>
+              <strong>&#x968F;&#x673A;&#x6F2B;&#x6E38;</strong>
+              <small>&#x591C;&#x8272; / &#x72EC;&#x7ACB;&#x6D41;&#x884C; / &#x8F7B;&#x7535;&#x5B50;</small>
+            </span>
+          </span>
+          <span class="roam-art" aria-hidden="true">
+            <span class="roam-slab roam-slab-a"></span>
+            <span class="roam-slab roam-slab-b"></span>
+            <span class="roam-slab roam-slab-c"></span>
+            <span class="roam-vinyl"></span>
+          </span>
+          <span class="round-action" aria-hidden="true">&#9654;</span>
+        </button>
+
+        <div class="section-heading playlist-heading">
+          <div>
+            <p class="eyebrow">PLAYLISTS</p>
+            <h2>&#x6211;&#x7684;&#x6B4C;&#x5355;</h2>
+          </div>
+          <button class="text-command focusable" type="button" data-focusable data-route="playlists">&#x67E5;&#x770B;&#x5168;&#x90E8; <span aria-hidden="true">&#8250;</span></button>
+        </div>
+
+        <div class="home-rail" aria-label="&#x6B4C;&#x5355;&#x5FEB;&#x6377;&#x5165;&#x53E3;">
+          <button class="playlist-card focusable" type="button" data-focusable data-route="playlist">
+            <span class="cover-art art-night" aria-hidden="true"><span class="cover-axis"></span><span class="cover-disc"></span></span>
+            <span class="card-copy"><strong>&#x6DF1;&#x591C;&#x516C;&#x8DEF;</strong><small>24 &#x9996;</small></span>
+          </button>
+          <button class="playlist-card focusable" type="button" data-focusable data-route="playlist">
+            <span class="cover-art art-morning" aria-hidden="true"><span class="cover-axis"></span><span class="cover-disc"></span></span>
+            <span class="card-copy"><strong>&#x5468;&#x672B;&#x9192;&#x6765;</strong><small>18 &#x9996;</small></span>
+          </button>
+          <button class="playlist-card focusable" type="button" data-focusable data-route="playlist">
+            <span class="cover-art art-city" aria-hidden="true"><span class="cover-axis"></span><span class="cover-disc"></span></span>
+            <span class="card-copy"><strong>&#x57CE;&#x5E02;&#x6563;&#x6B65;</strong><small>31 &#x9996;</small></span>
+          </button>
+          <button class="playlist-card focusable" type="button" data-focusable data-route="playlist">
+            <span class="cover-art art-rain" aria-hidden="true"><span class="cover-axis"></span><span class="cover-disc"></span></span>
+            <span class="card-copy"><strong>&#x96E8;&#x5929;&#x5531;&#x7247;</strong><small>16 &#x9996;</small></span>
+          </button>
+          <button class="playlist-card focusable" type="button" data-focusable data-route="playlist">
+            <span class="cover-art art-sunset" aria-hidden="true"><span class="cover-axis"></span><span class="cover-disc"></span></span>
+            <span class="card-copy"><strong>&#x65E5;&#x843D;&#x4EE5;&#x540E;</strong><small>22 &#x9996;</small></span>
+          </button>
+        </div>
+      </section>
+
+      <section class="page page-playlists" data-page="playlists" aria-labelledby="playlists-title" hidden>
+        <button class="back-button focusable" type="button" data-focusable data-action="back" aria-label="&#x8FD4;&#x56DE;"><span aria-hidden="true">&#10094;</span></button>
+        <div class="all-playlists-heading">
+          <div><p class="eyebrow">PLAYLISTS</p><h1 id="playlists-title">&#x5168;&#x90E8;&#x6B4C;&#x5355;</h1></div>
+          <span>8</span>
+        </div>
+        <div class="all-playlists-grid" aria-label="&#x5168;&#x90E8;&#x6B4C;&#x5355;">
+          <button class="all-playlist-card focusable" type="button" data-focusable data-autofocus data-route="playlist"><span class="cover-art art-night" aria-hidden="true"><span class="cover-axis"></span><span class="cover-disc"></span></span><span class="card-copy"><strong>&#x6DF1;&#x591C;&#x516C;&#x8DEF;</strong><small>24 &#x9996;</small></span></button>
+          <button class="all-playlist-card focusable" type="button" data-focusable data-route="playlist"><span class="cover-art art-morning" aria-hidden="true"><span class="cover-axis"></span><span class="cover-disc"></span></span><span class="card-copy"><strong>&#x5468;&#x672B;&#x9192;&#x6765;</strong><small>18 &#x9996;</small></span></button>
+          <button class="all-playlist-card focusable" type="button" data-focusable data-route="playlist"><span class="cover-art art-city" aria-hidden="true"><span class="cover-axis"></span><span class="cover-disc"></span></span><span class="card-copy"><strong>&#x57CE;&#x5E02;&#x6563;&#x6B65;</strong><small>31 &#x9996;</small></span></button>
+          <button class="all-playlist-card focusable" type="button" data-focusable data-route="playlist"><span class="cover-art art-rain" aria-hidden="true"><span class="cover-axis"></span><span class="cover-disc"></span></span><span class="card-copy"><strong>&#x96E8;&#x5929;&#x5531;&#x7247;</strong><small>16 &#x9996;</small></span></button>
+          <button class="all-playlist-card focusable" type="button" data-focusable data-route="playlist"><span class="cover-art art-sunset" aria-hidden="true"><span class="cover-axis"></span><span class="cover-disc"></span></span><span class="card-copy"><strong>&#x65E5;&#x843D;&#x4EE5;&#x540E;</strong><small>22 &#x9996;</small></span></button>
+          <button class="all-playlist-card focusable" type="button" data-focusable data-route="playlist"><span class="cover-art art-focus" aria-hidden="true"><span class="cover-axis"></span><span class="cover-disc"></span></span><span class="card-copy"><strong>&#x5B89;&#x9759;&#x5DE5;&#x4F5C;</strong><small>36 &#x9996;</small></span></button>
+          <button class="all-playlist-card focusable" type="button" data-focusable data-route="playlist"><span class="cover-art art-sea" aria-hidden="true"><span class="cover-axis"></span><span class="cover-disc"></span></span><span class="card-copy"><strong>&#x53BB;&#x6D77;&#x8FB9;</strong><small>20 &#x9996;</small></span></button>
+          <button class="all-playlist-card focusable" type="button" data-focusable data-route="playlist"><span class="cover-art art-loop" aria-hidden="true"><span class="cover-axis"></span><span class="cover-disc"></span></span><span class="card-copy"><strong>&#x5FAA;&#x73AF;&#x6536;&#x85CF;</strong><small>48 &#x9996;</small></span></button>
+        </div>
+      </section>
+
+      <section class="page page-my" data-page="my" aria-labelledby="my-title" hidden>
+        <div class="my-catalog-top">
+          <div class="page-heading compact-heading"><p class="eyebrow">LIBRARY</p><h1 id="my-title">&#x6211;&#x7684;</h1></div>
+          <div class="account-inline">
+            <span class="avatar" aria-hidden="true">&#x6797;</span>
+            <span class="account-copy"><strong>&#x6797;&#x821F;</strong><small><i></i>&#x5BB6;&#x5EAD; NAS &#xB7; &#x5728;&#x7EBF;</small></span>
+          </div>
+          <button class="quiet-action focusable" type="button" data-focusable data-route="login">&#x5207;&#x6362;&#x8D26;&#x53F7;</button>
+          <button class="icon-text-action focusable" type="button" data-focusable data-route="settings"><span class="gear-icon" aria-hidden="true">&#9881;</span>&#x8BBE;&#x7F6E;</button>
+        </div>
+
+        <div class="my-shelves-viewport">
+          <div class="my-shelves" data-active-shelf="0">
+            <section class="my-shelf" data-shelf-index="0" aria-labelledby="artists-title">
+              <div class="shelf-heading"><div><p class="eyebrow">ARTISTS</p><h2 id="artists-title">&#x827A;&#x4EBA;</h2></div><span>214</span></div>
+              <div class="shelf-track artist-track">
+                <button class="catalog-lockup artist-lockup focusable" type="button" data-focusable data-autofocus data-route="collection" data-collection-name="&#x6797;&#x5C7F;" data-collection-context="ARTIST" data-collection-meta="42 &#x9996;&#x6B4C;&#x66F2;"><span class="catalog-avatar tone-coral" aria-hidden="true">&#x6797;</span><span><strong>&#x6797;&#x5C7F;</strong><small>42 &#x9996;&#x6B4C;&#x66F2;</small></span></button>
+                <button class="catalog-lockup artist-lockup focusable" type="button" data-focusable data-route="collection" data-collection-name="&#x65E0;&#x754C;&#x4E50;&#x961F;" data-collection-context="ARTIST" data-collection-meta="31 &#x9996;&#x6B4C;&#x66F2;"><span class="catalog-avatar tone-teal" aria-hidden="true">&#x754C;</span><span><strong>&#x65E0;&#x754C;&#x4E50;&#x961F;</strong><small>31 &#x9996;&#x6B4C;&#x66F2;</small></span></button>
+                <button class="catalog-lockup artist-lockup focusable" type="button" data-focusable data-route="collection" data-collection-name="&#x8BB8;&#x9065;" data-collection-context="ARTIST" data-collection-meta="18 &#x9996;&#x6B4C;&#x66F2;"><span class="catalog-avatar tone-yellow" aria-hidden="true">&#x8BB8;</span><span><strong>&#x8BB8;&#x9065;</strong><small>18 &#x9996;&#x6B4C;&#x66F2;</small></span></button>
+                <button class="catalog-lockup artist-lockup focusable" type="button" data-focusable data-route="collection" data-collection-name="&#x9648;&#x96FE;" data-collection-context="ARTIST" data-collection-meta="16 &#x9996;&#x6B4C;&#x66F2;"><span class="catalog-avatar tone-violet" aria-hidden="true">&#x9648;</span><span><strong>&#x9648;&#x96FE;</strong><small>16 &#x9996;&#x6B4C;&#x66F2;</small></span></button>
+                <button class="catalog-lockup artist-lockup focusable" type="button" data-focusable data-route="collection" data-collection-name="&#x767D;&#x663C;&#x5267;&#x573A;" data-collection-context="ARTIST" data-collection-meta="14 &#x9996;&#x6B4C;&#x66F2;"><span class="catalog-avatar tone-coral" aria-hidden="true">&#x767D;</span><span><strong>&#x767D;&#x663C;&#x5267;&#x573A;</strong><small>14 &#x9996;&#x6B4C;&#x66F2;</small></span></button>
+                <button class="catalog-lockup artist-lockup focusable" type="button" data-focusable data-route="collection" data-collection-name="&#x516D;&#x6708;&#x6E2F;" data-collection-context="ARTIST" data-collection-meta="12 &#x9996;&#x6B4C;&#x66F2;"><span class="catalog-avatar tone-teal" aria-hidden="true">&#x6E2F;</span><span><strong>&#x516D;&#x6708;&#x6E2F;</strong><small>12 &#x9996;&#x6B4C;&#x66F2;</small></span></button>
+              </div>
+            </section>
+
+            <section class="my-shelf" data-shelf-index="1" aria-labelledby="albums-title">
+              <div class="shelf-heading"><div><p class="eyebrow">ALBUMS</p><h2 id="albums-title">&#x4E13;&#x8F91;</h2></div><span>96</span></div>
+              <div class="shelf-track album-track">
+                <button class="catalog-lockup album-lockup focusable" type="button" data-focusable data-route="collection" data-collection-name="&#x516C;&#x8DEF;&#x5C3D;&#x5934;" data-collection-context="ALBUM / &#x6797;&#x5C7F;" data-collection-meta="12 &#x9996;&#x6B4C;&#x66F2;"><span class="cover-art art-night" aria-hidden="true"><span class="cover-axis"></span><span class="cover-disc"></span></span><span><strong>&#x516C;&#x8DEF;&#x5C3D;&#x5934;</strong><small>&#x6797;&#x5C7F;</small></span></button>
+                <button class="catalog-lockup album-lockup focusable" type="button" data-focusable data-route="collection" data-collection-name="&#x4F4E;&#x7A7A;&#x98DE;&#x884C;" data-collection-context="ALBUM / &#x65E0;&#x754C;&#x4E50;&#x961F;" data-collection-meta="10 &#x9996;&#x6B4C;&#x66F2;"><span class="cover-art art-city" aria-hidden="true"><span class="cover-axis"></span><span class="cover-disc"></span></span><span><strong>&#x4F4E;&#x7A7A;&#x98DE;&#x884C;</strong><small>&#x65E0;&#x754C;&#x4E50;&#x961F;</small></span></button>
+                <button class="catalog-lockup album-lockup focusable" type="button" data-focusable data-route="collection" data-collection-name="&#x8FDC;&#x5904;&#x6709;&#x5149;" data-collection-context="ALBUM / &#x8BB8;&#x9065;" data-collection-meta="11 &#x9996;&#x6B4C;&#x66F2;"><span class="cover-art art-sunset" aria-hidden="true"><span class="cover-axis"></span><span class="cover-disc"></span></span><span><strong>&#x8FDC;&#x5904;&#x6709;&#x5149;</strong><small>&#x8BB8;&#x9065;</small></span></button>
+                <button class="catalog-lockup album-lockup focusable" type="button" data-focusable data-route="collection" data-collection-name="&#x672A;&#x5B8C;&#x8DEF;&#x7A0B;" data-collection-context="ALBUM / &#x767D;&#x663C;&#x5267;&#x573A;" data-collection-meta="9 &#x9996;&#x6B4C;&#x66F2;"><span class="cover-art art-rain" aria-hidden="true"><span class="cover-axis"></span><span class="cover-disc"></span></span><span><strong>&#x672A;&#x5B8C;&#x8DEF;&#x7A0B;</strong><small>&#x767D;&#x663C;&#x5267;&#x573A;</small></span></button>
+                <button class="catalog-lockup album-lockup focusable" type="button" data-focusable data-route="collection" data-collection-name="&#x56DE;&#x58F0;&#x516C;&#x8DEF;" data-collection-context="ALBUM / &#x9648;&#x96FE;" data-collection-meta="8 &#x9996;&#x6B4C;&#x66F2;"><span class="cover-art art-focus" aria-hidden="true"><span class="cover-axis"></span><span class="cover-disc"></span></span><span><strong>&#x56DE;&#x58F0;&#x516C;&#x8DEF;</strong><small>&#x9648;&#x96FE;</small></span></button>
+                <button class="catalog-lockup album-lockup focusable" type="button" data-focusable data-route="collection" data-collection-name="&#x6CBF;&#x6D77;&#x7EBF;" data-collection-context="ALBUM / &#x516D;&#x6708;&#x6E2F;" data-collection-meta="13 &#x9996;&#x6B4C;&#x66F2;"><span class="cover-art art-sea" aria-hidden="true"><span class="cover-axis"></span><span class="cover-disc"></span></span><span><strong>&#x6CBF;&#x6D77;&#x7EBF;</strong><small>&#x516D;&#x6708;&#x6E2F;</small></span></button>
+              </div>
+            </section>
+
+            <section class="my-shelf" data-shelf-index="2" aria-labelledby="music-library-title">
+              <div class="shelf-heading"><div><p class="eyebrow">MUSIC LIBRARY</p><h2 id="music-library-title">&#x97F3;&#x4E50;&#x5E93;</h2></div></div>
+              <div class="shelf-track library-track">
+                <button class="catalog-lockup library-lockup focusable" type="button" data-focusable data-route="collection" data-collection-name="&#x5168;&#x90E8;&#x6B4C;&#x66F2;" data-collection-context="MUSIC LIBRARY" data-collection-meta="1,286 &#x9996;&#x6B4C;&#x66F2;"><span class="library-mark mark-all" aria-hidden="true">&#9835;</span><span><strong>&#x5168;&#x90E8;&#x6B4C;&#x66F2;</strong><small>1,286 &#x9996;&#x6B4C;&#x66F2;</small></span></button>
+                <article class="catalog-lockup library-lockup library-status" aria-label="&#x5BB6;&#x5EAD;&#x97F3;&#x4E50;&#x5E93; &#x5728;&#x7EBF;&#xFF0C;&#x521A;&#x521A;&#x66F4;&#x65B0;"><span class="library-mark mark-shared" aria-hidden="true">NAS</span><span><strong>&#x5BB6;&#x5EAD;&#x97F3;&#x4E50;&#x5E93;</strong><small><i class="library-status-dot"></i>&#x5728;&#x7EBF; &#xB7; &#x521A;&#x521A;&#x66F4;&#x65B0;</small></span></article>
+                <article class="catalog-lockup library-lockup library-status is-unavailable" aria-label="&#x5907;&#x4EFD;&#x97F3;&#x4E50;&#x5E93; &#x4E0D;&#x53EF;&#x7528;&#xFF0C;&#x6628;&#x5929;&#x66F4;&#x65B0;"><span class="library-mark mark-backup" aria-hidden="true">BKP</span><span><strong>&#x5907;&#x4EFD;&#x97F3;&#x4E50;&#x5E93;</strong><small><i class="library-status-dot"></i>&#x4E0D;&#x53EF;&#x7528; &#xB7; &#x6628;&#x5929;&#x66F4;&#x65B0;</small></span></article>
+                <article class="catalog-lockup library-lockup library-status" aria-label="&#x4E66;&#x623F;&#x97F3;&#x4E50;&#x5E93; &#x5728;&#x7EBF;&#xFF0C;2 &#x5C0F;&#x65F6;&#x524D;&#x66F4;&#x65B0;"><span class="library-mark mark-study" aria-hidden="true">LIB</span><span><strong>&#x4E66;&#x623F;&#x97F3;&#x4E50;&#x5E93;</strong><small><i class="library-status-dot"></i>&#x5728;&#x7EBF; &#xB7; 2 &#x5C0F;&#x65F6;&#x524D;&#x66F4;&#x65B0;</small></span></article>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section class="page page-collection" data-page="collection" aria-labelledby="collection-title" hidden>
+        <button class="back-button focusable" type="button" data-focusable data-action="back" aria-label="&#x8FD4;&#x56DE;"><span aria-hidden="true">&#10094;</span></button>
+        <div class="playlist-hero collection-hero">
+          <span class="hero-cover cover-art art-city" aria-hidden="true"><span class="cover-axis"></span><span class="cover-disc"></span><span class="cover-type">ECHO<br>LIBRARY</span></span>
+          <div class="playlist-summary">
+            <p class="eyebrow" data-collection-context-display>MUSIC LIBRARY</p>
+            <h1 id="collection-title" data-collection-name-display>&#x5168;&#x90E8;&#x6B4C;&#x66F2;</h1>
+            <p data-collection-meta-display>1,286 &#x9996;&#x6B4C;&#x66F2;</p>
+            <button class="primary-button play-all focusable" type="button" data-focusable data-autofocus data-action="play-all"><span aria-hidden="true">&#9654;</span>&#x64AD;&#x653E;&#x5168;&#x90E8;</button>
+          </div>
+        </div>
+        <div class="track-list" role="list" aria-label="&#x6B4C;&#x66F2;&#x5217;&#x8868;">
+          <div class="track-list-head"><span>#</span><span>&#x6B4C;&#x66F2;</span><span>&#x6B4C;&#x624B;</span><span>&#x65F6;&#x957F;</span></div>
+          <button class="track-row focusable is-current" type="button" data-focusable data-action="play-collection-track" data-track-index="0" role="listitem"><span class="track-index"><i></i><i></i><i></i></span><span><strong>&#x591C;&#x822A;</strong><small>&#x300A;&#x516C;&#x8DEF;&#x5C3D;&#x5934;&#x300B;</small></span><span>&#x6797;&#x5C7F;</span><time>04:08</time></button>
+          <button class="track-row focusable" type="button" data-focusable data-action="play-collection-track" data-track-index="1" role="listitem"><span class="track-index">02</span><span><strong>&#x57CE;&#x5E02;&#x80CC;&#x9762;</strong><small>&#x300A;&#x4F4E;&#x7A7A;&#x98DE;&#x884C;&#x300B;</small></span><span>&#x65E0;&#x754C;&#x4E50;&#x961F;</span><time>03:46</time></button>
+          <button class="track-row focusable" type="button" data-focusable data-action="play-collection-track" data-track-index="2" role="listitem"><span class="track-index">03</span><span><strong>&#x6A59;&#x8272;&#x8DEF;&#x6807;</strong><small>&#x300A;&#x8FDC;&#x5904;&#x6709;&#x5149;&#x300B;</small></span><span>&#x8BB8;&#x9065;</span><time>03:17</time></button>
+          <button class="track-row focusable" type="button" data-focusable data-action="play-collection-track" data-track-index="3" role="listitem"><span class="track-index">04</span><span><strong>&#x51CC;&#x6668;&#x51FA;&#x53E3;</strong><small>&#x300A;&#x672A;&#x5B8C;&#x8DEF;&#x7A0B;&#x300B;</small></span><span>&#x767D;&#x663C;&#x5267;&#x573A;</span><time>04:15</time></button>
+          <button class="track-row focusable" type="button" data-focusable data-action="play-collection-track" data-track-index="4" role="listitem"><span class="track-index">05</span><span><strong>&#x6162;&#x8F66;&#x9053;</strong><small>&#x300A;&#x56DE;&#x58F0;&#x516C;&#x8DEF;&#x300B;</small></span><span>&#x9648;&#x96FE;</span><time>03:51</time></button>
+        </div>
+      </section>
+
+      <section class="page page-login" data-page="login" aria-labelledby="login-title" hidden>
+        <button class="back-button focusable" type="button" data-focusable data-action="back" aria-label="&#x8FD4;&#x56DE;"><span aria-hidden="true">&#10094;</span></button>
+        <div class="login-brand" aria-hidden="true">
+          <span class="brand-mark"><i></i><i></i><i></i></span>
+          <strong>&#x56DE;&#x58F0;&#x53F0;</strong>
+        </div>
+        <form class="login-form" id="login-form">
+          <p class="eyebrow">FAMILY MUSIC LIBRARY</p>
+          <h1 id="login-title">&#x767B;&#x5F55;</h1>
+          <label for="server-input">NAS &#x5730;&#x5740;</label>
+          <div class="server-field">
+            <input class="tv-input focusable" id="server-input" name="server" type="text" inputmode="url" value="10.0.0.115:5666/music/" autocomplete="url" spellcheck="false" aria-describedby="server-security-notice" data-focusable data-autofocus>
+            <button class="server-history focusable" type="button" data-focusable data-action="use-recent-server" aria-label="&#x4F7F;&#x7528;&#x6700;&#x8FD1;&#x7684; NAS &#x5730;&#x5740;" title="&#x6700;&#x8FD1;&#x4F7F;&#x7528;"><span aria-hidden="true">&#x21BA;</span></button>
+          </div>
+          <p class="server-security-notice" id="server-security-notice" data-server-security-notice role="status"><span aria-hidden="true">!</span>&#x5C40;&#x57DF;&#x7F51; HTTP &#x8FDE;&#x63A5;&#x672A;&#x52A0;&#x5BC6;</p>
+          <label for="account-input">&#x8D26;&#x53F7;</label>
+          <input class="tv-input focusable" id="account-input" name="account" type="text" value="linzhou" autocomplete="username" data-focusable>
+          <label for="password-input">&#x5BC6;&#x7801;</label>
+          <div class="password-field">
+            <input class="tv-input focusable" id="password-input" name="password" type="password" autocomplete="current-password" data-focusable>
+            <button class="password-toggle focusable" type="button" data-focusable data-action="toggle-password" aria-label="&#x663E;&#x793A;&#x5BC6;&#x7801;" aria-pressed="false"><span class="eye-glyph" aria-hidden="true">&#x1F441;</span></button>
+          </div>
+          <div class="login-options" role="group" aria-label="&#x767B;&#x5F55;&#x9009;&#x9879;">
+            <button class="login-toggle focusable is-checked" type="button" data-focusable data-action="toggle-keep-login" role="checkbox" aria-checked="true">
+              <span class="toggle-mark" aria-hidden="true">&#10003;</span>
+              <span><strong>&#x4FDD;&#x6301;&#x767B;&#x5F55;</strong><small>&#x4EC5;&#x4FDD;&#x5B58;&#x52A0;&#x5BC6;&#x4EE4;&#x724C;&#xFF0C;&#x4E0D;&#x4FDD;&#x5B58;&#x5BC6;&#x7801;</small></span>
+            </button>
+            <button class="login-toggle focusable" type="button" data-focusable data-action="toggle-https" role="checkbox" aria-checked="false">
+              <span class="toggle-mark" aria-hidden="true">&#10003;</span>
+              <span><strong>HTTPS &#x5B89;&#x5168;&#x8FDE;&#x63A5;</strong><small>&#x5173;&#x95ED;&#x65F6;&#x5141;&#x8BB8;&#x5C40;&#x57DF;&#x7F51; HTTP</small></span>
+            </button>
+          </div>
+          <p class="form-feedback" id="form-feedback" role="status">&#x8BF7;&#x586B;&#x5199; NAS &#x5730;&#x5740;&#x3001;&#x8D26;&#x53F7;&#x548C;&#x5BC6;&#x7801;</p>
+          <button class="primary-button login-submit focusable" type="submit" data-focusable><span aria-hidden="true">&#8594;</span> &#x767B;&#x5F55;</button>
+        </form>
+        <div class="login-art" aria-hidden="true">
+          <span class="login-frame frame-one"></span>
+          <span class="login-frame frame-two"></span>
+          <span class="login-record"></span>
+          <span class="login-needle"></span>
+          <span class="login-caption">ECHO ROOM / 08</span>
+        </div>
+        <div class="server-history-backdrop" data-server-history-dialog hidden>
+          <div class="server-history-dialog-panel" role="dialog" aria-modal="true" aria-labelledby="server-history-title" aria-describedby="server-history-copy">
+            <p class="eyebrow">LOCAL HISTORY</p>
+            <h2 id="server-history-title">&#x6700;&#x8FD1;&#x670D;&#x52A1;&#x5668;</h2>
+            <p id="server-history-copy">&#x4EC5;&#x663E;&#x793A;&#x672C;&#x673A;&#x5DF2;&#x4F7F;&#x7528;&#x7684; NAS &#x5730;&#x5740;</p>
+            <div class="server-history-list" role="listbox" aria-label="&#x6700;&#x8FD1;&#x670D;&#x52A1;&#x5668;">
+              <button class="server-history-option focusable" type="button" data-focusable data-action="select-recent-server" data-recent-server="http://10.0.0.115:5666/music/" role="option" aria-selected="true"><span><strong>10.0.0.115:5666/music/</strong><small>HTTP &#xB7; &#x6700;&#x8FD1;&#x4F7F;&#x7528;</small></span><span class="recent-server-mark" aria-hidden="true">&#10003;</span></button>
+              <button class="server-history-option focusable" type="button" data-focusable data-action="select-recent-server" data-recent-server="https://192.168.1.42:5666/music/" role="option" aria-selected="false"><span><strong>192.168.1.42:5666/music/</strong><small>HTTPS &#xB7; &#x5BB6;&#x5EAD; NAS</small></span><span class="recent-server-mark" aria-hidden="true">&#10003;</span></button>
+            </div>
+            <button class="server-history-cancel dialog-button focusable" type="button" data-focusable data-action="cancel-server-history">&#x53D6;&#x6D88;</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="page page-playlist" data-page="playlist" aria-labelledby="playlist-title" hidden>
+        <button class="back-button focusable" type="button" data-focusable data-action="back" aria-label="&#x8FD4;&#x56DE;"><span aria-hidden="true">&#10094;</span></button>
+        <div class="playlist-hero">
+          <span class="hero-cover cover-art art-night" aria-hidden="true"><span class="cover-axis"></span><span class="cover-disc"></span><span class="cover-type">NIGHT<br>DRIVE</span></span>
+          <div class="playlist-summary">
+            <p class="eyebrow">PLAYLIST / &#x6797;&#x821F;</p>
+            <h1 id="playlist-title">&#x6DF1;&#x591C;&#x516C;&#x8DEF;</h1>
+            <p>24 &#x9996; &#xB7; 1 &#x5C0F;&#x65F6; 42 &#x5206;</p>
+            <button class="primary-button play-all focusable" type="button" data-focusable data-autofocus data-action="play-all"><span aria-hidden="true">&#9654;</span>&#x64AD;&#x653E;&#x5168;&#x90E8;</button>
+          </div>
+        </div>
+
+        <div class="track-list" role="list" aria-label="&#x6B4C;&#x66F2;&#x5217;&#x8868;">
+          <div class="track-list-head"><span>#</span><span>&#x6B4C;&#x66F2;</span><span>&#x6B4C;&#x624B;</span><span>&#x65F6;&#x957F;</span></div>
+          <button class="track-row focusable is-current" type="button" data-focusable data-action="play-track" data-title="&#x591C;&#x822A;" data-artist="&#x6797;&#x5C7F;" data-duration="248" role="listitem">
+            <span class="track-index"><i></i><i></i><i></i></span><span><strong>&#x591C;&#x822A;</strong><small>&#x300A;&#x516C;&#x8DEF;&#x5C3D;&#x5934;&#x300B;</small></span><span>&#x6797;&#x5C7F;</span><time>04:08</time>
+          </button>
+          <button class="track-row focusable" type="button" data-focusable data-action="play-track" data-title="&#x57CE;&#x5E02;&#x80CC;&#x9762;" data-artist="&#x65E0;&#x754C;&#x4E50;&#x961F;" data-duration="226" role="listitem">
+            <span class="track-index">02</span><span><strong>&#x57CE;&#x5E02;&#x80CC;&#x9762;</strong><small>&#x300A;&#x4F4E;&#x7A7A;&#x98DE;&#x884C;&#x300B;</small></span><span>&#x65E0;&#x754C;&#x4E50;&#x961F;</span><time>03:46</time>
+          </button>
+          <button class="track-row focusable" type="button" data-focusable data-action="play-track" data-title="&#x6A59;&#x8272;&#x8DEF;&#x6807;" data-artist="&#x8BB8;&#x9065;" data-duration="197" role="listitem">
+            <span class="track-index">03</span><span><strong>&#x6A59;&#x8272;&#x8DEF;&#x6807;</strong><small>&#x300A;&#x8FDC;&#x5904;&#x6709;&#x5149;&#x300B;</small></span><span>&#x8BB8;&#x9065;</span><time>03:17</time>
+          </button>
+          <button class="track-row focusable" type="button" data-focusable data-action="play-track" data-title="&#x51CC;&#x6668;&#x51FA;&#x53E3;" data-artist="&#x767D;&#x663C;&#x5267;&#x573A;" data-duration="255" role="listitem">
+            <span class="track-index">04</span><span><strong>&#x51CC;&#x6668;&#x51FA;&#x53E3;</strong><small>&#x300A;&#x672A;&#x5B8C;&#x8DEF;&#x7A0B;&#x300B;</small></span><span>&#x767D;&#x663C;&#x5267;&#x573A;</span><time>04:15</time>
+          </button>
+          <button class="track-row focusable" type="button" data-focusable data-action="play-track" data-title="&#x6162;&#x8F66;&#x9053;" data-artist="&#x9648;&#x96FE;" data-duration="231" role="listitem">
+            <span class="track-index">05</span><span><strong>&#x6162;&#x8F66;&#x9053;</strong><small>&#x300A;&#x56DE;&#x58F0;&#x516C;&#x8DEF;&#x300B;</small></span><span>&#x9648;&#x96FE;</span><time>03:51</time>
+          </button>
+          <button class="track-row focusable" type="button" data-focusable data-action="play-track" data-title="&#x8FDC;&#x706F;" data-artist="&#x516D;&#x6708;&#x6E2F;" data-duration="219" role="listitem">
+            <span class="track-index">06</span><span><strong>&#x8FDC;&#x706F;</strong><small>&#x300A;&#x6CBF;&#x6D77;&#x7EBF;&#x300B;</small></span><span>&#x516D;&#x6708;&#x6E2F;</span><time>03:39</time>
+          </button>
+        </div>
+      </section>
+
+      <section class="page page-settings" data-page="settings" aria-labelledby="settings-title" hidden>
+        <button class="back-button focusable" type="button" data-focusable data-action="back" aria-label="&#x8FD4;&#x56DE;"><span aria-hidden="true">&#10094;</span></button>
+        <div class="settings-wrap">
+          <p class="eyebrow">PREFERENCES</p>
+          <h1 id="settings-title">&#x8BBE;&#x7F6E;</h1>
+          <div class="settings-row">
+            <div class="setting-label"><strong>&#x9ED8;&#x8BA4;&#x64AD;&#x653E;&#x754C;&#x9762;</strong><small>&#x64AD;&#x653E;</small></div>
+            <div class="segmented-control" role="radiogroup" aria-label="&#x9ED8;&#x8BA4;&#x64AD;&#x653E;&#x754C;&#x9762;">
+              <button class="segment focusable" type="button" data-focusable data-autofocus data-player-choice="cover" role="radio" aria-checked="true">
+                <span class="segment-preview preview-cover" aria-hidden="true"><i></i><b></b></span>
+                <span><strong>&#x5C01;&#x9762;&#x6A21;&#x5F0F;</strong><small>&#x6807;&#x51C6;</small></span>
+                <span class="check-mark" aria-hidden="true">&#10003;</span>
+              </button>
+              <button class="segment focusable" type="button" data-focusable data-player-choice="poster" role="radio" aria-checked="false">
+                <span class="segment-preview preview-poster" aria-hidden="true"><i></i><b></b></span>
+                <span><strong>&#x5927;&#x6D77;&#x62A5;&#x6A21;&#x5F0F;</strong><small>&#x6C89;&#x6D78;</small></span>
+                <span class="check-mark" aria-hidden="true">&#10003;</span>
+              </button>
+            </div>
+          </div>
+          <div class="settings-row cache-settings-row">
+            <div class="setting-label"><strong>&#x97F3;&#x9891; + &#x56FE;&#x7247;&#x7F13;&#x5B58;&#x4E0A;&#x9650;</strong><small>75/25 &#xB7; &#x8D44;&#x6599;&#x7D22;&#x5F15;&#x6700;&#x591A;&#x53E6;&#x5360; 32 MB</small></div>
+            <div class="cache-setting-content">
+              <div class="cache-size-control" role="radiogroup" aria-label="&#x97F3;&#x9891;&#x548C;&#x56FE;&#x7247;&#x7F13;&#x5B58;&#x4E0A;&#x9650;">
+                <button class="cache-option focusable" type="button" data-focusable data-cache-choice="128" role="radio" aria-checked="false"><strong>128</strong><small>MB</small><span aria-hidden="true">&#10003;</span></button>
+                <button class="cache-option focusable" type="button" data-focusable data-cache-choice="256" role="radio" aria-checked="false"><strong>256</strong><small>MB</small><span aria-hidden="true">&#10003;</span></button>
+                <button class="cache-option focusable" type="button" data-focusable data-cache-choice="512" role="radio" aria-checked="true"><strong>512</strong><small>MB</small><span aria-hidden="true">&#10003;</span></button>
+                <button class="cache-option focusable" type="button" data-focusable data-cache-choice="1024" role="radio" aria-checked="false"><strong>1024</strong><small>MB</small><span aria-hidden="true">&#10003;</span></button>
+              </div>
+              <div class="cache-usage-row">
+                <div class="cache-meter" role="progressbar" aria-label="&#x7F13;&#x5B58;&#x5DF2;&#x4F7F;&#x7528;" aria-valuemin="0" aria-valuemax="512" aria-valuenow="286"><span data-cache-progress></span></div>
+                <span class="cache-usage-copy">&#x5DF2;&#x7528; <strong data-cache-usage>286 MB</strong> / <span data-cache-limit>512 MB</span></span>
+                <button class="cache-clear focusable" type="button" data-focusable data-action="clear-cache"><span aria-hidden="true">&#10005;</span>&#x6E05;&#x9664;&#x7F13;&#x5B58;</button>
+              </div>
+              <p class="cache-release-note" data-cache-limit-note role="status" hidden>&#x65B0;&#x989D;&#x5EA6;&#x5DF2;&#x4FDD;&#x5B58;&#xFF0C;&#x5C06;&#x5728;&#x5B89;&#x5168;&#x65F6;&#x70B9;&#x5E94;&#x7528;</p>
+              <p class="cache-release-note" data-cache-release-note role="status" hidden>&#x5F53;&#x524D;&#x64AD;&#x653E;&#x5360;&#x7528; <strong data-active-cache-usage>18 MB</strong>&#xFF0C;&#x5C06;&#x5728;&#x6B4C;&#x66F2;&#x7ED3;&#x675F;&#x540E;&#x91CA;&#x653E;</p>
+            </div>
+          </div>
+        </div>
+        <div class="cache-dialog-backdrop" data-cache-dialog hidden>
+          <div class="cache-dialog-panel" role="dialog" aria-modal="true" aria-labelledby="cache-dialog-title" aria-describedby="cache-dialog-copy">
+            <p class="eyebrow">CACHE</p>
+            <h2 id="cache-dialog-title">&#x6E05;&#x9664;&#x7F13;&#x5B58;&#xFF1F;</h2>
+            <p id="cache-dialog-copy" data-cache-dialog-copy>&#x672A;&#x4F7F;&#x7528;&#x7684;&#x7F13;&#x5B58;&#x5C06;&#x7ACB;&#x5373;&#x5220;&#x9664;&#x3002;&#x5F53;&#x524D;&#x64AD;&#x653E;&#x5360;&#x7528;&#x4F1A;&#x5728;&#x6B4C;&#x66F2;&#x7ED3;&#x675F;&#x540E;&#x91CA;&#x653E;&#x3002;</p>
+            <div class="cache-dialog-actions">
+              <button class="dialog-button focusable" type="button" data-focusable data-action="cancel-clear-cache">&#x53D6;&#x6D88;</button>
+              <button class="dialog-button dialog-confirm focusable" type="button" data-focusable data-action="confirm-clear-cache">&#x786E;&#x8BA4;&#x6E05;&#x9664;</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="page page-player" data-page="player" aria-labelledby="player-title" hidden>
+        <button class="player-back focusable" type="button" data-focusable data-action="back" aria-label="&#x8FD4;&#x56DE;"><span aria-hidden="true">&#10094;</span></button>
+
+        <div class="player-layout">
+          <div class="player-visual" aria-label="&#x4E13;&#x8F91;&#x5C01;&#x9762;">
+            <div class="player-cover cover-art art-night">
+              <span class="cover-axis"></span>
+              <span class="cover-disc"></span>
+              <span class="cover-type">NIGHT<br>DRIVE</span>
+              <span class="cover-number">ECHO / 08</span>
+            </div>
+          </div>
+
+          <div class="player-copy">
+            <div class="player-track-meta">
+              <p class="eyebrow" data-player-context>PLAYLIST / &#x6DF1;&#x591C;&#x516C;&#x8DEF;</p>
+              <h1 id="player-title" data-current-title>&#x591C;&#x822A;</h1>
+              <p data-current-artist>&#x6797;&#x5C7F;</p>
+            </div>
+            <div class="lyrics" aria-label="&#x540C;&#x6B65;&#x6B4C;&#x8BCD;">
+              <div class="lyric-line" data-lyric-at="0"><strong>&#x6CBF;&#x7740;&#x6CA1;&#x6709;&#x540D;&#x5B57;&#x7684;&#x516C;&#x8DEF;</strong><small>We follow the road without a name</small></div>
+              <div class="lyric-line" data-lyric-at="28"><strong>&#x57CE;&#x5E02;&#x5728;&#x8EAB;&#x540E;&#x53D8;&#x6210;&#x4E00;&#x6761;&#x7EBF;</strong><small>The city fades into a silver line</small></div>
+              <div class="lyric-line" data-lyric-at="61"><strong>&#x8DEF;&#x706F;&#x8FFD;&#x7740;&#x8F66;&#x7A97;&#x5411;&#x540E;&#x9000;</strong><small>Streetlights slip behind the glass</small></div>
+              <div class="lyric-line" data-lyric-at="94"><strong>&#x4F60;&#x8BF4;&#x4ECA;&#x665A;&#x4E0D;&#x8981;&#x95EE;&#x7EC8;&#x70B9;</strong><small>You said, do not ask where this ends</small></div>
+              <div class="lyric-line" data-lyric-at="128"><strong>&#x6CBF;&#x7740;&#x6CA1;&#x6709;&#x540D;&#x5B57;&#x7684;&#x516C;&#x8DEF;&#xFF0C;&#x6211;&#x4EEC;&#x628A;&#x57CE;&#x5E02;&#x7684;&#x706F;&#x706B;&#x7559;&#x5728;&#x8EAB;&#x540E;&#xFF0C;&#x76F4;&#x5230;&#x6D77;&#x9762;&#x6CDB;&#x8D77;&#x6E05;&#x6668;&#x7684;&#x7B2C;&#x4E00;&#x9053;&#x5149;</strong><small>We follow the road without a name, leaving the city's lights behind until the first morning light reaches the sea</small></div>
+              <div class="lyric-line" data-lyric-at="172"><strong>&#x5929;&#x4EAE;&#x4EE5;&#x524D; &#x7EE7;&#x7EED;&#x5411;&#x524D;</strong><small>Keep moving until morning arrives</small></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="player-controls">
+          <div class="progress-row">
+            <time data-elapsed>02:14</time>
+            <div class="progress-track focusable" tabindex="0" data-focusable role="slider" aria-label="&#x64AD;&#x653E;&#x8FDB;&#x5EA6;" aria-valuemin="0" aria-valuemax="248" aria-valuenow="134" aria-valuetext="02:14 / 04:08"><span data-progress></span><i data-progress-knob></i></div>
+            <time data-total>04:08</time>
+          </div>
+          <div class="transport">
+            <button class="control-button focusable" type="button" data-focusable data-action="previous" aria-label="&#x4E0A;&#x4E00;&#x9996;"><span aria-hidden="true">&#9664;&#9664;</span></button>
+            <button class="control-button control-play focusable" type="button" data-focusable data-autofocus data-action="toggle-play" aria-label="&#x6682;&#x505C;"><span data-play-icon aria-hidden="true">&#10074;&#10074;</span></button>
+            <button class="control-button focusable" type="button" data-focusable data-action="next" aria-label="&#x4E0B;&#x4E00;&#x9996;"><span aria-hidden="true">&#9654;&#9654;</span></button>
+            <button class="roam-exit focusable" type="button" data-focusable data-action="exit-roam" hidden><span aria-hidden="true">&#10005;</span>&#x9000;&#x51FA;&#x6F2B;&#x6E38;</button>
+          </div>
+        </div>
+      </section>
+
+      <div class="home-exit-state" data-home-exit-state role="status" aria-live="polite" hidden>
+        <div>
+          <p class="eyebrow">PLAYBACK CONTINUES</p>
+          <strong>&#x5DF2;&#x9000;&#x51FA;&#x754C;&#x9762;</strong>
+          <span>&#x64AD;&#x653E;&#x7EE7;&#x7EED;</span>
+        </div>
+      </div>
+      <div class="login-exit-state" data-login-exit-state role="status" aria-live="polite" hidden>
+        <div>
+          <p class="eyebrow">LOGIN CLOSED</p>
+          <strong>&#x5DF2;&#x9000;&#x51FA;&#x767B;&#x5F55;&#x754C;&#x9762;</strong>
+          <span>&#x767B;&#x5F55;&#x4FE1;&#x606F;&#x672A;&#x63D0;&#x4EA4;</span>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

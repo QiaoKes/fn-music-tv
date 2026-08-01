@@ -1,0 +1,10 @@
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Keep API decoding, domain normalization, persistence, playback and Compose projections behind explicit contracts."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Centralize shared envelope decoding, playback-source selection, focus components and queue transitions without premature feature abstractions."}
+{"file":".trellis/tasks/07-31-tv-music-client-v1-plan/research/api-contract.md","reason":"Authoritative V1 API behavior for auth, playlists, streams, CUE/HLS, lyrics, roam, errors, pagination and session recovery."}
+{"file":".trellis/tasks/07-31-tv-music-client-v1-plan/research/nas-service.md","reason":"Live NAS version, scale, cover-size, history, caching and reliability evidence that constrain the client."}
+{"file":".trellis/tasks/07-31-tv-music-client-v1-plan/research/architecture-options.md","reason":"Plan-recommended native Kotlin/Compose TV/Media3 stack, SDK pins, module boundaries and rejected alternatives; binding after plan approval."}
+{"file":".trellis/tasks/07-31-tv-music-client-v1-plan/research/apk-static.md","reason":"Correct TV sample evidence, D-pad/player patterns, originality boundaries and physical-TV validation caveat."}
+{"file":".trellis/tasks/07-31-tv-music-client-v1-plan/research/ui-evidence.md","reason":"Original Home/My/player layouts, focus rules, poster-mode behavior and screenshot validation requirements."}
+{"file":".trellis/tasks/07-31-tv-music-client-v1-plan/research/ui-prototype/README.md","reason":"Routes and keyboard behavior for the current interactive 1920x1080 review reference."}
+{"file":".trellis/tasks/07-31-tv-music-client-v1-plan/research/tv-emulator.md","reason":"Reusable API 36 Android TV AVD, D-pad validation runbook, touch-feature caveat and physical-device follow-up."}
+{"file":".trellis/tasks/07-31-tv-music-client-v1-plan/research/target-device.md","reason":"Vidda C3 Pro launch-hardware facts, Android API/ABI/surface unknowns, and mandatory M0 device probes."}

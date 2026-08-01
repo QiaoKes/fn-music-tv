@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/android-tv-interaction.md", "reason": "Required contract for validating remote focus and transient controls."}
+{"file": ".trellis/tasks/archive/2026-08/07-31-tv-music-client-v1-plan/research/apk-static.md", "reason": "Reference evidence for independent visual comparison without copying assets."}
+{"file": ".trellis/tasks/archive/2026-08/07-31-tv-music-client-v1-plan/research/ui-prototype/README.md", "reason": "Defines the approved interactive HTML prototype routes, focus behavior, player controls, and typography."}
