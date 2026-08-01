@@ -24,6 +24,11 @@ class LocalStore(context: Context, val database: AppDatabase = AppDatabase.creat
         dao.updateFrozenQueue(namespace, queueJson, now())
     }
 
+    suspend fun savePlaybackSnapshot(namespace: String, snapshotJson: String?) {
+        ensureAccount(namespace)
+        dao.updatePlaybackSnapshot(namespace, snapshotJson, now())
+    }
+
     suspend fun saveSettings(namespace: String, style: String, budget: String) {
         ensureAccount(namespace)
         dao.updateSettings(namespace, style, budget, now())
@@ -58,6 +63,13 @@ class LocalStore(context: Context, val database: AppDatabase = AppDatabase.creat
         dao.deleteLyrics(namespace)
         dao.deleteIndexes(namespace)
         if (includeEssential) dao.deleteAccount(namespace)
+        reclaimSpace()
+    }
+
+    suspend fun clearAllEvictable() {
+        dao.deleteAllPages()
+        dao.deleteAllLyrics()
+        dao.deleteAllIndexes()
         reclaimSpace()
     }
 
