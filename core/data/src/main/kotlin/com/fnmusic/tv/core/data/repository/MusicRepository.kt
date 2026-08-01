@@ -110,7 +110,7 @@ class MusicRepository(
 
     suspend fun prepare(track: Track): PlaybackTrack {
         if (track.accessStatus != null && track.accessStatus != 0) throw AppException(AppError.UnavailableTrack)
-        val refreshed = session.authenticated { it.metadata(track.guid.value).track.toDomain() }
+        val refreshed = session.authenticated { it.metadata(track.guid.value).toDomain() }
         if (refreshed.isCue) throw AppException(AppError.TranscodeUnavailable)
         val api = session.requireApi()
         return PlaybackTrack(

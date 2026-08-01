@@ -85,7 +85,9 @@ data class AudioSpecDto(
     val container: String = "",
     val duration: Long = 0,
     val bitrate: Long = 0,
-)
+) {
+    fun displayFormat(): String? = container.ifBlank { codec }.trim().uppercase().takeIf(String::isNotBlank)
+}
 
 @Serializable
 data class TrackDto(
@@ -99,15 +101,16 @@ data class TrackDto(
     val audioSpec: AudioSpecDto = AudioSpecDto(),
     val accessStatus: Int? = null,
 ) {
-    fun toDomain() = Track(
-        TrackGuid(guid),
-        title,
-        artists.joinToString(" / ") { it.name }.ifBlank { null },
-        album?.name,
-        coverId,
-        duration.takeIf { it > 0 },
-        isCue,
-        accessStatus,
+    fun toDomain(sourceAudioSpec: AudioSpecDto = audioSpec) = Track(
+        guid = TrackGuid(guid),
+        title = title,
+        artistName = artists.joinToString(" / ") { it.name }.ifBlank { null },
+        albumName = album?.name,
+        coverId = coverId,
+        durationMs = duration.takeIf { it > 0 },
+        isCue = isCue,
+        accessStatus = accessStatus,
+        audioFormat = sourceAudioSpec.displayFormat(),
     )
 }
 
@@ -125,7 +128,10 @@ data class SharedLibraryDto(
 
 @Serializable data class ListDto<T>(val list: List<T> = emptyList())
 
-@Serializable data class TrackMetadataDto(val track: TrackDto, val audioSpec: AudioSpecDto = AudioSpecDto())
+@Serializable
+data class TrackMetadataDto(val track: TrackDto, val audioSpec: AudioSpecDto = AudioSpecDto()) {
+    fun toDomain(): Track = track.toDomain(audioSpec.takeIf { it.displayFormat() != null } ?: track.audioSpec)
+}
 
 @Serializable
 data class LyricDto(

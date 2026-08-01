@@ -39,6 +39,7 @@ data class PlaybackUiState(
     val isPlaying: Boolean = false,
     val title: String = "",
     val artist: String = "",
+    val audioFormat: String = "",
     val mediaId: String = "",
     val artworkUrl: String? = null,
     val positionMs: Long = 0,
@@ -253,6 +254,7 @@ class PlaybackController(
             isPlaying = player.isPlaying,
             title = metadata.title?.toString().orEmpty(),
             artist = metadata.artist?.toString().orEmpty(),
+            audioFormat = metadata.extras?.getString(AUDIO_FORMAT_KEY).orEmpty(),
             mediaId = player.currentMediaItem?.mediaId.orEmpty(),
             artworkUrl = metadata.artworkUri?.toString(),
             positionMs = player.currentPosition.coerceAtLeast(0),
@@ -365,6 +367,7 @@ class PlaybackController(
                 .setArtist(playback.track.artistName)
                 .setAlbumTitle(playback.track.albumName)
                 .setArtworkUri(playback.artworkUrl?.let(Uri::parse))
+                .setExtras(audioFormatExtras(playback.track.audioFormat))
                 .build(),
         )
         .build()
@@ -389,6 +392,7 @@ class PlaybackController(
                     .put("title", item.mediaMetadata.title?.toString())
                     .put("artist", item.mediaMetadata.artist?.toString())
                     .put("album", item.mediaMetadata.albumTitle?.toString())
+                    .put("format", item.mediaMetadata.extras?.getString(AUDIO_FORMAT_KEY))
                     .put("art", item.mediaMetadata.artworkUri?.toString()),
             )
         }
@@ -444,6 +448,7 @@ class PlaybackController(
                                 .setArtist(item.optString("artist"))
                                 .setAlbumTitle(item.optString("album"))
                                 .setArtworkUri(item.optString("art").takeIf(String::isNotBlank)?.let(Uri::parse))
+                                .setExtras(audioFormatExtras(item.optString("format")))
                                 .build(),
                         ).build(),
                 )
@@ -467,6 +472,10 @@ class PlaybackController(
         }
         QueueSnapshot(items, root.optInt("index"), root.optLong("position"), source, window)
     }.getOrNull()
+
+    private fun audioFormatExtras(audioFormat: String?): Bundle = Bundle().apply {
+        audioFormat?.takeIf(String::isNotBlank)?.let { putString(AUDIO_FORMAT_KEY, it) }
+    }
 
     private fun encodeSource(source: QueueSource): JSONObject = JSONObject()
         .put("kind", when (source) {
@@ -512,3 +521,5 @@ class PlaybackController(
     }
 
 }
+
+private const val AUDIO_FORMAT_KEY = "com.fnmusic.tv.AUDIO_FORMAT"

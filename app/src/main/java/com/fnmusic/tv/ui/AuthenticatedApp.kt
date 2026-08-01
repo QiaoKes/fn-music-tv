@@ -16,6 +16,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -1064,6 +1065,7 @@ private fun ImmersivePlayer(
     val playerCoverId = playbackCoverId ?: track?.takeIf { it.guid.value == playback.mediaId }?.coverId
     val title = playback.title.ifBlank { track?.title ?: "尚未选择歌曲" }
     val artist = playback.artist.ifBlank { track?.artistName.orEmpty() }
+    val audioFormat = playback.audioFormat.ifBlank { track?.audioFormat.orEmpty() }
     val poster = preferences.playerStyle == com.fnmusic.tv.core.model.PlayerStyle.Poster
     val artworkBitmap = rememberRemoteArtworkBitmap(
         container,
@@ -1126,6 +1128,7 @@ private fun ImmersivePlayer(
             posterPanelColor = posterPanelColor,
             title = title,
             artist = artist,
+            audioFormat = audioFormat,
             isPlaying = playback.isPlaying,
             lyricLines = lyricLines,
             activeLyricIndex = active,
@@ -1280,6 +1283,7 @@ private fun PlayerMainContent(
     posterPanelColor: Color,
     title: String,
     artist: String,
+    audioFormat: String,
     isPlaying: Boolean,
     lyricLines: List<com.fnmusic.tv.core.model.lyric.LyricLine>,
     activeLyricIndex: Int,
@@ -1324,6 +1328,7 @@ private fun PlayerMainContent(
             PlayerDetails(
                 title = title,
                 artist = artist,
+                audioFormat = audioFormat,
                 lyricLines = lyricLines,
                 activeLyricIndex = activeLyricIndex,
                 staticLyric = staticLyric,
@@ -1350,6 +1355,7 @@ private fun PlayerMainContent(
             PlayerDetails(
                 title = title,
                 artist = artist,
+                audioFormat = audioFormat,
                 lyricLines = lyricLines,
                 activeLyricIndex = activeLyricIndex,
                 staticLyric = staticLyric,
@@ -1371,6 +1377,7 @@ private fun PlayerMainContent(
 private fun PlayerDetails(
     title: String,
     artist: String,
+    audioFormat: String,
     lyricLines: List<com.fnmusic.tv.core.model.lyric.LyricLine>,
     activeLyricIndex: Int,
     staticLyric: String?,
@@ -1384,22 +1391,30 @@ private fun PlayerDetails(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                title,
+                fontSize = if (poster) 22.sp else 32.sp,
+                lineHeight = if (poster) 28.sp else 38.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (audioFormat.isNotBlank()) {
+                Spacer(Modifier.width(12.dp))
+                AudioFormatBadge(audioFormat, poster)
+            }
+        }
+        Spacer(Modifier.height(4.dp))
         Text(
-            title,
-            fontSize = if (poster) 22.sp else 32.sp,
-            lineHeight = if (poster) 28.sp else 38.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            artist,
+            artist.ifBlank { "未知演唱者" },
             color = FnColors.Muted,
             fontSize = if (poster) 16.sp else 20.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        Spacer(Modifier.height(if (poster) 40.dp else 14.dp))
+        Spacer(Modifier.height(if (poster) 44.dp else 34.dp))
         if (poster) {
             PosterLyrics(lyricLines, activeLyricIndex, staticLyric, lyricsLoading, lyricsFailed)
         } else {
@@ -1414,6 +1429,25 @@ private fun PlayerDetails(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun AudioFormatBadge(audioFormat: String, poster: Boolean) {
+    val color = FnColors.Text.copy(alpha = 0.72f)
+    Box(
+        Modifier.border(1.dp, color, RoundedCornerShape(2.dp))
+            .padding(horizontal = if (poster) 5.dp else 6.dp, vertical = 2.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            audioFormat,
+            color = color,
+            fontSize = if (poster) 10.sp else 12.sp,
+            lineHeight = if (poster) 12.sp else 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+        )
     }
 }
 
@@ -1601,7 +1635,7 @@ private fun PosterLyricSlots(
 ) {
     val indices = posterLyricIndices(lyricLines.size, activeIndex)
     val topOffsets = listOf(16.dp, 64.dp, 162.dp, 242.dp)
-    val heights = listOf(44.dp, 78.dp, 52.dp, 44.dp)
+    val heights = listOf(44.dp, 84.dp, 52.dp, 44.dp)
     Box(Modifier.fillMaxSize()) {
         indices.forEachIndexed { slot, index ->
             if (index != null) {
@@ -1632,29 +1666,16 @@ private fun PosterLyricGroup(
     modifier: Modifier = Modifier,
 ) {
     Box(modifier.clipToBounds(), contentAlignment = Alignment.CenterStart) {
-        Column {
-            posterLyricTexts(texts).forEachIndexed { index, text ->
-                Text(
-                    text,
-                    color = FnColors.Text.copy(alpha = alpha),
-                    fontSize = when {
-                        current && index == 0 -> 24.sp
-                        current -> 22.sp
-                        index == 0 -> 18.sp
-                        else -> 17.sp
-                    },
-                    lineHeight = when {
-                        current && index == 0 -> 28.sp
-                        current -> 26.sp
-                        index == 0 -> 22.sp
-                        else -> 21.sp
-                    },
-                    fontWeight = if (current) FontWeight.Bold else FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
+        Text(
+            posterLyricTexts(texts).joinToString("\n"),
+            color = FnColors.Text.copy(alpha = alpha),
+            fontSize = if (current) 24.sp else 18.sp,
+            lineHeight = if (current) 28.sp else 22.sp,
+            fontWeight = if (current) FontWeight.Bold else FontWeight.SemiBold,
+            maxLines = if (current) 3 else 2,
+            overflow = TextOverflow.Clip,
+            softWrap = true,
+        )
     }
 }
 
@@ -1695,7 +1716,7 @@ private fun PlayerLyrics(
                                 maxLines = if (current) 4 else 2,
                                 overflow = TextOverflow.Clip,
                                 softWrap = true,
-                                modifier = Modifier.padding(start = if (current) 10.dp else 0.dp, end = 8.dp),
+                                modifier = Modifier.padding(end = 8.dp),
                             )
                         }
                     }
