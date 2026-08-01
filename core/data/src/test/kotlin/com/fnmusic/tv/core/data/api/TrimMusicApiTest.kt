@@ -20,6 +20,7 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -123,6 +124,31 @@ class TrimMusicApiTest {
 
         assertEquals(AppError.Unauthenticated, error.error)
         assertEquals("/music/api/v1/user/me", server.takeRequest().target)
+    }
+
+    @Test fun `http1 requests close their connection without transport retries`() = runBlocking {
+        repeat(2) {
+            server.enqueue(
+                MockResponse.Builder()
+                    .body(
+                        """{"code":0,"msg":"success","data":{"serverGUID":"server-1","serverName":"NAS","serverVersion":"1","mediasrvVersion":"1"}}""",
+                    )
+                    .build(),
+            )
+        }
+        val client = TrimMusicApi.client()
+        val api = api(client)
+
+        api.systemConfig()
+        api.systemConfig()
+
+        val first = server.takeRequest()
+        val second = server.takeRequest()
+        assertEquals("close", first.headers["Connection"])
+        assertEquals("close", second.headers["Connection"])
+        assertNotEquals(first.connectionIndex, second.connectionIndex)
+        assertEquals(2, server.requestCount)
+        assertFalse(client.retryOnConnectionFailure)
     }
 
     @Test fun `cover json responses decode api envelopes without becoming transient failures`() {
