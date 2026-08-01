@@ -83,3 +83,26 @@ Replaced the generic Home/My player button with the HTML-prototype-scale now-pla
 ### Status
 
 [OK] **Completed**
+
+
+## Session 4: Polish TV music UI and launcher compatibility
+
+**Date**: 2026-08-01
+**Task**: Polish TV music UI and launcher compatibility
+**Branch**: `main`
+
+### Summary
+
+Refined TV player and media cards, improved the home now-playing entry, added standard Android launcher compatibility, and verified the sideload APK on a 1920x1080 Google TV emulator.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d409e8a` | (see git log) |
+| `48c24ce` | (see git log) |
+| `d7fb4d3` | (see git log) |
+
+### Status
+
+[OK] **Completed**
