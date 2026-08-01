@@ -3,6 +3,7 @@ package com.fnmusic.tv.core.data.repository
 import android.content.Context
 import com.fnmusic.tv.core.data.api.TrimMusicApi
 import com.fnmusic.tv.core.data.security.SecureTokenStore
+import com.fnmusic.tv.core.data.security.TokenStore
 import com.fnmusic.tv.core.data.server.NormalizedServer
 import com.fnmusic.tv.core.data.server.ServerUrlNormalizer
 import com.fnmusic.tv.core.data.server.ServerUrlResult
@@ -13,11 +14,13 @@ import com.fnmusic.tv.core.model.PlaybackCredentials
 import com.fnmusic.tv.core.model.ServerIdentity
 import com.fnmusic.tv.core.model.User
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import okhttp3.OkHttpClient
 
 sealed interface SessionState {
     data object Loading : SessionState
@@ -29,12 +32,17 @@ sealed interface SessionState {
     data class SignedIn(val server: ServerIdentity, val user: User) : SessionState
 }
 
-class SessionRepository(context: Context) {
+class SessionRepository internal constructor(
+    context: Context,
+    private val tokenStore: TokenStore,
+    private val clientFactory: () -> OkHttpClient,
+) {
+    constructor(context: Context) : this(context, SecureTokenStore(context), TrimMusicApi::client)
+
     private val preferences = context.getSharedPreferences("session", Context.MODE_PRIVATE)
-    private val secureTokenStore = SecureTokenStore(context)
     private val _state = MutableStateFlow<SessionState>(SessionState.Loading)
     val state: StateFlow<SessionState> = _state.asStateFlow()
-    private var memoryToken: String? = secureTokenStore.read()
+    private var memoryToken: String? = tokenStore.read()
     private var api: TrimMusicApi? = null
     private val authVerification = Mutex()
 
@@ -55,17 +63,19 @@ class SessionRepository(context: Context) {
             _state.value = signedOut()
             return
         }
-        runCatching { connect(savedServer, useHttps = false) }
-            .onSuccess { connected ->
-                val user = connected.api.me().toDomain()
-                api = connected.api
-                _state.value = SessionState.SignedIn(connected.server, user)
-            }
-            .onFailure { cause ->
-                val error = (cause as? AppException)?.error ?: AppError.Unknown()
-                if (error == AppError.Unauthenticated || error == AppError.AccountDisabled) clearToken()
-                _state.value = signedOut(error)
-            }
+        try {
+            val connected = connect(savedServer, useHttps = false)
+            val user = connected.api.me().toDomain()
+            api = connected.api
+            _state.value = SessionState.SignedIn(connected.server, user)
+        } catch (cause: CancellationException) {
+            throw cause
+        } catch (cause: Exception) {
+            api = null
+            val error = (cause as? AppException)?.error ?: AppError.Unknown()
+            if (error == AppError.Unauthenticated || error == AppError.AccountDisabled) clearToken()
+            _state.value = signedOut(error)
+        }
     }
 
     suspend fun login(serverInput: String, useHttps: Boolean, username: String, password: CharArray, remember: Boolean) {
@@ -73,7 +83,7 @@ class SessionRepository(context: Context) {
             val connected = connect(serverInput, useHttps)
             val result = connected.api.login(username, password.concatToString(), deviceId)
             memoryToken = result.userToken
-            if (remember) secureTokenStore.write(result.userToken) else secureTokenStore.clear()
+            if (remember) tokenStore.write(result.userToken) else tokenStore.clear()
             recordServer(connected.normalized.persistentApiBase())
             api = connected.api
             _state.value = SessionState.SignedIn(connected.server, result.user.toDomain())
@@ -154,13 +164,13 @@ class SessionRepository(context: Context) {
     private suspend fun connect(input: String, useHttps: Boolean): ConnectedServer {
         val normalized = (ServerUrlNormalizer.normalize(input, useHttps) as? ServerUrlResult.Valid)?.server
             ?: throw AppException(AppError.Unknown("invalid_server"))
-        val candidate = TrimMusicApi(normalized, TrimMusicApi.client()) { memoryToken }
+        val candidate = TrimMusicApi(normalized, clientFactory()) { memoryToken }
         return ConnectedServer(normalized, candidate.systemConfig().toDomain(), candidate)
     }
 
     private fun clearToken() {
         memoryToken = null
-        secureTokenStore.clear()
+        tokenStore.clear()
     }
 
     private fun recordServer(server: String) {

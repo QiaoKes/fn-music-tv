@@ -1,0 +1,3 @@
+{"file":".trellis/spec/backend/android-client-contracts.md","reason":"Verify transparent connection recovery and restore behavior preserve bounded retry and auth contracts."}
+{"file":".trellis/spec/frontend/android-tv-interaction.md","reason":"Verify live queue, player controls, rapid transitions, and icon-only control acceptance on TV."}
+{"file":".trellis/spec/guides/index.md","reason":"Required verification guide index."}

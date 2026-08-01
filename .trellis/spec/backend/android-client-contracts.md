@@ -23,7 +23,9 @@ SessionRepository.login(
     password: CharArray,
     remember: Boolean,
 )
+SessionRepository.restore()
 TrimMusicApi.login(username: String, password: String, deviceId: String): LoginResultDto
+TrimMusicApi.client(): OkHttpClient
 data class ApiEnvelope<T>(val code: Int, val msg: String = "", val data: T? = null)
 
 data class ResponseCacheKey(
@@ -90,6 +92,13 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   memory.
 - API code `120001`/`99999` maps to `Unauthenticated`; `120002` maps to `AccountDisabled`;
   `100005` maps to `NotFound`.
+- API clients keep redirects and OkHttp transport retries disabled. Their network interceptor adds
+  `Connection: close` only to HTTP/1.1 requests so a FNOS nginx idle timeout cannot leave a stale
+  pooled socket for the next logical request. HTTP/2 and Media3 audio streaming are unaffected.
+- `SessionRepository.restore()` contains server discovery, `me()`, user mapping, and signed-in state
+  publication in one exception boundary. Cancellation is always rethrown. Invalid or disabled
+  remembered credentials clear the token and publish signed-out state; other failures retain the
+  token for a later restore attempt and never escape to the application main scope.
 - User-token invalidation clears auth and returns to login. HLS or roam-session invalidation must
   not clear the user token.
 
@@ -211,6 +220,9 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 | --- | --- |
 | API HTTP 401 or envelope code 120001/99999 | `AppException(Unauthenticated)`, terminal, one attempt |
 | Envelope code 120002 | `AppException(AccountDisabled)`, terminal, token invalidation |
+| Remembered-token `me()` returns unauthenticated/disabled | Clear token and publish `SignedOut(error)`; do not crash |
+| Remembered-token restore has a transient failure | Retain token and publish `SignedOut(error)` for a later attempt |
+| HTTP/1.1 API request after an idle interval | Send `Connection: close`; use one fresh connection and no hidden retry |
 | HTTP/envelope 404/100005 | `AppException(NotFound)`, terminal; current artwork/lyrics `Absent`, metadata fallback |
 | I/O, HTTP 408/429/5xx | `NetworkUnavailable`, retryable; current resources make at most 3 total attempts |
 | Redirect or other non-success HTTP status | `NetworkUnavailable`, terminal, one attempt |
@@ -248,6 +260,10 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   when revision 5 completes last.
 - Good: `10.0.0.115` normalizes to `http://10.0.0.115:5666/music/api/v1/` and is shown again as
   `10.0.0.115` on the login screen.
+- Good: two HTTP/1.1 API reads each carry `Connection: close`, use distinct connections, and make
+  exactly two server requests while `retryOnConnectionFailure` remains disabled.
+- Good: an expired remembered token returns to login, removes that token, and leaves startup alive;
+  a `500` during restore also returns to login but retains the token for a later attempt.
 - Good: the login request contains the exact lowercase SHA-256 password hash plus the stable
   `deviceId`, and authenticated requests carry the raw token.
 - Base: a network failure returns valid Room page/index/lyric data where permitted, persists it in
@@ -274,8 +290,12 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 - `ServerUrlNormalizerTest`: default port `5666`, explicit/custom ports, editable host display,
   schemes, paths, embedded credentials, query/fragment, and invalid hosts.
 - `ApiDecoderTest`/`TrimMusicApiTest`: exact password hash, `deviceId`, raw auth header, code mapping,
-  invalid JSON, redirects, retryable status classification, no transport retry, maximum three
-  current-resource attempts, `404` terminal behavior, and cancellation calling `Call.cancel()`.
+  invalid JSON, redirects, retryable status classification, HTTP/1.1 close with distinct connection
+  indices, no transport retry, exact request count, maximum three current-resource attempts, `404`
+  terminal behavior, and cancellation calling `Call.cancel()`.
+- `SessionRepositoryTest`: remembered-token `401` and `120002` are contained and clear credentials;
+  transient restore failure is contained but retains credentials; cancellation is rethrown without
+  publishing an error state.
 - `SerializedResponseCacheTest`: 8 MiB-equivalent byte LRU ordering, namespace isolation, same-key
   single-flight, one-of-many waiter cancellation, final-waiter upstream cancellation, failed fetch
   retryability, namespace/global generations, and late-persist rejection.
@@ -304,6 +324,44 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   two app Android-test APKs, and benchmark APKs.
 
 ## 7. Wrong vs Correct
+
+```kotlin
+// Wrong: a stale HTTP/1.1 socket may be reused, or a hidden transport retry can exceed request limits.
+OkHttpClient.Builder().retryOnConnectionFailure(true).build()
+
+// Correct: keep logical retry ownership explicit and retire only HTTP/1.1 API connections.
+OkHttpClient.Builder()
+    .retryOnConnectionFailure(false)
+    .addNetworkInterceptor { chain ->
+        val request = if (chain.connection()?.protocol() == Protocol.HTTP_1_1) {
+            chain.request().newBuilder().header("Connection", "close").build()
+        } else {
+            chain.request()
+        }
+        chain.proceed(request)
+    }
+    .build()
+```
+
+```kotlin
+// Wrong: me() throws outside the runCatching boundary and crashes startup.
+runCatching { connect(savedServer, useHttps = false) }.onSuccess { it.api.me() }
+
+// Correct: contain the whole restore transaction while preserving cancellation.
+try {
+    val connected = connect(savedServer, useHttps = false)
+    val user = connected.api.me().toDomain()
+    api = connected.api
+    _state.value = SessionState.SignedIn(connected.server, user)
+} catch (cause: CancellationException) {
+    throw cause
+} catch (cause: Exception) {
+    api = null
+    val error = (cause as? AppException)?.error ?: AppError.Unknown()
+    if (error == AppError.Unauthenticated || error == AppError.AccountDisabled) clearToken()
+    _state.value = signedOut(error)
+}
+```
 
 ```kotlin
 // Wrong: persistent audio disk cache and a command whose ownership no longer exists.

@@ -15,6 +15,7 @@ import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
@@ -216,6 +217,16 @@ class TrimMusicApi(
             .followRedirects(false)
             .followSslRedirects(false)
             .retryOnConnectionFailure(false)
+            .addNetworkInterceptor { chain ->
+                val request = if (chain.connection()?.protocol() == Protocol.HTTP_1_1) {
+                    chain.request().newBuilder()
+                        .header("Connection", "close")
+                        .build()
+                } else {
+                    chain.request()
+                }
+                chain.proceed(request)
+            }
             .build()
     }
 }
