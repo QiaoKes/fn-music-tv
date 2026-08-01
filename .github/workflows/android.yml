@@ -1,0 +1,84 @@
+name: Android CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test, lint, and build APKs
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools platforms;android-36 build-tools;36.0.0
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Run quality gates and build artifacts
+        run: |
+          ./gradlew --no-daemon --stacktrace \
+            :core:model:test \
+            :core:data:test \
+            :core:playback:test \
+            :app:test \
+            :core:data:lintDebug \
+            :core:data:lintRelease \
+            :core:playback:lintDebug \
+            :core:playback:lintRelease \
+            :app:lintSideloadDebug \
+            :app:lintSideloadRelease \
+            :app:lintStoreDebug \
+            :app:lintStoreRelease \
+            :app:assembleSideloadDebug \
+            :app:assembleSideloadRelease \
+            :app:assembleStoreDebug \
+            :app:assembleStoreRelease \
+            :app:assembleSideloadDebugAndroidTest \
+            :app:assembleStoreDebugAndroidTest \
+            :baselineprofile:assembleBenchmarkRelease \
+            :baselineprofile:assembleNonMinifiedRelease
+
+      - name: Upload application APKs
+        uses: actions/upload-artifact@v7
+        with:
+          name: fn-music-tv-apks-${{ github.sha }}
+          path: |
+            app/build/outputs/apk/**/*.apk
+            baselineprofile/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fn-music-tv-reports-${{ github.sha }}
+          path: |
+            **/build/reports/tests/**
+            **/build/reports/lint-results*.html
+            **/build/reports/lint-results*.xml
+          if-no-files-found: ignore
+          retention-days: 14
