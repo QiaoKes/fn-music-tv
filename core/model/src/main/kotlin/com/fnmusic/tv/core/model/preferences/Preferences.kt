@@ -3,10 +3,9 @@ package com.fnmusic.tv.core.model.preferences
 import com.fnmusic.tv.core.model.PlayerStyle
 
 enum class CacheBudget(val megabytes: Int) {
-    Small(128), Medium(256), Default(512), Large(1024);
+    Small(32), Medium(64), Default(128), Large(256);
 
-    val mediaBytes: Long get() = megabytes * 1024L * 1024L * 3L / 4L
-    val artworkBytes: Long get() = megabytes * 1024L * 1024L / 4L
+    val artworkBytes: Long get() = megabytes * 1024L * 1024L
 }
 
 data class AppPreferencesState(
@@ -15,9 +14,8 @@ data class AppPreferencesState(
 )
 
 data class CacheUsage(
-    val mediaBytes: Long,
     val artworkBytes: Long,
     val indexBytes: Long = 0,
 ) {
-    val totalBytes: Long get() = mediaBytes + artworkBytes
+    val totalBytes: Long get() = artworkBytes + indexBytes
 }

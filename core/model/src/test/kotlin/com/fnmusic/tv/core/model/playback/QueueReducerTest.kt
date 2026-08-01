@@ -46,6 +46,25 @@ class QueueReducerTest {
         assertEquals(99_850, window.startIndex)
     }
 
+    @Test fun `play modes cycle in product order and map to playback behavior`() {
+        val cycle = generateSequence(DEFAULT_PLAY_MODE, PlayMode::next).take(5).toList()
+
+        assertEquals(
+            listOf(
+                PlayMode.ListRepeat,
+                PlayMode.Shuffle,
+                PlayMode.SingleRepeat,
+                PlayMode.Sequence,
+                PlayMode.ListRepeat,
+            ),
+            cycle,
+        )
+        assertEquals(PlayModeMapping(RepeatBehavior.All, false), PlayMode.ListRepeat.mapping)
+        assertEquals(PlayModeMapping(RepeatBehavior.All, true), PlayMode.Shuffle.mapping)
+        assertEquals(PlayModeMapping(RepeatBehavior.One, false), PlayMode.SingleRepeat.mapping)
+        assertEquals(PlayModeMapping(RepeatBehavior.Off, false), PlayMode.Sequence.mapping)
+    }
+
     @Test fun `sliding queue appends atomically and remains bounded`() {
         val state = SlidingQueueReducer.loading(
             SlidingQueueState(
@@ -70,6 +89,9 @@ class QueueReducerTest {
         assertEquals(50, update.removeFromStart)
         assertEquals(190, update.state.currentIndex)
         assertEquals("50", update.state.guids.first())
+        assertEquals(2, update.state.firstPage)
+        assertEquals(50, update.state.windowStart)
+        assertFalse(update.state.reachedStart)
     }
 
     @Test fun `sliding queue exposes retry and rejects drift`() {
@@ -102,6 +124,21 @@ class QueueReducerTest {
         assertFalse(retried.invalidated)
     }
 
+    @Test fun `fresh page total enriches a restored queue with unknown total`() {
+        val restored = SlidingQueueState.fromSegments(
+            segments = listOf(segment(page = 1, knownTotal = null)),
+            currentIndex = 40,
+        )
+        val update = SlidingQueueReducer.append(
+            state = SlidingQueueReducer.loading(restored),
+            segment = segment(page = 2, knownTotal = 6 * DEFAULT_QUEUE_PAGE_SIZE),
+        )
+
+        assertEquals(6 * DEFAULT_QUEUE_PAGE_SIZE, update.state.knownTotal)
+        assertTrue(update.state.segments.all { it.knownTotal == 6 * DEFAULT_QUEUE_PAGE_SIZE })
+        assertFalse(update.state.invalidated)
+    }
+
     @Test fun `sliding queue prepends and removes the distant tail`() {
         val base = SlidingQueueReducer.loading(
             SlidingQueueState(
@@ -128,5 +165,89 @@ class QueueReducerTest {
         assertEquals(58, update.state.currentIndex)
         assertEquals("0", update.state.guids.first())
         assertTrue(update.state.reachedStart)
+        assertEquals(5, update.state.lastPage)
+        assertFalse(update.state.reachedEnd)
+    }
+
+    @Test fun `append eviction can reload the exact filtered head page`() {
+        val original = SlidingQueueState.fromSegments(
+            segments = (1..5).map { page -> segment(page, filteredOffsets = if (page == 1) setOf(3, 17) else emptySet()) },
+            currentIndex = 240,
+        )
+
+        val appended = SlidingQueueReducer.append(
+            state = SlidingQueueReducer.loading(original),
+            segment = segment(6, filteredOffsets = setOf(4, 21)),
+        )
+
+        assertEquals(48, appended.removeFromStart)
+        assertEquals(2, appended.state.firstPage)
+        assertEquals(50, appended.state.windowStart)
+        assertFalse(appended.state.reachedStart)
+        assertEquals(1, appended.state.firstPage - 1)
+
+        val restored = SlidingQueueReducer.prepend(
+            state = SlidingQueueReducer.loading(appended.state),
+            segment = segment(1, filteredOffsets = setOf(3, 17)),
+        )
+
+        assertEquals(48, restored.removeFromEnd)
+        assertEquals(1, restored.state.firstPage)
+        assertEquals(5, restored.state.lastPage)
+        assertEquals(original.guids, restored.state.guids)
+        assertEquals(original.currentIndex, restored.state.currentIndex)
+        assertEquals(listOf(3, 17), restored.state.segments.first().missingSourceOffsets())
+    }
+
+    @Test fun `prepend eviction can reload the exact filtered tail page`() {
+        val original = SlidingQueueState.fromSegments(
+            segments = (2..6).map { page -> segment(page, filteredOffsets = if (page == 6) setOf(4, 21) else emptySet()) },
+            currentIndex = 8,
+        )
+
+        val prepended = SlidingQueueReducer.prepend(
+            state = SlidingQueueReducer.loading(original),
+            segment = segment(1, filteredOffsets = setOf(3, 17)),
+        )
+
+        assertEquals(48, prepended.removeFromEnd)
+        assertEquals(5, prepended.state.lastPage)
+        assertFalse(prepended.state.reachedEnd)
+        assertEquals(6, prepended.state.lastPage + 1)
+
+        val restored = SlidingQueueReducer.append(
+            state = SlidingQueueReducer.loading(prepended.state),
+            segment = segment(6, filteredOffsets = setOf(4, 21)),
+        )
+
+        assertEquals(48, restored.removeFromStart)
+        assertEquals(2, restored.state.firstPage)
+        assertEquals(6, restored.state.lastPage)
+        assertEquals(original.guids, restored.state.guids)
+        assertEquals(original.currentIndex, restored.state.currentIndex)
+        assertTrue(restored.state.reachedEnd)
+        assertEquals(listOf(4, 21), restored.state.segments.last().missingSourceOffsets())
+    }
+
+    private fun segment(
+        page: Int,
+        filteredOffsets: Set<Int> = emptySet(),
+        knownTotal: Int? = 6 * DEFAULT_QUEUE_PAGE_SIZE,
+    ): QueuePageSegment {
+        val sourceStart = (page - 1) * DEFAULT_QUEUE_PAGE_SIZE
+        return QueuePageSegment(
+            page = page,
+            rawRowCount = DEFAULT_QUEUE_PAGE_SIZE,
+            playableItems = (0 until DEFAULT_QUEUE_PAGE_SIZE)
+                .filterNot(filteredOffsets::contains)
+                .map { offset -> QueuePageItem("$page:$offset", sourceStart + offset) },
+            sort = "createdAt,desc",
+            knownTotal = knownTotal,
+        )
+    }
+
+    private fun QueuePageSegment.missingSourceOffsets(): List<Int> {
+        val retained = playableItems.mapTo(hashSetOf()) { it.sourceAbsoluteIndex - sourceStartIndex }
+        return (0 until rawRowCount).filterNot(retained::contains)
     }
 }

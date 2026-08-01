@@ -1,0 +1,11 @@
+{"file":".trellis/spec/backend/index.md","reason":"Backend spec index for data, Room, Media3, and quality boundaries."}
+{"file":".trellis/spec/backend/android-client-contracts.md","reason":"Required namespace, Room, authorization, migration, and CI contracts; D1 overrides persistent-media-cache clauses and D8 overrides generic non-success mapping for HTTP 404 only."}
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend spec index for Compose and TV interaction work."}
+{"file":".trellis/spec/frontend/android-tv-interaction.md","reason":"Required D-pad focus graph, player control, roam, and Back behavior."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Playback state crosses API, Room, MediaSession, controller, and Compose boundaries."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Centralize cache keys, state transitions, and focus patterns instead of duplicating them."}
+{"file":".trellis/tasks/08-01-player-cache-playback-ux/research/cache.md","reason":"Evidence and recommended metadata, artwork, and audio cache contracts."}
+{"file":".trellis/tasks/08-01-player-cache-playback-ux/research/playback.md","reason":"Playback defects, roam root cause, persistence, mode, paging, and test evidence."}
+{"file":".trellis/tasks/08-01-player-cache-playback-ux/research/tv-ux.md","reason":"Queue overlay, player action, focus restoration, and reference evidence; task decision D2 supersedes its three-mode and direct-Home-exit recommendations."}
+{"file":".trellis/tasks/08-01-player-cache-playback-ux/research/decisions.md","reason":"Authoritative resolutions for audio persistence, modes, queue scope, transport, snapshots, artwork budget, roam bounds, and current-track resource identity."}
+{"file":".trellis/tasks/08-01-player-cache-playback-ux/research/track-change-assets.md","reason":"Evidence and regression contract for probabilistic Previous/Next artwork and lyrics failures, cancellation, projection coherence, and retries."}
