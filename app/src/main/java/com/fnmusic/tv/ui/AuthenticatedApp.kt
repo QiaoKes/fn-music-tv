@@ -6,6 +6,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -78,6 +79,7 @@ import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
+import androidx.tv.material3.Border
 import androidx.tv.material3.LocalContentColor
 import androidx.tv.material3.Text
 import com.fnmusic.tv.AppContainer
@@ -253,9 +255,7 @@ private fun LibraryTopBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (playback.hasMedia) {
-            Button(onClick = onPlayer, modifier = Modifier.width(360.dp).height(62.dp)) {
-                Text(playback.title.ifBlank { "正在播放" }, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 20.sp)
-            }
+            NowPlayingPill(playback, onPlayer)
         } else {
             Text("飞牛音乐 TV", fontSize = 28.sp, fontWeight = FontWeight.Bold)
         }
@@ -263,6 +263,105 @@ private fun LibraryTopBar(
             Button(onClick = onHome, enabled = !selectedHome) { Text("首页", fontSize = 21.sp) }
             Button(onClick = onMy, enabled = selectedHome) { Text("我的", fontSize = 21.sp) }
         }
+    }
+}
+
+@Composable
+private fun NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(19.dp)
+    val coverId = remember(playback.artworkUrl) {
+        playback.artworkUrl?.let { runCatching { it.toUri().getQueryParameter("coverId") }.getOrNull() }
+    }
+    Button(
+        onClick = onClick,
+        modifier = Modifier.size(width = 186.dp, height = 37.dp),
+        shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
+        scale = ButtonDefaults.scale(focusedScale = 1.04f),
+        colors = ButtonDefaults.colors(
+            containerColor = Color(0xFF232827),
+            contentColor = FnColors.Text,
+            focusedContainerColor = Color(0xFF343A38),
+            focusedContentColor = FnColors.Text,
+            pressedContainerColor = Color(0xFF3B413F),
+            pressedContentColor = FnColors.Text,
+        ),
+        border = ButtonDefaults.border(
+            border = Border(BorderStroke(0.5.dp, Color(0xFF454C49)), shape = shape),
+            focusedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
+            pressedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
+        ),
+        contentPadding = PaddingValues(start = 5.dp, top = 4.5.dp, end = 9.dp, bottom = 4.5.dp),
+    ) {
+        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+            if (coverId != null) {
+                RemoteArtwork(
+                    container = LocalAppContainer.current,
+                    coverId = coverId,
+                    variant = CoverVariant.Compact,
+                    modifier = Modifier.size(27.dp),
+                    shape = CircleShape,
+                    contentScale = ContentScale.Crop,
+                    placeholderContent = { NowPlayingArtworkFallback(playback.title) },
+                )
+            } else {
+                NowPlayingArtworkFallback(playback.title)
+            }
+            Spacer(Modifier.width(7.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(3.5.dp).background(if (playback.isPlaying) FnColors.Coral else FnColors.Muted, CircleShape))
+                    Spacer(Modifier.width(3.5.dp))
+                    Text(
+                        if (playback.isPlaying) "正在播放" else "已暂停",
+                        color = Color(0xFFB7BBB7),
+                        fontSize = 9.sp,
+                        lineHeight = 9.sp,
+                        maxLines = 1,
+                    )
+                }
+                Spacer(Modifier.height(1.5.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        playback.title.ifBlank { "正在播放" },
+                        fontSize = 12.sp,
+                        lineHeight = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (playback.artist.isNotBlank()) {
+                        Spacer(Modifier.width(4.5.dp))
+                        Text(
+                            playback.artist,
+                            color = Color(0xFFA7ABA7),
+                            fontSize = 9.sp,
+                            lineHeight = 10.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(0.62f, fill = false),
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.width(5.dp))
+            Text("›", color = Color(0xFFC6C9C5), fontSize = 17.sp, lineHeight = 17.sp)
+        }
+    }
+}
+
+@Composable
+private fun NowPlayingArtworkFallback(title: String) {
+    Box(
+        Modifier.size(27.dp).background(Color(0xFF31413D), CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            title.trim().take(1).ifBlank { "音" }.uppercase(),
+            color = FnColors.Teal,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 
