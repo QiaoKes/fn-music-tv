@@ -127,3 +127,24 @@ Updated the immersive player title, artist, audio format badge, and lyric hierar
 ### Status
 
 [OK] **Completed**
+
+
+## Session 6: Playback cache and TV controls
+
+**Date**: 2026-08-02
+**Task**: Playback cache and TV controls
+**Branch**: `codex/player-cache-playback-ux`
+
+### Summary
+
+Implemented process-lifetime metadata and artwork caching, removed persistent audio caching, rebuilt playback session and roam transitions, fixed artwork and lyrics races, and added TV queue, icon modes, focus, and Back behavior with full unit, lint, build, screenshot, and connected-device verification.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cd8da28` | (see git log) |
+
+### Status
+
+[OK] **Completed**
