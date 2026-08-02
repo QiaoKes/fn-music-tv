@@ -46,4 +46,35 @@ class AppContainerRuntimeTest {
 
         assertEquals(listOf("playback", "global-artwork"), events)
     }
+
+    @Test
+    fun `account switch preserves cleanup and logout order`() = runBlocking {
+        val events = mutableListOf<String>()
+
+        switchAuthenticatedAccount(
+            clearPlaybackSession = { events += "playback" },
+            clearArtwork = { events += "artwork" },
+            clearLocalNamespace = { events += "namespace" },
+            logout = { events += "logout" },
+        )
+
+        assertEquals(listOf("playback", "artwork", "namespace", "logout"), events)
+    }
+
+    @Test
+    fun `account switch continues cleanup when playback clear fails`() = runBlocking {
+        val events = mutableListOf<String>()
+
+        switchAuthenticatedAccount(
+            clearPlaybackSession = {
+                events += "playback"
+                error("snapshot failure")
+            },
+            clearArtwork = { events += "artwork" },
+            clearLocalNamespace = { events += "namespace" },
+            logout = { events += "logout" },
+        )
+
+        assertEquals(listOf("playback", "artwork", "namespace", "logout"), events)
+    }
 }
