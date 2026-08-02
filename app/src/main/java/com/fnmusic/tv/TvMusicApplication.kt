@@ -1,12 +1,14 @@
 package com.fnmusic.tv
 
 import android.app.Application
+import android.content.Intent
 import com.fnmusic.tv.core.model.AppError
 import com.fnmusic.tv.core.data.repository.SessionState
 import com.fnmusic.tv.core.data.repository.SessionRepository
 import com.fnmusic.tv.core.data.repository.MusicRepository
 import com.fnmusic.tv.core.data.preferences.AppPreferences
 import com.fnmusic.tv.core.playback.PlaybackController
+import com.fnmusic.tv.core.playback.PlaybackService
 import com.fnmusic.tv.core.data.local.LocalStore
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
@@ -26,7 +28,7 @@ class TvMusicApplication : Application() {
     }
 }
 
-class AppContainer(application: Application) {
+class AppContainer(private val application: Application) {
     val localStore = LocalStore(application)
     val sessionRepository = SessionRepository(application)
     val appPreferences = AppPreferences(application, localStore)
@@ -77,6 +79,14 @@ class AppContainer(application: Application) {
             }
         }
         applicationScope.launch { sessionRepository.restore() }
+    }
+
+    suspend fun shutdownForExit() = withContext(NonCancellable) {
+        try {
+            playbackController.stopForAppExit()
+        } finally {
+            application.stopService(Intent(application, PlaybackService::class.java))
+        }
     }
 }
 

@@ -89,7 +89,7 @@ import kotlinx.coroutines.launch
 private enum class Route { Home, My, Player }
 
 @Composable
-fun FnMusicApp(container: AppContainer, onMoveToBackground: () -> Unit) {
+fun FnMusicApp(container: AppContainer, onExitApplication: () -> Unit) {
     val session by container.sessionRepository.state.collectAsStateWithLifecycle()
     val playback by container.playbackController.state.collectAsStateWithLifecycle()
     FnMusicTheme {
@@ -107,7 +107,7 @@ fun FnMusicApp(container: AppContainer, onMoveToBackground: () -> Unit) {
                     )
                 }
                 is SessionState.SignedIn -> {
-                    AuthenticatedApp(container, current, playback, onMoveToBackground)
+                    AuthenticatedApp(container, current, playback, onExitApplication)
                 }
             }
         }

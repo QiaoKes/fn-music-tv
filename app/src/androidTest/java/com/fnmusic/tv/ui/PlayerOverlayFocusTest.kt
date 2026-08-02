@@ -15,6 +15,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.captureToImage
@@ -26,6 +27,7 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
 import androidx.test.platform.app.InstrumentationRegistry
+import com.fnmusic.tv.core.playback.PlaybackUiState
 import com.fnmusic.tv.core.model.playback.PlayMode
 import com.fnmusic.tv.core.model.playback.PlaybackQueueItem
 import com.fnmusic.tv.core.model.playback.next
@@ -33,7 +35,10 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.floor
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -184,6 +189,52 @@ class PlayerOverlayFocusTest {
 
         assertTrue(abs(button.center.x - label.center.x) <= 1.5f)
         assertTrue(abs(button.center.y - label.center.y) <= 1.5f)
+    }
+
+    @Test fun nowPlayingPillKeepsCjkTitleInsideItsBounds() {
+        val titleLayout = AtomicReference<TextLayoutResult>()
+        composeRule.setContent {
+            FnMusicTheme {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    NowPlayingPill(
+                        playback = PlaybackUiState(
+                            hasMedia = true,
+                            isPlaying = true,
+                            title = "39みゅーじっく！",
+                            artist = "Mikito P",
+                        ),
+                        onClick = {},
+                        onTitleTextLayout = titleLayout::set,
+                    )
+                }
+            }
+        }
+
+        val pill = composeRule.onNodeWithContentDescription("当前播放：39みゅーじっく！")
+            .fetchSemanticsNode().boundsInRoot
+        val status = composeRule.onNodeWithText("正在播放", useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot
+        val title = composeRule.onNodeWithText("39みゅーじっく！", useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot
+
+        assertTrue(status.top >= pill.top && status.bottom <= pill.bottom)
+        assertTrue(title.top >= pill.top && title.bottom <= pill.bottom)
+        assertTrue(pill.height in 84f..102f)
+        assertTrue(pill.bottom - title.bottom >= 2f)
+        composeRule.runOnIdle {
+            val result = requireNotNull(titleLayout.get())
+            assertEquals(1, result.lineCount)
+            assertTrue(result.getLineTop(0) >= 0f)
+            assertTrue(
+                "lineBottom=${result.getLineBottom(0)}, textHeight=${result.size.height}, " +
+                    "pillHeight=${pill.height}, statusHeight=${status.height}, titleHeight=${title.height}",
+                result.getLineBottom(0) <= result.size.height.toFloat(),
+            )
+        }
+        val screenshot = saveDisplayEvidence("now-playing-pill", pill)
+        val lowestTitlePixel = lowestLightPixelY(screenshot, title)
+        assertTrue(lowestTitlePixel != null)
+        assertTrue(pill.bottom - requireNotNull(lowestTitlePixel) >= 6f)
     }
 
     @Test fun queueTrackTextGroupIsCenteredInsideItsRow() {
@@ -357,6 +408,61 @@ class PlayerOverlayFocusTest {
             assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
         }
     }
+
+    private fun saveDisplayEvidence(
+        name: String,
+        expectedDarkBounds: androidx.compose.ui.geometry.Rect,
+    ): Bitmap {
+        composeRule.waitForIdle()
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        var bitmap: Bitmap? = null
+        for (attempt in 0 until 8) {
+            Thread.sleep(150)
+            bitmap = instrumentation.uiAutomation.takeScreenshot()
+            val candidate = bitmap ?: continue
+            val center = candidate.getPixel(
+                expectedDarkBounds.center.x.toInt().coerceIn(0, candidate.width - 1),
+                expectedDarkBounds.center.y.toInt().coerceIn(0, candidate.height - 1),
+            )
+            if (
+                android.graphics.Color.red(center) < 100 &&
+                android.graphics.Color.green(center) < 100 &&
+                android.graphics.Color.blue(center) < 100
+            ) {
+                break
+            }
+            bitmap = null
+        }
+        val captured = requireNotNull(bitmap)
+        assertTrue(captured.width > 0 && captured.height > 0)
+        val context = instrumentation.targetContext
+        val directory = File(requireNotNull(context.getExternalFilesDir(null)), "evidence")
+        assertTrue(directory.exists() || directory.mkdirs())
+        FileOutputStream(File(directory, "$name-${captured.width}x${captured.height}.png")).use { output ->
+            assertTrue(captured.compress(Bitmap.CompressFormat.PNG, 100, output))
+        }
+        return captured
+    }
+}
+
+private fun lowestLightPixelY(bitmap: Bitmap, bounds: androidx.compose.ui.geometry.Rect): Int? {
+    val left = floor(bounds.left).toInt().coerceIn(0, bitmap.width - 1)
+    val right = ceil(bounds.right).toInt().coerceIn(left + 1, bitmap.width)
+    val top = floor(bounds.top).toInt().coerceIn(0, bitmap.height - 1)
+    val bottom = ceil(bounds.bottom).toInt().coerceIn(top + 1, bitmap.height)
+    for (y in bottom - 1 downTo top) {
+        for (x in left until right) {
+            val pixel = bitmap.getPixel(x, y)
+            if (
+                android.graphics.Color.red(pixel) >= 180 &&
+                android.graphics.Color.green(pixel) >= 180 &&
+                android.graphics.Color.blue(pixel) >= 180
+            ) {
+                return y
+            }
+        }
+    }
+    return null
 }
 
 private enum class ControlInitialFocus { Play, Mode }
