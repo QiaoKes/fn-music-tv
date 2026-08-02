@@ -61,6 +61,8 @@ internal class ArtworkCache(
     private val namespaceGenerations = mutableMapOf<String, Long>()
     private var globalGeneration = 0L
     private var memoryBytes = 0
+    private var trackedDiskBytes: Long? = null
+    private var fullDiskScans = 0
 
     suspend fun get(
         namespace: String,
@@ -115,7 +117,15 @@ internal class ArtworkCache(
             }
             canceled.forEach { it.cancel(CancellationException("Artwork namespace was cleared")) }
             diskMutex.withLock {
-                withContext(Dispatchers.IO) { namespaceDirectory(namespace).deleteRecursively() }
+                withContext(Dispatchers.IO) {
+                    val directory = namespaceDirectory(namespace)
+                    val removedBytes = directory.sizeRecursively()
+                    if (directory.deleteRecursively()) {
+                        trackedDiskBytes = trackedDiskBytes?.let { (it - removedBytes).coerceAtLeast(0L) }
+                    } else {
+                        trackedDiskBytes = null
+                    }
+                }
             }
         }
     }
@@ -133,17 +143,20 @@ internal class ArtworkCache(
                 withContext(Dispatchers.IO) {
                     root.listFiles().orEmpty().forEach(File::deleteRecursively)
                     root.mkdirs()
+                    trackedDiskBytes = 0L
                 }
             }
         }
     }
 
     suspend fun usageBytes(): Long = diskMutex.withLock {
-        withContext(Dispatchers.IO) { root.sizeRecursively() }
+        withContext(Dispatchers.IO) {
+            trackedDiskBytes ?: scanDiskBytes().also { trackedDiskBytes = it }
+        }
     }
 
     suspend fun applyBudget() = diskMutex.withLock {
-        withContext(Dispatchers.IO) { pruneDisk(diskBudgetBytes()) }
+        withContext(Dispatchers.IO) { trackedDiskBytes = pruneDisk(diskBudgetBytes()) }
     }
 
     internal fun namespaceDirectoryForTest(namespace: String): File = namespaceDirectory(namespace)
@@ -152,12 +165,13 @@ internal class ArtworkCache(
         coverId: String,
         variant: CoverVariant,
     ): Int = stateMutex.withLock { flights[Key(namespace, coverId, variant)]?.waiters ?: 0 }
+    internal suspend fun fullDiskScansForTest(): Int = diskMutex.withLock { fullDiskScans }
 
     suspend fun initialize() = diskMutex.withLock {
         withContext(Dispatchers.IO) {
             root.mkdirs()
             purgeLegacyFiles()
-            pruneDisk(diskBudgetBytes())
+            trackedDiskBytes = pruneDisk(diskBudgetBytes())
         }
     }
 
@@ -172,7 +186,8 @@ internal class ArtworkCache(
             if (!file.isFile) return@withContext null
             val bytes = runCatching { file.readBytes() }.getOrNull()
             if (bytes == null || !isValid(bytes)) {
-                file.delete()
+                val removedBytes = file.length()
+                if (file.delete()) adjustTrackedDiskBytes(-removedBytes)
                 null
             } else {
                 bytes
@@ -217,6 +232,8 @@ internal class ArtworkCache(
                 val directory = namespaceDirectory(key.namespace).apply { mkdirs() }
                 val target = fileFor(key)
                 val temporary = File(directory, ".${target.name}.${TEMP_SEQUENCE.incrementAndGet()}.tmp")
+                if (trackedDiskBytes == null) trackedDiskBytes = scanDiskBytes()
+                val replacedBytes = target.takeIf(File::isFile)?.length() ?: 0L
                 var moved = false
                 try {
                     temporary.writeBytes(bytes)
@@ -224,12 +241,20 @@ internal class ArtworkCache(
                     replaceAtomically(temporary, target)
                     moved = true
                     target.setLastModified(clock())
-                    pruneDisk(diskBudgetBytes())
+                    adjustTrackedDiskBytes(target.length() - replacedBytes)
+                    val budget = diskBudgetBytes().coerceAtLeast(0L)
+                    if ((trackedDiskBytes ?: 0L) > budget) {
+                        trackedDiskBytes = pruneDisk(budget)
+                    }
                     ensureAcceptable(key, flight)
                 } catch (cause: CancellationException) {
-                    if (moved) target.delete()
+                    if (moved) {
+                        val removedBytes = target.length()
+                        if (target.delete()) adjustTrackedDiskBytes(-removedBytes)
+                    }
                     throw cause
                 } catch (cause: IOException) {
+                    trackedDiskBytes = null
                     throw AppException(
                         AppError.NetworkUnavailable,
                         ApiRequestFailure(retryable = true, cause = cause),
@@ -269,7 +294,13 @@ internal class ArtworkCache(
     }
 
     private suspend fun deleteDisk(key: Key) {
-        diskMutex.withLock { withContext(Dispatchers.IO) { fileFor(key).delete() } }
+        diskMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val file = fileFor(key)
+                val removedBytes = file.length()
+                if (file.delete()) adjustTrackedDiskBytes(-removedBytes)
+            }
+        }
     }
 
     private suspend fun touch(file: File) {
@@ -340,7 +371,8 @@ internal class ArtworkCache(
 
     private fun namespaceDirectory(namespace: String): File = File(root, namespace.sha256())
 
-    private fun pruneDisk(limitBytes: Long) {
+    private fun pruneDisk(limitBytes: Long): Long {
+        fullDiskScans += 1
         var retained = 0L
         root.walkTopDown()
             .filter(File::isFile)
@@ -353,8 +385,18 @@ internal class ArtworkCache(
                 } else {
                     file.delete()
                 }
-            }
+        }
         root.listFiles().orEmpty().filter(File::isDirectory).filter { it.list().isNullOrEmpty() }.forEach(File::delete)
+        return retained
+    }
+
+    private fun scanDiskBytes(): Long {
+        fullDiskScans += 1
+        return root.sizeRecursively()
+    }
+
+    private fun adjustTrackedDiskBytes(delta: Long) {
+        trackedDiskBytes = trackedDiskBytes?.let { (it + delta).coerceAtLeast(0L) }
     }
 
     private fun purgeLegacyFiles() {

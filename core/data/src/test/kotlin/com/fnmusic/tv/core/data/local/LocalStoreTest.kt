@@ -55,10 +55,24 @@ class LocalStoreTest {
         assertEquals("essential-queue", store.account(namespace)?.queueJson)
         assertTrue(store.physicalBytes() <= AppDatabase.MAX_DATABASE_BYTES)
         assertTrue(store.database.dao().pagePayloadBytes() <= AppDatabase.EVICTABLE_PAYLOAD_TARGET_BYTES)
+        assertTrue(store.budgetAuditCount < 30)
+        assertTrue(store.spaceReclaimCount > 0)
         store.database.openHelper.writableDatabase.query("PRAGMA auto_vacuum").use { cursor ->
             assertTrue(cursor.moveToFirst())
             assertEquals(2, cursor.getInt(0))
         }
+    }
+
+    @Test fun `small writes reuse the budget estimate without reclaiming space`() = runBlocking {
+        val namespace = "server:user"
+
+        store.savePage(CachedPageEntity(namespace, "tracks", 1, "page-a", 2, "name", 1))
+        val auditsAfterCalibration = store.budgetAuditCount
+        store.savePage(CachedPageEntity(namespace, "tracks", 2, "page-b", 2, "name", 2))
+
+        assertEquals(1, auditsAfterCalibration)
+        assertEquals(auditsAfterCalibration, store.budgetAuditCount)
+        assertEquals(0, store.spaceReclaimCount)
     }
 
     @Test fun `playback snapshot update atomically replaces queue and clears legacy frozen queue`() = runBlocking {
