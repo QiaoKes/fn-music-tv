@@ -346,6 +346,20 @@ class PlayerOverlayFocusTest {
         assertTrue(duration.right <= progress.right)
     }
 
+    @Test fun firstBackPressHidesVisibleControls() {
+        composeRule.setContent {
+            FnMusicTheme {
+                PlayerBackKeyHarness()
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("播放")
+            .assertIsFocused()
+            .performKeyInput { pressKey(Key.Back) }
+
+        composeRule.onNodeWithContentDescription("播放").assertDoesNotExist()
+    }
+
     @Test fun capturePlayerAndQueueEvidence() {
         val items = List(8) { index ->
             PlaybackQueueItem(
@@ -482,6 +496,29 @@ private fun lowestLightPixelY(bitmap: Bitmap, bounds: androidx.compose.ui.geomet
 }
 
 private enum class ControlInitialFocus { Play, Mode }
+
+@Composable
+private fun PlayerBackKeyHarness() {
+    var controlsVisible by remember { mutableStateOf(true) }
+    var consumeBackKeyUp by remember { mutableStateOf(false) }
+    Box(
+        Modifier.fillMaxSize().dismissPlayerChromeOnBack(
+            chromeVisible = controlsVisible,
+            consumeBackKeyUp = consumeBackKeyUp,
+            setConsumeBackKeyUp = { consumeBackKeyUp = it },
+            onDismiss = { controlsVisible = false },
+        ),
+    ) {
+        if (controlsVisible) {
+            PlayerControlHarness(
+                roaming = false,
+                onCycleMode = {},
+                onExitRoam = {},
+                onInteraction = {},
+            )
+        }
+    }
+}
 
 @Composable
 private fun PlayerControlHarness(

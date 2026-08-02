@@ -2551,6 +2551,7 @@ private fun ImmersivePlayer(
     val lyricsFailed = displayedLyrics is NowPlayingResourceState.RetryableFailure
     var controlsVisible by remember { mutableStateOf(true) }
     var queueVisible by remember { mutableStateOf(false) }
+    var consumeBackKeyUp by remember { mutableStateOf(false) }
     var interactionEpoch by remember { mutableStateOf(0) }
     val playerFocus = remember { FocusRequester() }
     val progressFocus = remember { FocusRequester() }
@@ -2566,6 +2567,11 @@ private fun ImmersivePlayer(
     fun revealControls() {
         controlsVisible = true
         interactionEpoch++
+    }
+    fun dismissPlayerChrome() {
+        queueVisible = false
+        controlsVisible = false
+        playerFocus.requestFocus()
     }
     val active = timeline?.activeIndex(playback.positionMs) ?: -1
     val lyricLines = timeline?.lines.orEmpty()
@@ -2613,14 +2619,18 @@ private fun ImmersivePlayer(
         if (!roaming && controlsVisible) playFocus.requestFocus()
     }
     BackHandler(queueVisible || controlsVisible) {
-        queueVisible = false
-        controlsVisible = false
-        playerFocus.requestFocus()
+        dismissPlayerChrome()
     }
     Box(
         Modifier.fillMaxSize()
             .background(FnColors.Background)
             .focusRequester(playerFocus)
+            .dismissPlayerChromeOnBack(
+                chromeVisible = controlsVisible || queueVisible,
+                consumeBackKeyUp = consumeBackKeyUp,
+                setConsumeBackKeyUp = { consumeBackKeyUp = it },
+                onDismiss = ::dismissPlayerChrome,
+            )
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown || controlsVisible) return@onPreviewKeyEvent false
                 when (event.key) {
@@ -2732,6 +2742,27 @@ private fun ImmersivePlayer(
                 onInteraction = ::revealControls,
             )
         }
+    }
+}
+
+internal fun Modifier.dismissPlayerChromeOnBack(
+    chromeVisible: Boolean,
+    consumeBackKeyUp: Boolean,
+    setConsumeBackKeyUp: (Boolean) -> Unit,
+    onDismiss: () -> Unit,
+): Modifier = onPreviewKeyEvent { event ->
+    when {
+        event.key != Key.Back -> false
+        event.type == KeyEventType.KeyDown && chromeVisible -> {
+            setConsumeBackKeyUp(true)
+            onDismiss()
+            true
+        }
+        consumeBackKeyUp -> {
+            if (event.type == KeyEventType.KeyUp) setConsumeBackKeyUp(false)
+            true
+        }
+        else -> false
     }
 }
 
