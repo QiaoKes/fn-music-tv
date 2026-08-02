@@ -2,15 +2,15 @@
 
 ## 0.1.11 - 2026-08-02
 
-### Added
+### 新增
 
-- Added physical touch support for navigation, library cards, lists, grids, settings, and player controls while preserving TV remote focus and D-pad behavior.
-- Added HTTP, HTTPS, and FNID server discovery with automatic direct and relay candidate probing.
-- Added optional FNOS access-code verification and forwarding for login, authenticated API, artwork, and audio requests.
+- 支持通过触屏点击导航、音乐卡片、列表、网格、设置项和播放器控件，同时保留电视遥控器焦点与 D-pad 操作。
+- 支持使用 HTTP、HTTPS 或 FNID 连接 NAS；FNID 会自动探测局域网、外网和飞牛中继地址。
+- 支持可选的飞牛访问码验证，并将访问凭据应用于登录、音乐接口、封面和音频请求。
 
-### Fixed
+### 修复
 
-- Fixed HTTPS hosts without an explicit port to use port 443, while preserving port 5666 compatibility for bare legacy HTTP hosts.
-- Fixed physical taps being dropped by TV Material buttons and prevented list drags from being misinterpreted as card clicks.
-- Made the settings screen scrollable on smaller landscape displays and enlarged player touch targets without changing playback or roaming commands.
-- Kept the complete login form visible at 1080p and added clear errors for unavailable FNID connections and invalid access codes.
+- 修复未填写端口的 HTTPS 域名连接，默认使用 443 端口；未填写协议的传统 HTTP 地址仍兼容 5666 端口。
+- 修复部分电视按钮不响应触屏点击的问题，并避免滑动列表时误触发卡片点击。
+- 设置页可在较小的横屏设备上滚动，并扩大播放器触屏热区，不影响现有播放和随机漫游逻辑。
+- 优化 1080p 登录页显示，并为 FNID 无可用连接、缺少访问码和访问码错误提供明确提示。
