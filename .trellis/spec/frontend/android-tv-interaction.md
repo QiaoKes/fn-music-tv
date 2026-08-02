@@ -29,6 +29,21 @@ TvTextField(
 )
 ```
 
+Login options use a real toggleable focus target, while the adjacent field actions remain
+icon-only TV Material buttons:
+
+```kotlin
+LoginCheckbox(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+)
+
+HistoryIcon()
+VisibilityIcon(hidden: Boolean)
+```
+
 Touch keeps the same command callbacks: tapping a login field enters edit mode, tapping a hidden
 player reveals its controls, and tapping progress calls the existing relative `onSeek` callback
 with `targetPositionMs - currentPositionMs`.
@@ -143,6 +158,19 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
   `focusRequester`, then `onPreviewKeyEvent`, then `focusable()`.
 - Password text is cleared before login and never persisted. HTTP warning and login error share
   one fixed single-line status slot so the Login button remains inside the 1080p safe area.
+- Login has one TV-first layout for every landscape device. Do not branch on screen class or keep
+  a separate phone tree. The same centered scrollable form uses the existing app palette,
+  `widthIn(max = 720.dp)` before `fillMaxWidth(0.86f)`, and compact stable control heights so the
+  complete Login button is visible at 1920x1080 while a smaller landscape viewport can scroll it.
+- Keep Remember Login and HTTPS in one row as real `Modifier.toggleable` checkbox targets with
+  `Role.Checkbox`, a visible square check mark, stable content descriptions `保持登录` and `HTTPS`,
+  and explicit D-pad neighbors. Do not simulate them with `ON`/`OFF` text in generic buttons.
+- History and password visibility are 52dp icon-only buttons. Use familiar recent-history and eye
+  glyphs, preserve content descriptions `历史` and `显示或隐藏密码`, and do not place `历史`,
+  `显示密码`, or `隐藏密码` inside the buttons.
+- Center field content vertically through `BasicTextField.decorationBox` with a full-height
+  `Box(contentAlignment = Alignment.CenterStart)`. Center all command labels explicitly with
+  `TextAlign.Center`; padding estimates are not a vertical-centering contract.
 
 ### Current-song presentation
 
@@ -227,6 +255,10 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 | Login returns `Unauthenticated` after an attempt | Show `账号或密码错误` in the fixed status slot |
 | A restored token is unauthorized | Show the session-expired message in the fixed status slot |
 | HTTP is selected without another login error | Show the unencrypted-LAN warning in the same slot |
+| Login is rendered on any landscape device | Use the same centered form tree; no device-specific alternate UI |
+| Remember Login or HTTPS is activated by touch/Center | Toggle its `ToggleableState` and keep a valid focus target |
+| History/password side action is rendered | Show the 52dp familiar icon only and retain its exact content description |
+| 1920x1080 login first frame | Show the complete Login button with no clipped bottom edge or overlapping control |
 | New presentation identity/revision | Publish three `Loading` states and cancel the prior token |
 | Late resource result has an old namespace/media/revision/style | Ignore it; current UI state is unchanged |
 | Metadata/artwork/lyrics is validly absent | Publish fallback/`Absent`; do not show retry |
@@ -259,6 +291,8 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
   then restore the exact album and horizontal scroll rather than returning to index zero.
 - Good: tap Account, type with a phone IME, tap the center of a three-minute progress track from
   12 seconds, and request a relative seek of about 78 seconds without changing TV focus contracts.
+- Good: render the same centered login form on TV and a smaller landscape device; the TV shows the
+  complete form initially, while the smaller viewport scrolls the same tree to the Login button.
 - Good: switch A(rev 1) -> B(rev 2) -> A(rev 3), complete requests in reverse order, and display
   only A rev 3 metadata, artwork, and lyrics.
 - Good: focus a retryable player error, press Center, transfer focus to progress, remove the retry
@@ -271,6 +305,7 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 - Base: roam has no normal mode/queue nodes and skips a disabled previous action.
 - Base: My Back returns Home; Home Back once only shows the confirmation while music continues.
 - Base: an empty password disables Login while all preceding controls remain reachable.
+- Base: unavailable server history disables the history icon but keeps its stable 52dp bounds.
 - Base: a paused track changes its state treatment without changing the now-playing pill bounds.
 - Bad: keying artwork only by cover ID; two songs sharing a cover can reuse a failed or stale attempt.
 - Bad: keeping every lazy row requester in an overlay-level map; a deleted/off-screen row leaves a
@@ -283,6 +318,8 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 - Bad: relying on a main-pass `detectTapGestures` outside `BasicTextField`; its own pointer input can
   consume the gesture first and leave the field read-only.
 - Bad: rendering login warning and error as separate dynamic rows and clipping Login at 1080p.
+- Bad: adding separate TV/phone login Composables or conditionally removing controls for a phone.
+- Bad: rendering `ON 保持登录`, `OFF HTTPS`, `历史`, or `显示密码` as large text pills.
 - Bad: copying a `372 x 74` physical-pixel prototype size as dp at 320 dpi, producing a
   `744 x 148` physical-pixel surface.
 
@@ -299,8 +336,12 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
   text plus focused node.
 - Login touch test: inject a real pointer click on Account, then assert it is focused, exposes text
   editing, and accepts injected text without a D-pad center event.
+- Login option test: activate Remember Login through semantics/touch and assert its
+  `ToggleableState` changes from On to Off. D-pad traversal must still reach Remember Login and
+  HTTPS in the declared order.
 - Login screenshot test at 1920x1080: assert headings, the shared base/error status slot, and the
-  complete Login button are visible and non-overlapping.
+  complete Login button are visible and non-overlapping. Assert history/password actions are
+  icon-only, field text is vertically centered, and no legacy left-side branding/equalizer remains.
 - Route state tests: assert first actionable focus after async initial load; return from a child with
   the same focused key/scroll; retained page 2 does not request page 1; a removed key uses the
   deterministic fallback.
@@ -419,4 +460,32 @@ PlayerSideActionButton(
     glyph = playModeGlyph(PlayMode.ListRepeat),
     description = "播放模式：列表循环",
 )
+```
+
+```kotlin
+// Wrong: device branches create two login surfaces and text pills fake checkbox/icon controls.
+if (isPhone) PhoneLogin() else TvLogin()
+Button(onClick = onRemember) { Text("ON 保持登录") }
+Button(onClick = onHistory) { Text("历史") }
+
+// Correct: one flexible TV-first form and semantic icon/checkbox controls serve landscape devices.
+Column(
+    Modifier
+        .widthIn(max = 720.dp)
+        .fillMaxWidth(0.86f)
+        .verticalScroll(rememberScrollState()),
+) { /* shared login fields */ }
+
+Row(
+    Modifier.toggleable(
+        value = rememberLogin,
+        role = Role.Checkbox,
+        onValueChange = { rememberLogin = it },
+    ),
+) { CheckboxMark(rememberLogin); Text("保持登录") }
+
+Button(
+    modifier = Modifier.size(52.dp).semantics { contentDescription = "历史" },
+    onClick = onHistory,
+) { HistoryIcon() }
 ```

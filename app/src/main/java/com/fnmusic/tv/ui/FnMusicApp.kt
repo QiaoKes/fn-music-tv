@@ -3,6 +3,8 @@ package com.fnmusic.tv.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -20,9 +22,12 @@ import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -41,7 +46,10 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -50,6 +58,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -57,10 +66,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.foundation.verticalScroll
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Button
 import androidx.tv.material3.Text
@@ -142,24 +153,19 @@ internal fun LoginScreen(
     val canSubmit = !submitting && validServer && username.isNotBlank() && password.isNotBlank()
     LaunchedEffect(Unit) { if (savedServer.isBlank()) serverFocus.requestFocus() else usernameFocus.requestFocus() }
 
-    Row(
-        Modifier.fillMaxSize().padding(horizontal = 80.dp, vertical = 32.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    Box(
+        Modifier.fillMaxSize().background(FnColors.Background),
+        contentAlignment = Alignment.Center,
     ) {
-        Column(Modifier.weight(1f)) {
-            Text("飞牛音乐 TV", color = FnColors.Text, fontSize = 52.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(20.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Bottom) {
-                listOf(34, 62, 48, 78).forEachIndexed { index, barHeight ->
-                    Box(
-                        Modifier.width(14.dp).height(barHeight.dp)
-                            .background(if (index == 3) FnColors.Coral else FnColors.Teal),
-                    )
-                }
-            }
-        }
-        Column(Modifier.width(560.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("连接音乐服务器", color = FnColors.Text, fontSize = 32.sp, fontWeight = FontWeight.SemiBold)
+        Column(
+            Modifier.widthIn(max = 720.dp).fillMaxWidth(0.86f)
+                .verticalScroll(rememberScrollState())
+                .padding(vertical = 12.dp)
+                .semantics { contentDescription = "登录表单" },
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text("飞牛音乐 TV", color = FnColors.Teal, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Text("登录", color = FnColors.Text, fontSize = 34.sp, fontWeight = FontWeight.Bold)
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -184,14 +190,16 @@ internal fun LoginScreen(
                 Button(
                     enabled = recentServers.isNotEmpty(),
                     onClick = { showServerHistory = true },
-                    modifier = Modifier.width(104.dp).height(56.dp)
+                    modifier = Modifier.size(52.dp)
                         .semantics { contentDescription = "历史" }
-                        .focusRequester(historyFocus)
                         .focusProperties {
                             left = serverFocus
                             down = usernameFocus
-                        },
-                ) { Text("历史", fontSize = 19.sp) }
+                        }
+                        .focusRequester(historyFocus),
+                ) {
+                    HistoryIcon()
+                }
             }
             TvTextField(
                 username,
@@ -226,36 +234,40 @@ internal fun LoginScreen(
                 )
                 Button(
                     onClick = { passwordVisible = !passwordVisible },
-                    modifier = Modifier.width(136.dp).height(56.dp)
+                    modifier = Modifier.size(52.dp)
                         .semantics { contentDescription = "显示或隐藏密码" }
-                        .focusRequester(visibilityFocus)
                         .focusProperties {
                             up = usernameFocus
                             left = passwordFocus
                             down = rememberFocus
-                        },
+                        }
+                        .focusRequester(visibilityFocus),
                 ) {
-                    Text(if (passwordVisible) "隐藏密码" else "显示密码", fontSize = 18.sp)
+                    VisibilityIcon(hidden = passwordVisible)
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                SmallToggle(
-                    "保持登录",
-                    rememberLogin,
-                    Modifier.focusRequester(rememberFocus).focusProperties {
-                        up = passwordFocus
-                        right = httpsFocus
-                        down = httpsFocus
-                    },
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                LoginCheckbox(
+                    label = "保持登录",
+                    selected = rememberLogin,
+                    modifier = Modifier.weight(1f)
+                        .focusProperties {
+                            up = passwordFocus
+                            right = httpsFocus
+                            down = httpsFocus
+                        }
+                        .focusRequester(rememberFocus),
                 ) { rememberLogin = !rememberLogin }
-                SmallToggle(
-                    "HTTPS",
-                    https,
-                    Modifier.focusRequester(httpsFocus).focusProperties {
-                        up = rememberFocus
-                        left = rememberFocus
-                        down = if (canSubmit) loginFocus else FocusRequester.Cancel
-                    },
+                LoginCheckbox(
+                    label = "HTTPS",
+                    selected = https,
+                    modifier = Modifier.weight(1f)
+                        .focusProperties {
+                            up = rememberFocus
+                            left = rememberFocus
+                            down = if (canSubmit) loginFocus else FocusRequester.Cancel
+                        }
+                        .focusRequester(httpsFocus),
                 ) { https = !https }
             }
             val statusMessage = error?.let {
@@ -282,12 +294,18 @@ internal fun LoginScreen(
                         submitting = false
                     }
                 },
-                modifier = Modifier.fillMaxWidth().height(58.dp)
+                modifier = Modifier.fillMaxWidth().height(54.dp)
                     .semantics { contentDescription = "登录" }
-                    .focusRequester(loginFocus)
-                    .focusProperties { up = httpsFocus },
+                    .focusProperties { up = httpsFocus }
+                    .focusRequester(loginFocus),
             ) {
-                Text(if (submitting) "正在登录" else "登录", fontSize = 23.sp)
+                Text(
+                    if (submitting) "正在登录" else "登录",
+                    modifier = Modifier.fillMaxWidth(),
+                    fontSize = 23.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                )
             }
         }
     }
@@ -321,6 +339,74 @@ internal fun LoginScreen(
             }
         }
         LaunchedEffect(Unit) { firstHistoryFocus.requestFocus() }
+    }
+}
+
+@Composable
+private fun HistoryIcon() {
+    Canvas(Modifier.size(25.dp)) {
+        val stroke = 2.2.dp.toPx()
+        val center = this.center
+        val radius = size.minDimension * 0.34f
+        drawArc(
+            color = FnColors.Text,
+            startAngle = 35f,
+            sweepAngle = 285f,
+            useCenter = false,
+            style = Stroke(stroke, cap = StrokeCap.Round),
+        )
+        drawLine(
+            color = FnColors.Text,
+            start = androidx.compose.ui.geometry.Offset(center.x - radius, center.y - radius * 0.2f),
+            end = androidx.compose.ui.geometry.Offset(center.x - radius * 1.05f, center.y - radius * 0.9f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = FnColors.Text,
+            start = center,
+            end = androidx.compose.ui.geometry.Offset(center.x, center.y - radius * 0.58f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = FnColors.Text,
+            start = center,
+            end = androidx.compose.ui.geometry.Offset(center.x + radius * 0.48f, center.y),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round,
+        )
+    }
+}
+
+@Composable
+private fun VisibilityIcon(hidden: Boolean) {
+    Canvas(Modifier.size(26.dp)) {
+        val stroke = 2.1.dp.toPx()
+        val eye = Path().apply {
+            moveTo(size.width * 0.08f, size.height * 0.5f)
+            cubicTo(
+                size.width * 0.27f, size.height * 0.18f,
+                size.width * 0.73f, size.height * 0.18f,
+                size.width * 0.92f, size.height * 0.5f,
+            )
+            cubicTo(
+                size.width * 0.73f, size.height * 0.82f,
+                size.width * 0.27f, size.height * 0.82f,
+                size.width * 0.08f, size.height * 0.5f,
+            )
+        }
+        drawPath(eye, FnColors.Text, style = Stroke(stroke, cap = StrokeCap.Round))
+        drawCircle(FnColors.Text, radius = size.minDimension * 0.12f, center = center, style = Stroke(stroke))
+        if (hidden) {
+            drawLine(
+                color = FnColors.Coral,
+                start = androidx.compose.ui.geometry.Offset(size.width * 0.14f, size.height * 0.14f),
+                end = androidx.compose.ui.geometry.Offset(size.width * 0.86f, size.height * 0.86f),
+                strokeWidth = stroke,
+                cap = StrokeCap.Round,
+            )
+        }
     }
 }
 
@@ -402,7 +488,7 @@ private fun TvTextField(
         BasicTextField(
             value = value,
             onValueChange = onValueChange,
-            modifier = inputModifier.fillMaxWidth().height(56.dp)
+            modifier = inputModifier.fillMaxWidth().height(52.dp)
                 .semantics { contentDescription = label }
                 .onFocusChanged {
                     focused = it.isFocused
@@ -420,8 +506,7 @@ private fun TvTextField(
                     }
                 }
                 .background(FnColors.Surface, RoundedCornerShape(6.dp))
-                .border(if (focused) 3.dp else 1.dp, if (focused) FnColors.Coral else Color(0xFF454A50), RoundedCornerShape(6.dp))
-                .padding(horizontal = 16.dp, vertical = 13.dp),
+                .border(if (focused) 3.dp else 1.dp, if (focused) FnColors.Coral else Color(0xFF454A50), RoundedCornerShape(6.dp)),
             readOnly = !editing,
             textStyle = TextStyle(color = FnColors.Text, fontSize = 22.sp),
             cursorBrush = SolidColor(FnColors.Coral),
@@ -432,14 +517,55 @@ private fun TvTextField(
                 onDone = { finishEditing(null) },
             ),
             visualTransformation = visualTransformation,
+            decorationBox = { innerTextField ->
+                Box(
+                    Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    innerTextField()
+                }
+            },
         )
     }
 }
 
 @Composable
-private fun SmallToggle(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Button(onClick = onClick, modifier = modifier.height(52.dp).semantics { contentDescription = label }) {
-        Text("${if (selected) "ON" else "OFF"}  $label", fontSize = 18.sp)
+private fun LoginCheckbox(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    Row(
+        modifier.height(54.dp)
+            .onFocusChanged { focused = it.isFocused }
+            .background(FnColors.Surface, RoundedCornerShape(6.dp))
+            .border(
+                if (focused) 3.dp else 1.dp,
+                if (focused) FnColors.Coral else Color(0xFF454A50),
+                RoundedCornerShape(6.dp),
+            )
+            .focusable()
+            .toggleable(
+                value = selected,
+                role = Role.Checkbox,
+                onValueChange = { onClick() },
+            )
+            .semantics { contentDescription = label }
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Box(
+            Modifier.size(28.dp)
+                .background(if (selected) FnColors.Warning else Color.Transparent, RoundedCornerShape(3.dp))
+                .border(2.dp, if (selected) FnColors.Warning else FnColors.Muted, RoundedCornerShape(3.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (selected) Text("✓", color = Color(0xFF17201E), fontSize = 19.sp, fontWeight = FontWeight.Bold)
+        }
+        Text(label, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
 }
 

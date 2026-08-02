@@ -2,16 +2,21 @@ package com.fnmusic.tv
 
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.state.ToggleableState
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
 import com.fnmusic.tv.ui.FnMusicTheme
@@ -43,7 +48,7 @@ class LoginSmokeTest {
         composeRule.onNodeWithText("NAS 地址").fetchSemanticsNode()
         composeRule.onNodeWithText("账号").fetchSemanticsNode()
         composeRule.onNodeWithText("密码").fetchSemanticsNode()
-        composeRule.onNodeWithText("登录").fetchSemanticsNode()
+        composeRule.onNodeWithContentDescription("登录").fetchSemanticsNode()
         composeRule.onNodeWithContentDescription("账号").fetchSemanticsNode()
         composeRule.onNodeWithContentDescription("密码").fetchSemanticsNode()
         composeRule.onNodeWithContentDescription("保持登录").fetchSemanticsNode()
@@ -103,5 +108,15 @@ class LoginSmokeTest {
         username.assertIsFocused().performTextInput("touch-user")
 
         username.assertTextContains("touch-user")
+    }
+
+    @Test fun loginOptionUsesCheckboxState() {
+        val rememberLogin = composeRule.onNodeWithContentDescription("保持登录")
+        val checked = SemanticsMatcher.expectValue(SemanticsProperties.ToggleableState, ToggleableState.On)
+        val unchecked = SemanticsMatcher.expectValue(SemanticsProperties.ToggleableState, ToggleableState.Off)
+
+        rememberLogin.assert(checked).performClick()
+        composeRule.waitForIdle()
+        rememberLogin.assert(unchecked)
     }
 }
