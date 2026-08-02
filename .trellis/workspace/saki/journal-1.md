@@ -169,3 +169,24 @@ Implemented process-lifetime metadata and artwork caching, removed persistent au
 ### Status
 
 [OK] **Completed**
+
+
+## Session 8: Optimize player visuals and loading
+
+**Date**: 2026-08-02
+**Task**: Optimize player visuals and loading
+**Branch**: `main`
+
+### Summary
+
+Improved artwork palette extraction, centered player and queue text, retained library data, removed track transition flashes, and bumped the release to 0.1.4.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `71fdd27` | (see git log) |
+
+### Status
+
+[OK] **Completed**

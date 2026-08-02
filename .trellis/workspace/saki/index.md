@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
+- **Total Sessions**: 8
 - **Last Active**: 2026-08-02
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~171 | Active |
+| `journal-1.md` | ~192 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-08-02 | Optimize player visuals and loading | `71fdd27` | `main` |
 | 7 | 2026-08-02 | 真实 NAS 播放回归与恢复加固 | `2dbc27a` | `codex/player-cache-playback-ux` |
 | 6 | 2026-08-02 | Playback cache and TV controls | `cd8da28` | `codex/player-cache-playback-ux` |
 | 5 | 2026-08-01 | Refine player metadata and lyrics layout | `d2b6e41` | `main` |
