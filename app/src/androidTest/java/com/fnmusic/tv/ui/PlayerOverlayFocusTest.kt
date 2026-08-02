@@ -17,6 +17,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -124,6 +125,37 @@ class PlayerOverlayFocusTest {
             runCatching { fallback.fetchSemanticsNode().config[SemanticsProperties.Focused] }.getOrDefault(false)
         }
         fallback.assertIsFocused()
+    }
+
+    @Test fun queueDpadTraversalDoesNotRepositionEveryFocusedRow() {
+        val items = List(20) { index ->
+            PlaybackQueueItem(
+                mediaId = "track-$index",
+                title = "Track $index",
+                artist = "Artist",
+                queueIndex = index,
+                isCurrent = index == 0,
+            )
+        }
+        composeRule.setContent {
+            FnMusicTheme {
+                PlaybackQueueOverlay(
+                    items = items,
+                    loadedCount = items.size,
+                    queueError = null,
+                    canRetry = false,
+                    onRetry = {},
+                    onSelect = {},
+                    onInteraction = {},
+                )
+            }
+        }
+
+        val first = composeRule.onNodeWithContentDescription("1. Track 0 Artist，正在播放")
+        first.assertIsFocused().performKeyInput { pressKey(Key.DirectionDown) }
+
+        composeRule.onNodeWithContentDescription("2. Track 1 Artist").assertIsFocused()
+        first.assertIsDisplayed()
     }
 
     @Test fun normalControlsTraverseAllActionsAndCycleEveryMode() {

@@ -81,7 +81,11 @@ class ConnectionResolver(
         val access = ConnectionAccess.from(accessCode, target.relayMode)
         val request = Request.Builder()
             .url(target.server.origin.resolve(ACCESS_CODE_PATH) ?: error("Invalid access-code path"))
-            .apply { access.headers().forEach(::header) }
+            .apply {
+                for ((name, value) in access.headers()) {
+                    header(name, value)
+                }
+            }
             .get()
             .build()
         val response = client.newCall(request).await()

@@ -211,3 +211,27 @@ Redesigned artist, album, and all-tracks detail surfaces; added library roam ent
 ### Status
 
 [OK] **Completed**
+
+
+## Session 10: 完成 App 等量重构与 0.1.13 发布准备
+
+**Date**: 2026-08-03
+**Task**: 完成 App 等量重构与 0.1.13 发布准备
+**Branch**: `opt-recode-saki`
+
+### Summary
+
+完成 Android 23 兼容、播放与缓存热路径优化、路由状态回收、UI/业务/数据层解耦、播放器视觉连续性与队列焦点修复；全量测试和 lint 通过，版本更新至 0.1.13。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8c87978` | (see git log) |
+| `ba698fc` | (see git log) |
+| `0286d35` | (see git log) |
+| `08d1650` | (see git log) |
+
+### Status
+
+[OK] **Completed**

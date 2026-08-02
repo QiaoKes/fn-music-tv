@@ -229,6 +229,18 @@ class ArtworkCacheTest {
         assertEquals(0L, restarted.usageBytes())
     }
 
+    @Test fun `writes within the tracked budget do not rescan the full cache tree`() = runBlocking {
+        val cache = cache(diskBudget = { 1_024L })
+        cache.initialize()
+        val scansAfterInitialization = cache.fullDiskScansForTest()
+
+        cache.get("server:user", "cover-a", CoverVariant.Grid) { byteArrayOf(1, 2, 3) }
+        cache.get("server:user", "cover-b", CoverVariant.Grid) { byteArrayOf(4, 5, 6) }
+
+        assertEquals(scansAfterInitialization, cache.fullDiskScansForTest())
+        assertEquals(6L, cache.usageBytes())
+    }
+
     @Test fun `clear namespace rejects late completion without touching other namespace`() = runBlocking {
         val cache = cache()
         cache.get("server:user-b", "cover-b", CoverVariant.Grid) { byteArrayOf(2) }
