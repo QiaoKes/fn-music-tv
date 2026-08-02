@@ -20,6 +20,9 @@ captures/
 *.keystore
 keystore.properties
 
+# Local API research notes
+docs/API.md
+
 # Operating system metadata
 .DS_Store
 Thumbs.db

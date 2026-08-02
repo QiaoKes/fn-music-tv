@@ -1,11 +1,13 @@
 <p align="center">
-  <img src="docs/assets/logo.svg" width="128" height="128" alt="回声台 Logo">
+  <img src="docs/assets/logo.svg" width="108" height="108" alt="回声台 Logo">
 </p>
 
-# 回声台
+<h1 align="center">回声台</h1>
 
-面向 Android TV 与 Android 投影设备的飞牛音乐第三方客户端。项目使用 Kotlin、
-Compose for TV 与 Media3 构建，针对电视大屏、横屏布局和遥控器操作进行了适配。
+<p align="center">面向 Android TV 与 Android 投影设备的飞牛音乐第三方客户端</p>
+
+项目使用 Kotlin、Compose for TV 与 Media3 构建，针对电视大屏、横屏布局和遥控器操作
+进行了适配。
 
 > 本项目为第三方客户端，与飞牛官方无关。使用前请确保已经部署可访问的飞牛音乐服务，
 > 并遵守相关服务条款。
@@ -121,7 +123,6 @@ core/model/     音乐库、队列、播放模式等领域模型
 core/data/      服务端 API、会话、本地数据库与缓存
 core/playback/  Media3 播放服务、队列和后台播放
 baselineprofile/ 基准配置生成模块
-docs/API.md     客户端使用的飞牛音乐 HTTP API 说明
 ```
 
 ## 兼容性说明
