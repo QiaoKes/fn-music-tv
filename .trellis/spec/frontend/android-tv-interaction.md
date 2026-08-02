@@ -300,6 +300,11 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
   retained list. A successful initial load is not repeated on route re-entry. An empty failed list
   may retry on the next entry. The store is keyed by the signed-in user and must be discarded when
   the account changes.
+- Remote artwork keeps fixed bounds and renders a deterministic placeholder until its exact
+  `CoverVariant` bitmap is ready. Initialize Compose state from the application decoded cache so a
+  page return does not flash the placeholder. Artist/album lockup focus may prefetch the exact Grid
+  entry for the destination detail page, but the Compact list image must never be displayed as a
+  temporary Grid image; this avoids a visible low-resolution-to-high-resolution sharpening step.
 - Home/My player re-entry is a compact music pill with fixed measured bounds, cover/fallback,
   playing state, ellipsized title/artist, and a trailing cue. Focus may change border, surface, and
   scale without reflow. Its compact status row disables Android font padding, while the bold title
@@ -359,6 +364,9 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 | Async route first load completes | Focus its first actionable content item exactly once |
 | Return to a retained route | Restore prior focus, scroll, pages, and continuation metadata |
 | Return to Home/My/All with successful retained summary data | Render retained entries on the first frame; do not request page 1 again |
+| Exact artwork bitmap is already decoded | Render it on the first composition without an empty/placeholder frame |
+| Detail Grid artwork is still loading | Keep the fixed deterministic placeholder; never substitute the Compact list bitmap |
+| Artist/album lockup receives focus | Prefetch its exact Grid artwork without changing the displayed Compact artwork |
 | Back at My root | Replace My with Home; do not background the task |
 | First Back at Home | Show confirmation only; playback and task remain active |
 | Second Back within 2,000 ms | Save paused state, stop playback/service, remove the task, and exit without clearing account data |
@@ -370,6 +378,8 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 
 - Good: enter an async album page, wait for data, and focus its first album; open a child and Back,
   then restore the exact album and horizontal scroll rather than returning to index zero.
+- Good: focus an album card, keep its Compact image unchanged, then open detail and immediately use
+  the independently prefetched Grid bitmap when available.
 - Good: tap Account, type with a phone IME, tap the center of a three-minute progress track from
   12 seconds, and request a relative seek of about 78 seconds without changing TV focus contracts.
 - Good: render the same centered login form on TV and a smaller landscape device; the TV shows the
@@ -410,6 +420,8 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 - Bad: drawing `列表循环` and `队列 5` as side-button text; it wastes TV control width and makes
   familiar actions harder to scan.
 - Bad: requesting first focus before data is composed, or always requesting index zero after Back.
+- Bad: drawing an empty solid rectangle while artwork loads, or stretching a cached Compact bitmap
+  into detail before swapping to Grid.
 - Bad: showing the IME on center-key down without delay and letting the matching key-up enter the
   keyboard's initially focused character.
 - Bad: relying on a main-pass `detectTapGestures` outside `BasicTextField`; its own pointer input can
@@ -454,6 +466,9 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 - Retained summary tests: a successful list snapshot prevents another initial request, while an
   empty failed snapshot is retryable on the next route entry. Home/My/full grids consume the same
   user-scoped store keys.
+- Artwork continuity tests: exact decoded hits are available synchronously, Compact and Grid stay
+  isolated, focused artist/album items request Grid prefetch, and a miss retains stable bounds and
+  placeholder content.
 - Artwork ambience tests: a colorful minority swatch beats a large neutral backdrop, black margins
   do not defeat a valid color, every mapped surface stays dark, and missing artwork returns the one
   fixed brand neutral.
@@ -643,6 +658,15 @@ val decoded by produceState<DecodedPlayerArtwork?>(null, request?.key, request?.
     val current = request ?: return@produceState // keep the existing value while Loading
     value = withContext(Dispatchers.Default) { decodeAndExtractAmbience(current) }
 }
+```
+
+```kotlin
+// Wrong: use a list thumbnail as the first detail frame, then visibly sharpen it.
+RemoteArtwork(coverId, CoverVariant.Grid, fallback = cachedCompact)
+
+// Correct: prefetch Grid on focus and keep a stable placeholder until that exact image is ready.
+onFocusChanged { if (it.isFocused) artworkBitmapCache.prefetch(coverId, CoverVariant.Grid) }
+RemoteArtwork(coverId, CoverVariant.Grid, placeholder = stableArtworkPlaceholder)
 ```
 
 ```kotlin

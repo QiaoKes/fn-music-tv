@@ -33,8 +33,16 @@ class AppContainer(private val application: Application) {
     val sessionRepository = SessionRepository(application)
     val appPreferences = AppPreferences(application, localStore)
     val musicRepository = MusicRepository(application, sessionRepository, appPreferences, localStore)
-    val playbackController = PlaybackController(application, localStore, musicRepository)
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    internal val artworkBitmapCache = ArtworkBitmapCache(
+        scope = applicationScope,
+        loader = { coverId, variant ->
+            musicRepository.artwork(coverId, variant)?.let { bytes ->
+                decodeArtwork(bytes, variant.width ?: 1_200)
+            }
+        },
+    )
+    val playbackController = PlaybackController(application, localStore, musicRepository)
     val nowPlayingPresenter = NowPlayingPresenter(
         playbackController,
         musicRepository,
@@ -54,6 +62,7 @@ class AppContainer(private val application: Application) {
                     is SessionState.SignedIn -> {
                         val namespace = sessionRepository.cacheNamespace()
                         if (boundNamespace != namespace) {
+                            artworkBitmapCache.clear()
                             appPreferences.bindNamespace(namespace)
                             musicRepository.applyArtworkBudget()
                             boundNamespace = namespace
@@ -63,6 +72,7 @@ class AppContainer(private val application: Application) {
                     is SessionState.SignedOut -> {
                         val departingNamespace = boundNamespace
                         boundNamespace = null
+                        artworkBitmapCache.clear()
                         if (state.error == AppError.Unauthenticated || state.error == AppError.AccountDisabled) {
                             clearInvalidatedPlaybackSession(
                                 departingNamespace = departingNamespace,
@@ -87,6 +97,16 @@ class AppContainer(private val application: Application) {
         } finally {
             application.stopService(Intent(application, PlaybackService::class.java))
         }
+    }
+
+    suspend fun clearArtworkCaches() {
+        artworkBitmapCache.clear()
+        musicRepository.clearArtwork()
+    }
+
+    suspend fun clearAllEvictableCaches() {
+        artworkBitmapCache.clear()
+        musicRepository.clearAllEvictableCaches()
     }
 }
 

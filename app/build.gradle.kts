@@ -141,4 +141,5 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.uiautomator)
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
 }

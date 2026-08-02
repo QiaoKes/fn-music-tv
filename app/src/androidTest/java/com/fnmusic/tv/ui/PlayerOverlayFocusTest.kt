@@ -330,6 +330,22 @@ class PlayerOverlayFocusTest {
         composeRule.runOnIdle { assertTrue(seekDelta.get() in 77_000L..79_000L) }
     }
 
+    @Test fun elapsedAndDurationLabelsSitBelowTheProgressBar() {
+        renderControls(roaming = false)
+
+        val progress = composeRule.onNodeWithContentDescription("播放进度 0:12 / 3:00")
+            .fetchSemanticsNode().boundsInRoot
+        val elapsed = composeRule.onNodeWithText("0:12", useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot
+        val duration = composeRule.onNodeWithText("3:00", useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot
+
+        assertTrue(elapsed.top >= progress.bottom)
+        assertTrue(duration.top >= progress.bottom)
+        assertTrue(elapsed.left >= progress.left)
+        assertTrue(duration.right <= progress.right)
+    }
+
     @Test fun capturePlayerAndQueueEvidence() {
         val items = List(8) { index ->
             PlaybackQueueItem(
