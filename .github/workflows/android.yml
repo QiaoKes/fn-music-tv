@@ -39,7 +39,7 @@ jobs:
 
       - name: Run quality gates and build artifacts
         run: |
-          ./gradlew --no-daemon --stacktrace \
+          ./gradlew --no-daemon --stacktrace -PallowUnsignedRelease=true \
             :core:model:test \
             :core:data:test \
             :core:playback:test \

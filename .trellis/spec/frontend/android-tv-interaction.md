@@ -2,7 +2,7 @@
 
 ## 1. Scope / Trigger
 
-Apply this contract to every Compose surface controlled by a TV remote: login fields,
+Apply this contract to every landscape Compose surface controlled by a TV remote or touch input: login fields,
 asynchronously loaded grids/details/song lists/settings, Home/My navigation, the immersive player,
 its transient controls, current-song presentation, and the right-side playback queue.
 
@@ -28,6 +28,10 @@ TvTextField(
     rightFocus: FocusRequester? = null,
 )
 ```
+
+Touch keeps the same command callbacks: tapping a login field enters edit mode, tapping a hidden
+player reveals its controls, and tapping progress calls the existing relative `onSeek` callback
+with `targetPositionMs - currentPositionMs`.
 
 The playback layer publishes one captured identity for the whole current-song presentation:
 
@@ -124,6 +128,10 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 - Browse state is focused and `readOnly`; Enter/D-pad center is consumed on key-down and enters
   edit state. Show the TV keyboard after 200 ms so that the same center-key release cannot select
   its initially focused key.
+- A field touch observes down/up in `PointerEventPass.Initial` without consuming either event. On
+  release it enters edit state; the `BasicTextField` still receives the same gesture, gains focus,
+  and the existing delayed keyboard request opens the device IME. A normal main-pass tap detector
+  is insufficient because the text field may consume the gesture first.
 - Back hides the IME and returns the field to browse state without leaving the route.
   `ImeAction.Next` ends editing and requests `downFocus`; Done ends editing in place. Losing field
   focus clears edit state.
@@ -161,6 +169,9 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 
 - Hidden controls consume the first directional key, reveal controls, and focus play/pause without
   seeking or selecting an action. Center toggles play/pause and reveals controls.
+- A tap on the player while controls are hidden reveals them without toggling playback. Visible
+  Material buttons retain their normal click handling. Tapping progress seeks to the proportional
+  timeline position through the same bounded relative seek callback used by D-pad input.
 - Visible normal controls have an explicit left/right graph:
   mode -> previous -> play/pause -> next -> queue. Disabled previous/next controls are skipped and
   are not focus targets. Up routes to progress; progress Left/Right seeks exactly 10 seconds.
@@ -210,6 +221,7 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 | Condition | Required behavior |
 | --- | --- |
 | Center in text-field browse state | Consume key-down, enter edit state, show IME after 200 ms |
+| Touch release on a login field | Enter edit state, retain text-field focus, show the device IME |
 | Direction in browse/edit state | Browse requests the declared neighbor; edit leaves it to editor/IME |
 | Back while IME is visible | Hide IME, retain field focus, restore browse state |
 | Login returns `Unauthenticated` after an attempt | Show `账号或密码错误` in the fixed status slot |
@@ -221,6 +233,8 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 | One or more current resources exhaust retryable failure | Show one retry action bound to the current revision |
 | Focused retry action succeeds and disappears | Hand focus to progress before removal; Down reaches play/pause |
 | Direction while controls are hidden | Reveal controls, focus play/pause, consume the key |
+| Tap while player controls are hidden | Reveal controls; do not toggle playback or seek |
+| Tap the visible progress track | Seek to the tapped proportional position and reset the hide timer |
 | Normal mode button is activated | Cycle ListRepeat -> Shuffle -> SingleRepeat -> Sequence -> ListRepeat |
 | Mode or queue action is rendered | Show a familiar icon only; retain the exact content description |
 | Player enters roam | Remove normal mode and queue nodes from composition and the focus graph |
@@ -243,6 +257,8 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 
 - Good: enter an async album page, wait for data, and focus its first album; open a child and Back,
   then restore the exact album and horizontal scroll rather than returning to index zero.
+- Good: tap Account, type with a phone IME, tap the center of a three-minute progress track from
+  12 seconds, and request a relative seek of about 78 seconds without changing TV focus contracts.
 - Good: switch A(rev 1) -> B(rev 2) -> A(rev 3), complete requests in reverse order, and display
   only A rev 3 metadata, artwork, and lyrics.
 - Good: focus a retryable player error, press Center, transfer focus to progress, remove the retry
@@ -264,6 +280,8 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 - Bad: requesting first focus before data is composed, or always requesting index zero after Back.
 - Bad: showing the IME on center-key down without delay and letting the matching key-up enter the
   keyboard's initially focused character.
+- Bad: relying on a main-pass `detectTapGestures` outside `BasicTextField`; its own pointer input can
+  consume the gesture first and leave the field read-only.
 - Bad: rendering login warning and error as separate dynamic rows and clipping Login at 1080p.
 - Bad: copying a `372 x 74` physical-pixel prototype size as dp at 320 dpi, producing a
   `744 x 148` physical-pixel surface.
@@ -279,6 +297,8 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 - Login Compose/device test: assert initial server focus and the server -> account -> password ->
   visibility -> remember-login -> HTTPS graph. Inject Center, text, Back, and Down and assert exact
   text plus focused node.
+- Login touch test: inject a real pointer click on Account, then assert it is focused, exposes text
+  editing, and accepts injected text without a D-pad center event.
 - Login screenshot test at 1920x1080: assert headings, the shared base/error status slot, and the
   complete Login button are visible and non-overlapping.
 - Route state tests: assert first actionable focus after async initial load; return from a child with
@@ -298,6 +318,8 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 - Player progress device test: reveal controls, move Up from play/pause, seek Right, and assert the
   progress value increases by exactly 10 seconds while focus stays on progress; Down returns to
   play/pause.
+- Player touch test: click the center of the progress node at 12/180 seconds and assert the existing
+  relative seek callback receives approximately +78 seconds.
 - Player state test: exit roam restores the previous queue paused, while no frozen queue produces
   `STATE_NONE` with an empty queue.
 - Capture and inspect player-controls and player-queue screenshots on an Android TV API 36 target at
@@ -325,6 +347,14 @@ LaunchedEffect(editing) {
     if (editing) {
         delay(200)
         keyboard?.show()
+    }
+}
+
+// Touch observes the field gesture before its internal text input consumes the main pass.
+Modifier.pointerInput(Unit) {
+    awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        if (waitForUpOrCancellation(pass = PointerEventPass.Initial) != null) editing = true
     }
 }
 ```
