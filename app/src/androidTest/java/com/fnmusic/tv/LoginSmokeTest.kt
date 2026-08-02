@@ -4,6 +4,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasText
@@ -24,21 +25,43 @@ import com.fnmusic.tv.ui.LoginScreen
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import java.util.concurrent.atomic.AtomicInteger
 
 class LoginSmokeTest {
     @get:Rule val composeRule = createComposeRule()
+    private val loginAttempts = AtomicInteger()
 
     @Before fun renderLogin() {
+        loginAttempts.set(0)
         composeRule.setContent {
             FnMusicTheme {
                 LoginScreen(
                     savedServer = "",
                     recentServers = emptyList(),
                     initialError = null,
-                    onLogin = { _, _, _, password, _ -> password.fill('\u0000') },
+                    onLogin = { _, _, _, password, _ ->
+                        password.fill('\u0000')
+                        loginAttempts.incrementAndGet()
+                    },
                 )
             }
         }
+    }
+
+    private fun enterField(description: String, text: String) {
+        val field = composeRule.onNodeWithContentDescription(description)
+        field.performTouchInput { click() }
+        composeRule.waitForIdle()
+        Thread.sleep(300)
+        field.performTextInput(text)
+        UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).pressBack()
+        composeRule.waitForIdle()
+    }
+
+    private fun enterValidCredentials() {
+        enterField("NAS 地址", "10.0.0.115")
+        enterField("账号", "test")
+        enterField("密码", "a123456")
     }
 
     @Test fun loginSurfaceRendersRequiredControls() {
@@ -118,5 +141,33 @@ class LoginSmokeTest {
         rememberLogin.assert(checked).performClick()
         composeRule.waitForIdle()
         rememberLogin.assert(unchecked)
+    }
+
+    @Test fun loginButtonAcceptsPhysicalTouch() {
+        enterValidCredentials()
+
+        composeRule.onNodeWithContentDescription("登录")
+            .assertIsEnabled()
+            .performTouchInput { click() }
+        composeRule.waitUntil(timeoutMillis = 5_000) { loginAttempts.get() == 1 }
+    }
+
+    @Test fun loginButtonStillAcceptsDpadCenter() {
+        enterValidCredentials()
+
+        composeRule.onNodeWithContentDescription("密码")
+            .assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionDown) }
+        composeRule.onNodeWithContentDescription("保持登录")
+            .assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionDown) }
+        composeRule.onNodeWithContentDescription("HTTPS")
+            .assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionDown) }
+        composeRule.onNodeWithContentDescription("登录")
+            .assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionCenter) }
+
+        composeRule.waitUntil(timeoutMillis = 5_000) { loginAttempts.get() == 1 }
     }
 }

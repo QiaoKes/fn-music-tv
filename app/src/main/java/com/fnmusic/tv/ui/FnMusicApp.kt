@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -116,7 +117,7 @@ fun FnMusicApp(container: AppContainer, onMoveToBackground: () -> Unit) {
 @Composable
 private fun BrandLoading() {
     Column(Modifier.fillMaxSize().padding(64.dp), verticalArrangement = Arrangement.Center) {
-        Text("飞牛音乐 TV", color = FnColors.Text, fontSize = 44.sp, fontWeight = FontWeight.Bold)
+        Text("回声台", color = FnColors.Text, fontSize = 44.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(12.dp))
         Text("正在载入", color = FnColors.Muted, fontSize = 24.sp)
     }
@@ -164,7 +165,7 @@ internal fun LoginScreen(
                 .semantics { contentDescription = "登录表单" },
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text("飞牛音乐 TV", color = FnColors.Teal, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Text("回声台", color = FnColors.Teal, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             Text("登录", color = FnColors.Text, fontSize = 34.sp, fontWeight = FontWeight.Bold)
             Row(
                 Modifier.fillMaxWidth(),
@@ -187,7 +188,7 @@ internal fun LoginScreen(
                         down = usernameFocus
                     },
                 )
-                Button(
+                LoginActionButton(
                     enabled = recentServers.isNotEmpty(),
                     onClick = { showServerHistory = true },
                     modifier = Modifier.size(52.dp)
@@ -198,7 +199,7 @@ internal fun LoginScreen(
                         }
                         .focusRequester(historyFocus),
                 ) {
-                    HistoryIcon()
+                    HistoryIcon(enabled = recentServers.isNotEmpty())
                 }
             }
             TvTextField(
@@ -232,7 +233,7 @@ internal fun LoginScreen(
                     },
                     visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                 )
-                Button(
+                LoginActionButton(
                     onClick = { passwordVisible = !passwordVisible },
                     modifier = Modifier.size(52.dp)
                         .semantics { contentDescription = "显示或隐藏密码" }
@@ -279,10 +280,10 @@ internal fun LoginScreen(
                 fontSize = 19.sp,
                 maxLines = 1,
             )
-            Button(
+            LoginActionButton(
                 enabled = canSubmit,
                 onClick = {
-                    if (submitting) return@Button
+                    if (submitting) return@LoginActionButton
                     submitting = true
                     loginAttempted = true
                     error = null
@@ -302,6 +303,7 @@ internal fun LoginScreen(
                 Text(
                     if (submitting) "正在登录" else "登录",
                     modifier = Modifier.fillMaxWidth(),
+                    color = if (canSubmit) FnColors.Text else FnColors.Muted,
                     fontSize = 23.sp,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center,
@@ -320,7 +322,7 @@ internal fun LoginScreen(
                 Text("最近服务器", fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
                 recentServers.forEachIndexed { index, recent ->
                     val editable = ServerUrlNormalizer.editableInput(recent, https)
-                    Button(
+                    LoginActionButton(
                         onClick = {
                             server = editable.address
                             https = editable.useHttps
@@ -332,7 +334,7 @@ internal fun LoginScreen(
                         Text(editable.address, fontSize = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
-                Button(
+                LoginActionButton(
                     onClick = { showServerHistory = false },
                     modifier = Modifier.fillMaxWidth().height(56.dp),
                 ) { Text("取消", fontSize = 20.sp) }
@@ -343,34 +345,35 @@ internal fun LoginScreen(
 }
 
 @Composable
-private fun HistoryIcon() {
+private fun HistoryIcon(enabled: Boolean) {
     Canvas(Modifier.size(25.dp)) {
+        val iconColor = if (enabled) FnColors.Text else FnColors.Muted
         val stroke = 2.2.dp.toPx()
         val center = this.center
         val radius = size.minDimension * 0.34f
         drawArc(
-            color = FnColors.Text,
+            color = iconColor,
             startAngle = 35f,
             sweepAngle = 285f,
             useCenter = false,
             style = Stroke(stroke, cap = StrokeCap.Round),
         )
         drawLine(
-            color = FnColors.Text,
+            color = iconColor,
             start = androidx.compose.ui.geometry.Offset(center.x - radius, center.y - radius * 0.2f),
             end = androidx.compose.ui.geometry.Offset(center.x - radius * 1.05f, center.y - radius * 0.9f),
             strokeWidth = stroke,
             cap = StrokeCap.Round,
         )
         drawLine(
-            color = FnColors.Text,
+            color = iconColor,
             start = center,
             end = androidx.compose.ui.geometry.Offset(center.x, center.y - radius * 0.58f),
             strokeWidth = stroke,
             cap = StrokeCap.Round,
         )
         drawLine(
-            color = FnColors.Text,
+            color = iconColor,
             start = center,
             end = androidx.compose.ui.geometry.Offset(center.x + radius * 0.48f, center.y),
             strokeWidth = stroke,
@@ -570,6 +573,60 @@ private fun LoginCheckbox(
 }
 
 @Composable
+private fun LoginActionButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    var centerKeyDown by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(50)
+    Box(
+        modifier
+            .onFocusChanged {
+                focused = it.isFocused
+                if (!it.isFocused) centerKeyDown = false
+            }
+            .background(
+                when {
+                    !enabled -> Color(0xFF292A2F)
+                    focused -> Color(0xFF4A464F)
+                    else -> Color(0xFF414047)
+                },
+                shape,
+            )
+            .border(
+                width = if (focused) 3.dp else 1.dp,
+                color = if (focused) FnColors.Coral else Color(0xFF454A50),
+                shape = shape,
+            )
+            .onPreviewKeyEvent { event ->
+                if (!enabled || (event.key != Key.Enter && event.key != Key.DirectionCenter)) {
+                    return@onPreviewKeyEvent false
+                }
+                when (event.type) {
+                    KeyEventType.KeyDown -> {
+                        centerKeyDown = true
+                        true
+                    }
+                    KeyEventType.KeyUp -> {
+                        if (centerKeyDown) onClick()
+                        centerKeyDown = false
+                        true
+                    }
+                    else -> false
+                }
+            }
+            .focusable(enabled)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        content()
+    }
+}
+
+@Composable
 private fun TopBar(nowPlaying: Boolean, selected: Route, onHome: () -> Unit, onMy: () -> Unit, onPlayer: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().height(82.dp),
@@ -579,7 +636,7 @@ private fun TopBar(nowPlaying: Boolean, selected: Route, onHome: () -> Unit, onM
         if (nowPlaying) {
             Button(onClick = onPlayer, modifier = Modifier.width(340.dp).height(64.dp)) { Text("正在播放", fontSize = 22.sp) }
         } else {
-            Text("飞牛音乐 TV", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+            Text("回声台", fontSize = 28.sp, fontWeight = FontWeight.Bold)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Button(onClick = onHome, enabled = selected != Route.Home) { Text("首页", fontSize = 22.sp) }

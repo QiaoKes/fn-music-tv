@@ -33,6 +33,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.abs
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -173,6 +174,42 @@ class PlayerOverlayFocusTest {
 
         composeRule.runOnIdle { assertEquals(1, exits.get()) }
         exit.assertIsFocused()
+    }
+
+    @Test fun exitRoamLabelIsCenteredInsideItsButton() {
+        renderControls(roaming = true)
+
+        val button = composeRule.onNodeWithContentDescription("退出漫游").fetchSemanticsNode().boundsInRoot
+        val label = composeRule.onNodeWithText("退出漫游", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+
+        assertTrue(abs(button.center.x - label.center.x) <= 1.5f)
+        assertTrue(abs(button.center.y - label.center.y) <= 1.5f)
+    }
+
+    @Test fun queueTrackTextGroupIsCenteredInsideItsRow() {
+        composeRule.setContent {
+            FnMusicTheme {
+                PlaybackQueueOverlay(
+                    items = listOf(
+                        PlaybackQueueItem("current", "队列歌曲", "队列歌手", queueIndex = 0, isCurrent = true),
+                    ),
+                    loadedCount = 1,
+                    queueError = null,
+                    canRetry = false,
+                    onRetry = {},
+                    onSelect = {},
+                    onInteraction = {},
+                )
+            }
+        }
+
+        val row = composeRule.onNodeWithContentDescription("1. 队列歌曲 队列歌手，正在播放")
+            .fetchSemanticsNode().boundsInRoot
+        val title = composeRule.onNodeWithText("队列歌曲", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val artist = composeRule.onNodeWithText("队列歌手", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val textGroupCenterY = (title.top + artist.bottom) / 2f
+
+        assertTrue(abs(row.center.y - textGroupCenterY) <= 2f)
     }
 
     @Test fun retryIsReachableFromTransportAndReturnsToIt() {

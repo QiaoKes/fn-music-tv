@@ -63,6 +63,26 @@ class PlayerUiStateTest {
         assertTrue(!shouldLoadInitialPage(second))
     }
 
+    @Test fun `retained list keeps its first successful load`() {
+        val retained = retainLoadedList(
+            current = RetainedListSnapshot<String>(),
+            loaded = listOf("playlist-a", "playlist-b"),
+        )
+
+        assertEquals(listOf("playlist-a", "playlist-b"), retained.entries)
+        assertTrue(retained.initialLoadCompleted)
+        assertTrue(!shouldLoadInitialList(retained))
+    }
+
+    @Test fun `retained list retries an empty failed initial load on reentry`() {
+        val failed = RetainedListSnapshot<String>(
+            error = AppError.NetworkUnavailable,
+            initialLoadCompleted = true,
+        )
+
+        assertTrue(shouldLoadInitialList(failed))
+    }
+
     @Test fun `track pagination retains pages tracks and continuation metadata`() {
         val pageOne = Page(
             items = listOf(queueTrack("a"), queueTrack("b")),
@@ -133,41 +153,78 @@ class PlayerUiStateTest {
         assertEquals(1f, playerProgressFraction(positionMs = 12_000, durationMs = 10_000), 0f)
     }
 
-    @Test fun `artwork ambience favors the dominant sampled hue and stays dark`() {
-        val color = dominantArtworkColor(
-            intArrayOf(
-                0xFFFF3020.toInt(),
-                0xFFFF3020.toInt(),
-                0xFFFF3020.toInt(),
-                0xFF2050FF.toInt(),
+    @Test fun `artwork ambience favors a colorful subject over a large neutral backdrop`() {
+        val color = artworkAmbienceColor(
+            listOf(
+                ArtworkPaletteSwatch(0xFFD5D2C7.toInt(), population = 800),
+                ArtworkPaletteSwatch(0xFF9A62E8.toInt(), population = 200),
             ),
-            fallbackKey = "track",
         )
 
-        assertTrue(color.red > color.blue)
+        assertTrue(color.blue > color.green)
+        assertTrue(color.red > color.green)
         assertTrue(maxOf(color.red, color.green, color.blue) <= 0.35f)
     }
 
-    @Test fun `missing artwork ambience is stable and track specific`() {
-        val first = fallbackAmbienceColor("Call Me Maybe|nihmune")
-        assertEquals(first, fallbackAmbienceColor("Call Me Maybe|nihmune"))
-        assertNotEquals(first, fallbackAmbienceColor("Another Track|Another Artist"))
+    @Test fun `cool violet subject is not replaced by a pale yellow green backdrop`() {
+        val color = artworkAmbienceColor(
+            listOf(
+                ArtworkPaletteSwatch(0xFFD9DDBA.toInt(), population = 760),
+                ArtworkPaletteSwatch(0xFF756DDC.toInt(), population = 240),
+            ),
+        )
+
+        assertTrue(color.blue > color.red)
+        assertTrue(color.blue > color.green)
+        assertTrue(maxOf(color.red, color.green, color.blue) <= 0.35f)
+    }
+
+    @Test fun `missing artwork ambience uses one stable brand neutral`() {
+        val first = fallbackAmbienceColor()
+        assertEquals(first, fallbackAmbienceColor())
+        assertTrue(maxOf(first.red, first.green, first.blue) <= 0.35f)
     }
 
     @Test fun `artwork ambience ignores dominant black margins when color remains`() {
-        val color = dominantArtworkColor(
-            intArrayOf(
-                0xFF050505.toInt(),
-                0xFF050505.toInt(),
-                0xFF050505.toInt(),
-                0xFF20C060.toInt(),
-                0xFF20C060.toInt(),
+        val color = artworkAmbienceColor(
+            listOf(
+                ArtworkPaletteSwatch(0xFF050505.toInt(), population = 700),
+                ArtworkPaletteSwatch(0xFF20C060.toInt(), population = 300),
             ),
-            fallbackKey = "track",
         )
 
         assertTrue(color.green > color.red)
         assertTrue(color.green > color.blue)
+    }
+
+    @Test fun `loading visual resource retains only the previous renderable terminal state`() {
+        val oldLyrics = NowPlayingResourceState.Ready("old lyrics")
+
+        assertSame(
+            oldLyrics,
+            retainPlayerVisualResource(oldLyrics, NowPlayingResourceState.Loading),
+        )
+        assertSame(
+            NowPlayingResourceState.Absent,
+            retainPlayerVisualResource(NowPlayingResourceState.Absent, NowPlayingResourceState.Loading),
+        )
+        assertTrue(
+            retainPlayerVisualResource(
+                NowPlayingResourceState.RetryableFailure(AppError.NetworkUnavailable),
+                NowPlayingResourceState.Loading,
+            ) is NowPlayingResourceState.Loading,
+        )
+    }
+
+    @Test fun `visual resource switches immediately when the current track reaches a terminal state`() {
+        val previous = NowPlayingResourceState.Ready("old lyrics")
+        val current = NowPlayingResourceState.Ready("new lyrics")
+
+        assertSame(current, retainPlayerVisualResource(previous, current))
+        assertSame(
+            NowPlayingResourceState.Absent,
+            retainPlayerVisualResource(previous, NowPlayingResourceState.Absent),
+        )
     }
 
     @Test fun `poster surface preserves hue while lifting ambience`() {

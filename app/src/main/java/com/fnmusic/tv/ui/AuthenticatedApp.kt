@@ -90,8 +90,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.graphics.get
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.palette.graphics.Palette
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Border
@@ -171,6 +171,24 @@ internal fun <T> retainLoadedPage(
 internal fun shouldLoadInitialPage(snapshot: RetainedPageSnapshot<*>): Boolean =
     !snapshot.initialLoadCompleted
 
+internal data class RetainedListSnapshot<T>(
+    val entries: List<T> = emptyList(),
+    val error: AppError? = null,
+    val initialLoadCompleted: Boolean = false,
+)
+
+internal fun <T> retainLoadedList(
+    current: RetainedListSnapshot<T>,
+    loaded: List<T>,
+): RetainedListSnapshot<T> = current.copy(
+    entries = loaded,
+    error = null,
+    initialLoadCompleted = true,
+)
+
+internal fun shouldLoadInitialList(snapshot: RetainedListSnapshot<*>): Boolean =
+    !snapshot.initialLoadCompleted || snapshot.entries.isEmpty() && snapshot.error != null
+
 internal data class RetainedTrackCollectionSnapshot(
     val tracks: List<Track> = emptyList(),
     val loadedPages: List<Page<Track>> = emptyList(),
@@ -219,6 +237,11 @@ private class RetainedPagedGridState<T> {
     var loading by mutableStateOf(false)
 }
 
+private class RetainedListState<T> {
+    var snapshot by mutableStateOf(RetainedListSnapshot<T>())
+    var loading by mutableStateOf(false)
+}
+
 private class RetainedTrackCollectionState {
     var snapshot by mutableStateOf(RetainedTrackCollectionSnapshot())
     var loading by mutableStateOf(false)
@@ -227,6 +250,7 @@ private class RetainedTrackCollectionState {
 private class LibraryRetainedStateStore(val scope: CoroutineScope) {
     private val pagedStates = mutableMapOf<String, RetainedPagedGridState<*>>()
     private val trackStates = mutableMapOf<String, RetainedTrackCollectionState>()
+    private val listStates = mutableMapOf<String, RetainedListState<*>>()
 
     @Suppress("UNCHECKED_CAST")
     fun <T> paged(key: String): RetainedPagedGridState<T> =
@@ -234,6 +258,46 @@ private class LibraryRetainedStateStore(val scope: CoroutineScope) {
 
     fun tracks(key: String): RetainedTrackCollectionState =
         trackStates.getOrPut(key) { RetainedTrackCollectionState() }
+
+    @Suppress("UNCHECKED_CAST")
+    fun <T> list(key: String): RetainedListState<T> =
+        listStates.getOrPut(key) { RetainedListState<T>() } as RetainedListState<T>
+
+    fun <T> loadListOnce(state: RetainedListState<T>, loader: suspend () -> List<T>) {
+        if (state.loading || !shouldLoadInitialList(state.snapshot)) return
+        state.loading = true
+        scope.launch {
+            runCatching { loader() }
+                .onSuccess { state.snapshot = retainLoadedList(state.snapshot, it) }
+                .onFailure {
+                    state.snapshot = state.snapshot.copy(
+                        error = (it as? AppException)?.error ?: AppError.Unknown(),
+                        initialLoadCompleted = true,
+                    )
+                }
+            state.loading = false
+        }
+    }
+
+    fun <T> loadFirstPageOnce(
+        state: RetainedPagedGridState<T>,
+        loader: suspend (Int) -> Page<T>,
+        key: (T) -> String,
+    ) {
+        if (state.loading || !shouldLoadInitialPage(state.snapshot)) return
+        state.loading = true
+        scope.launch {
+            runCatching { loader(1) }
+                .onSuccess { state.snapshot = retainLoadedPage(state.snapshot, it, key) }
+                .onFailure {
+                    state.snapshot = state.snapshot.copy(
+                        error = (it as? AppException)?.error ?: AppError.Unknown(),
+                        initialLoadCompleted = true,
+                    )
+                }
+            state.loading = false
+        }
+    }
 }
 
 private val LocalLibraryRetainedState = staticCompositionLocalOf<LibraryRetainedStateStore> {
@@ -392,7 +456,7 @@ private fun LibraryTopBar(
         if (playback.hasMedia) {
             NowPlayingPill(playback, onPlayer, modifier)
         } else {
-            Text("飞牛音乐 TV", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+            Text("回声台", fontSize = 28.sp, fontWeight = FontWeight.Bold)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             Button(onClick = onHome, enabled = !selectedHome) { Text("首页", fontSize = 21.sp) }
@@ -511,19 +575,19 @@ private fun BrowseHome(
     onAll: () -> Unit,
     onPlayer: () -> Unit,
 ) {
-    var playlists by remember { mutableStateOf<List<Playlist>>(emptyList()) }
-    var playlistsLoaded by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<AppError?>(null) }
+    val retainedStore = LocalLibraryRetainedState.current
+    val playlistState = retainedStore.list<Playlist>("playlists")
+    val playlistSnapshot = playlistState.snapshot
+    val playlists = playlistSnapshot.entries
+    val playlistsLoaded = playlistSnapshot.initialLoadCompleted
+    var actionError by remember { mutableStateOf<AppError?>(null) }
     var focusedKey by rememberSaveable { mutableStateOf<String?>(null) }
     var initialFocusRequested by remember { mutableStateOf(false) }
     val contentFocus = remember { FocusRequester() }
     val rowState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
-        runCatching { container.musicRepository.playlists() }
-            .onSuccess { playlists = it }
-            .onFailure { error = (it as? AppException)?.error ?: AppError.Unknown() }
-        playlistsLoaded = true
+        retainedStore.loadListOnce(playlistState, container.musicRepository::playlists)
     }
     LaunchedEffect(playlistsLoaded, playback.roamBusy, playback.hasMedia, focusedKey) {
         if (initialFocusRequested) return@LaunchedEffect
@@ -579,10 +643,10 @@ private fun BrowseHome(
                     }
                     scope.launch {
                         if (container.playbackController.startRoam()) {
-                            error = null
+                            actionError = null
                             onPlayer()
                         } else {
-                            error = container.playbackController.state.value.roamError ?: AppError.Unknown()
+                            actionError = container.playbackController.state.value.roamError ?: AppError.Unknown()
                         }
                     }
                 }
@@ -612,7 +676,7 @@ private fun BrowseHome(
                 )
             }
         }
-        error?.let { InlineError(it) }
+        (actionError ?: playlistSnapshot.error)?.let { InlineError(it) }
     }
 }
 
@@ -637,30 +701,25 @@ private fun BrowseMy(
     onSettings: () -> Unit,
     onPlayer: () -> Unit,
 ) {
-    var artists by remember { mutableStateOf<List<Artist>>(emptyList()) }
-    var albums by remember { mutableStateOf<List<Album>>(emptyList()) }
-    var libraries by remember { mutableStateOf<List<SharedLibrary>>(emptyList()) }
-    var artistsLoaded by remember { mutableStateOf(false) }
-    var albumsLoaded by remember { mutableStateOf(false) }
-    var librariesLoaded by remember { mutableStateOf(false) }
+    val retainedStore = LocalLibraryRetainedState.current
+    val artistState = retainedStore.paged<Artist>("grid:artists")
+    val albumState = retainedStore.paged<Album>("grid:albums")
+    val libraryState = retainedStore.list<SharedLibrary>("shared-libraries")
+    val artists = artistState.snapshot.entries
+    val albums = albumState.snapshot.entries
+    val libraries = libraryState.snapshot.entries
+    val artistsLoaded = artistState.snapshot.initialLoadCompleted
+    val albumsLoaded = albumState.snapshot.initialLoadCompleted
+    val librariesLoaded = libraryState.snapshot.initialLoadCompleted
     var focusedKey by rememberSaveable { mutableStateOf<String?>(null) }
     var initialFocusRequested by remember { mutableStateOf(false) }
     val contentFocus = remember { FocusRequester() }
     val listState = rememberLazyListState()
-    val scope = LocalLibraryRetainedState.current.scope
+    val scope = retainedStore.scope
     LaunchedEffect(Unit) {
-        launch {
-            runCatching { container.musicRepository.artists(1).items }.onSuccess { artists = it }
-            artistsLoaded = true
-        }
-        launch {
-            runCatching { container.musicRepository.albums(1).items }.onSuccess { albums = it }
-            albumsLoaded = true
-        }
-        launch {
-            runCatching { container.musicRepository.sharedLibraries() }.onSuccess { libraries = it }
-            librariesLoaded = true
-        }
+        retainedStore.loadFirstPageOnce(artistState, container.musicRepository::artists) { it.guid.value }
+        retainedStore.loadFirstPageOnce(albumState, container.musicRepository::albums) { it.guid.value }
+        retainedStore.loadListOnce(libraryState, container.musicRepository::sharedLibraries)
     }
     LaunchedEffect(artistsLoaded, albumsLoaded, librariesLoaded, playback.hasMedia, focusedKey) {
         if (initialFocusRequested) return@LaunchedEffect
@@ -849,8 +908,12 @@ private fun BandLockup(entry: BandEntry, modifier: Modifier = Modifier) {
 
 @Composable
 private fun AllPlaylists(container: AppContainer, onOpen: (Playlist) -> Unit) {
-    var playlists by remember { mutableStateOf<List<Playlist>>(emptyList()) }
-    LaunchedEffect(Unit) { runCatching { container.musicRepository.playlists() }.onSuccess { playlists = it } }
+    val retainedStore = LocalLibraryRetainedState.current
+    val playlistState = retainedStore.list<Playlist>("playlists")
+    val playlists = playlistState.snapshot.entries
+    LaunchedEffect(Unit) {
+        retainedStore.loadListOnce(playlistState, container.musicRepository::playlists)
+    }
     GridPage("全部歌单", playlists, { it.guid.value }) { playlist, modifier ->
         PlaylistTile(playlist.name, "歌单", playlist.coverId, FnColors.Coral, modifier = modifier) { onOpen(playlist) }
     }
@@ -1608,6 +1671,53 @@ internal fun projectPlayerPresentation(
     }
 }
 
+internal fun <T> retainPlayerVisualResource(
+    previous: NowPlayingResourceState<T>,
+    current: NowPlayingResourceState<T>,
+): NowPlayingResourceState<T> = if (current is NowPlayingResourceState.Loading) {
+    when (previous) {
+        is NowPlayingResourceState.Ready,
+        NowPlayingResourceState.Absent,
+        -> previous
+        is NowPlayingResourceState.Loading,
+        is NowPlayingResourceState.RetryableFailure,
+        -> current
+    }
+} else {
+    current
+}
+
+@Composable
+private fun <T> rememberRetainedPlayerVisualResource(
+    identity: NowPlayingIdentity?,
+    current: NowPlayingResourceState<T>,
+): NowPlayingResourceState<T> {
+    var previousTerminal by remember { mutableStateOf<OwnedPlayerVisualResource<T>?>(null) }
+    val displayed = if (identity == null) {
+        current
+    } else {
+        val retained = previousTerminal
+            ?.takeIf { it.identity.namespace == identity.namespace }
+            ?.state
+            ?: NowPlayingResourceState.Loading
+        retainPlayerVisualResource(retained, current)
+    }
+    LaunchedEffect(identity, current) {
+        when {
+            identity == null -> previousTerminal = null
+            current !is NowPlayingResourceState.Loading -> {
+                previousTerminal = OwnedPlayerVisualResource(identity, current)
+            }
+        }
+    }
+    return displayed
+}
+
+private data class OwnedPlayerVisualResource<T>(
+    val identity: NowPlayingIdentity,
+    val state: NowPlayingResourceState<T>,
+)
+
 internal data class PlayerArtworkKey(
     val namespace: String,
     val mediaId: String,
@@ -1633,14 +1743,15 @@ private data class DecodedPlayerArtwork(
     val key: PlayerArtworkKey,
     val sourceBytes: ByteArray,
     val bitmap: Bitmap?,
+    val ambienceColor: Color,
 )
 
 @Composable
-private fun rememberCurrentArtworkBitmap(
+private fun rememberCurrentArtwork(
     identity: NowPlayingIdentity?,
     playerStyle: PlayerStyle,
     presentation: PlayerPresentationProjection,
-): Bitmap? {
+): DecodedPlayerArtwork? {
     val readyArtwork = when (val artwork = presentation.artwork) {
         is NowPlayingResourceState.Ready -> artwork.value
         else -> null
@@ -1657,17 +1768,27 @@ private fun rememberCurrentArtworkBitmap(
             )
         }
     }
-    val decoded by produceState<DecodedPlayerArtwork?>(null, request?.key, request?.bytes) {
-        value = null
-        val currentRequest = request ?: return@produceState
-        val bitmap = withContext(Dispatchers.Default) {
-            decodeArtwork(currentRequest.bytes, currentRequest.targetLongEdge)
+    val decoded by produceState<DecodedPlayerArtwork?>(null, request?.key, request?.bytes, presentation.artwork) {
+        val currentRequest = request
+        if (currentRequest == null) {
+            if (identity == null || presentation.artwork !is NowPlayingResourceState.Loading) value = null
+            return@produceState
         }
-        value = DecodedPlayerArtwork(currentRequest.key, currentRequest.bytes, bitmap)
+        value = withContext(Dispatchers.Default) {
+            val bitmap = decodeArtwork(currentRequest.bytes, currentRequest.targetLongEdge)
+            DecodedPlayerArtwork(
+                key = currentRequest.key,
+                sourceBytes = currentRequest.bytes,
+                bitmap = bitmap,
+                ambienceColor = bitmap?.let(::extractArtworkAmbienceColor) ?: fallbackAmbienceColor(),
+            )
+        }
     }
-    return decoded?.takeIf { result ->
-        request != null && result.key == request.key && result.sourceBytes === request.bytes
-    }?.bitmap
+    return when {
+        identity == null -> null
+        request == null && presentation.artwork !is NowPlayingResourceState.Loading -> null
+        else -> decoded
+    }
 }
 
 @Composable
@@ -1683,14 +1804,15 @@ private fun ImmersivePlayer(
         is NowPlayingResourceState.Ready -> state.value
         else -> null
     }
-    val currentLyrics = when (val state = presentation.lyrics) {
+    val displayedLyrics = rememberRetainedPlayerVisualResource(playback.nowPlayingIdentity, presentation.lyrics)
+    val currentLyrics = when (val state = displayedLyrics) {
         is NowPlayingResourceState.Ready -> state.value
         else -> null
     }
     val timeline = currentLyrics?.timeline
     val staticLyric = currentLyrics?.document?.takeUnless { it.isLrc }?.content
-    val lyricsLoading = presentation.lyrics is NowPlayingResourceState.Loading
-    val lyricsFailed = presentation.lyrics is NowPlayingResourceState.RetryableFailure
+    val lyricsLoading = displayedLyrics is NowPlayingResourceState.Loading
+    val lyricsFailed = displayedLyrics is NowPlayingResourceState.RetryableFailure
     var controlsVisible by remember { mutableStateOf(true) }
     var queueVisible by remember { mutableStateOf(false) }
     var restoreQueueFocus by remember { mutableStateOf(false) }
@@ -1720,15 +1842,13 @@ private fun ImmersivePlayer(
     val audioFormat = metadata?.audioFormat?.takeUnless(String::isBlank)
         ?: playback.audioFormat
     val poster = preferences.playerStyle == PlayerStyle.Poster
-    val artworkBitmap = rememberCurrentArtworkBitmap(
+    val artwork = rememberCurrentArtwork(
         identity = playback.nowPlayingIdentity,
         playerStyle = preferences.playerStyle,
         presentation = presentation,
     )
-    val ambienceColor = remember(artworkBitmap, title, artist) {
-        val samples = artworkBitmap?.let(::sampleArtworkPixels) ?: IntArray(0)
-        dominantArtworkColor(samples, "$title|$artist")
-    }
+    val artworkBitmap = artwork?.bitmap
+    val ambienceColor = artwork?.ambienceColor ?: fallbackAmbienceColor()
     val posterPanelColor = remember(ambienceColor) { posterSurfaceColor(ambienceColor) }
     val previousEnabled = playback.canPrevious && !playback.roamBusy
     val nextEnabled = playback.canNext && !playback.roamBusy
@@ -2605,16 +2725,47 @@ internal fun PlaybackQueueOverlay(
                             focusedContainerColor = Color(0xFF3A4541),
                             focusedContentColor = FnColors.Text,
                         ),
-                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 5.dp),
+                        contentPadding = PaddingValues(0.dp),
                     ) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text("${index + 1}", color = FnColors.Muted, fontSize = 13.sp, modifier = Modifier.width(34.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(item.title.ifBlank { "未知歌曲" }, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(item.artist.ifBlank { "未知演唱者" }, color = FnColors.Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Row(
+                            Modifier.fillMaxSize().padding(horizontal = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "${index + 1}",
+                                color = FnColors.Muted,
+                                fontSize = 13.sp,
+                                lineHeight = 16.sp,
+                                modifier = Modifier.width(34.dp),
+                            )
+                            Column(
+                                Modifier.weight(1f).fillMaxHeight(),
+                                verticalArrangement = Arrangement.Center,
+                            ) {
+                                Text(
+                                    item.title.ifBlank { "未知歌曲" },
+                                    fontSize = 16.sp,
+                                    lineHeight = 19.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    item.artist.ifBlank { "未知演唱者" },
+                                    color = FnColors.Muted,
+                                    fontSize = 12.sp,
+                                    lineHeight = 15.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
                             }
                             if (item.isCurrent) {
-                                Text("正在播放", color = FnColors.Coral, fontSize = 11.sp, maxLines = 1)
+                                Text(
+                                    "正在播放",
+                                    color = FnColors.Coral,
+                                    fontSize = 11.sp,
+                                    lineHeight = 14.sp,
+                                    maxLines = 1,
+                                )
                             }
                         }
                     }
@@ -2632,7 +2783,12 @@ internal fun PlaybackQueueOverlay(
                                     right = FocusRequester.Cancel
                                 }
                                 .onFocusChanged { if (it.isFocused) onInteraction() },
-                        ) { Text("队列加载失败，重试", maxLines = 1) }
+                            contentPadding = PaddingValues(0.dp),
+                        ) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text("队列加载失败，重试", lineHeight = 20.sp, maxLines = 1)
+                            }
+                        }
                     }
                 }
             }
@@ -2855,12 +3011,20 @@ private fun PlayerSideActionButton(
             focusedContainerColor = if (emphasized) FnColors.Coral else Color(0xFF303734),
             focusedContentColor = if (emphasized) FnColors.Background else FnColors.Text,
         ),
-        contentPadding = PaddingValues(if (glyph == null) 8.dp else 0.dp),
+        contentPadding = PaddingValues(0.dp),
     ) {
         if (glyph != null) {
             PlayerSideActionIcon(glyph)
         } else {
-            Text(label.orEmpty(), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    label.orEmpty(),
+                    fontSize = 11.sp,
+                    lineHeight = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
@@ -3032,63 +3196,47 @@ private fun PlayerTransportButton(
     }
 }
 
-private data class ArtworkColorBucket(
-    var count: Int = 0,
-    var red: Long = 0,
-    var green: Long = 0,
-    var blue: Long = 0,
+internal data class ArtworkPaletteSwatch(
+    val rgb: Int,
+    val population: Int,
 )
 
-private fun sampleArtworkPixels(bitmap: Bitmap): IntArray {
-    if (bitmap.width <= 0 || bitmap.height <= 0) return IntArray(0)
-    return runCatching {
-        IntArray(81) { index ->
-            val x = (index % 9) * (bitmap.width - 1) / 8
-            val y = (index / 9) * (bitmap.height - 1) / 8
-            bitmap[x, y]
-        }
-    }.getOrDefault(IntArray(0))
-}
+private fun extractArtworkAmbienceColor(bitmap: Bitmap): Color = runCatching {
+    val palette = Palette.from(bitmap)
+        .maximumColorCount(24)
+        .generate()
+    artworkAmbienceColor(
+        palette.swatches.map { ArtworkPaletteSwatch(it.rgb, it.population) },
+    )
+}.getOrDefault(fallbackAmbienceColor())
 
-internal fun dominantArtworkColor(pixels: IntArray, fallbackKey: String): Color {
-    fun collectBuckets(skipExtremes: Boolean): LinkedHashMap<Int, ArtworkColorBucket> {
-        val buckets = linkedMapOf<Int, ArtworkColorBucket>()
-        pixels.forEach { pixel ->
-            val alpha = pixel ushr 24 and 0xFF
-            if (alpha >= 64) {
-                val red = pixel ushr 16 and 0xFF
-                val green = pixel ushr 8 and 0xFF
-                val blue = pixel and 0xFF
-                val nearBlack = maxOf(red, green, blue) < 28
-                val nearWhite = minOf(red, green, blue) > 230
-                if (!skipExtremes || (!nearBlack && !nearWhite)) {
-                    val key = (red shr 4 shl 8) or (green shr 4 shl 4) or (blue shr 4)
-                    buckets.getOrPut(key, ::ArtworkColorBucket).apply {
-                        count++
-                        this.red += red.toLong()
-                        this.green += green.toLong()
-                        this.blue += blue.toLong()
-                    }
-                }
-            }
+internal fun artworkAmbienceColor(swatches: List<ArtworkPaletteSwatch>): Color {
+    val candidates = swatches.filter { it.population > 0 }
+    val totalPopulation = candidates.sumOf(ArtworkPaletteSwatch::population).coerceAtLeast(1)
+    val selected = candidates.maxByOrNull { swatch ->
+        val red = (swatch.rgb ushr 16 and 0xFF) / 255f
+        val green = (swatch.rgb ushr 8 and 0xFF) / 255f
+        val blue = (swatch.rgb and 0xFF) / 255f
+        val peak = maxOf(red, green, blue)
+        val floor = minOf(red, green, blue)
+        val saturation = if (peak == 0f) 0f else (peak - floor) / peak
+        val lightness = (peak + floor) / 2f
+        val population = kotlin.math.sqrt(swatch.population.toFloat() / totalPopulation)
+        val usefulLightness = (1f - kotlin.math.abs(lightness - 0.52f) / 0.52f).coerceIn(0f, 1f)
+        val extremePenalty = when {
+            peak < 0.08f -> 0.35f
+            floor > 0.94f -> 0.55f
+            else -> 0f
         }
-        return buckets
-    }
-    val filteredBuckets = collectBuckets(skipExtremes = true)
-    val buckets = filteredBuckets.ifEmpty { collectBuckets(skipExtremes = false) }
-    val dominant = buckets.values.maxByOrNull { it.count }
-        ?: return fallbackAmbienceColor(fallbackKey)
-    val red = dominant.red.toFloat() / dominant.count / 255f
-    val green = dominant.green.toFloat() / dominant.count / 255f
-    val blue = dominant.blue.toFloat() / dominant.count / 255f
-    if (maxOf(red, green, blue) - minOf(red, green, blue) < 0.04f) return fallbackAmbienceColor(fallbackKey)
+        population * 0.34f + saturation * 0.51f + usefulLightness * 0.15f - extremePenalty
+    } ?: return fallbackAmbienceColor()
+    val red = (selected.rgb ushr 16 and 0xFF) / 255f
+    val green = (selected.rgb ushr 8 and 0xFF) / 255f
+    val blue = (selected.rgb and 0xFF) / 255f
     return normalizedAmbienceColor(red, green, blue)
 }
 
-internal fun fallbackAmbienceColor(key: String): Color {
-    val hue = Math.floorMod(key.hashCode(), 360).toFloat()
-    return hsvColor(hue, saturation = 0.38f, value = 0.34f)
-}
+internal fun fallbackAmbienceColor(): Color = Color(0xFF29312F)
 
 private fun normalizedAmbienceColor(red: Float, green: Float, blue: Float): Color {
     val max = maxOf(red, green, blue)
@@ -3101,6 +3249,15 @@ private fun normalizedAmbienceColor(red: Float, green: Float, blue: Float): Colo
         else -> 60f * ((red - green) / delta + 4f)
     }.let { if (it < 0f) it + 360f else it }
     val sourceSaturation = if (max == 0f) 0f else delta / max
+    if (sourceSaturation < 0.12f) {
+        val average = (red + green + blue) / 3f
+        val value = (0.27f + average * 0.06f).coerceIn(0.27f, 0.33f)
+        return Color(
+            red = (value + (red - average) * 0.08f).coerceIn(0f, 1f),
+            green = (value + (green - average) * 0.08f).coerceIn(0f, 1f),
+            blue = (value + (blue - average) * 0.08f).coerceIn(0f, 1f),
+        )
+    }
     val saturation = (sourceSaturation * 0.68f).coerceIn(0.2f, 0.5f)
     return hsvColor(hue, saturation, value = 0.34f)
 }

@@ -40,7 +40,14 @@ LoginCheckbox(
     onClick: () -> Unit,
 )
 
-HistoryIcon()
+LoginActionButton(
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+)
+
+HistoryIcon(enabled: Boolean)
 VisibilityIcon(hidden: Boolean)
 ```
 
@@ -130,6 +137,26 @@ fun isHomeBackConfirmed(
 ): Boolean
 ```
 
+Artwork ambience, transient player visuals, and non-paged library summaries use deterministic
+projections that remain unit-testable without rendering a screen:
+
+```kotlin
+data class ArtworkPaletteSwatch(val rgb: Int, val population: Int)
+fun artworkAmbienceColor(swatches: List<ArtworkPaletteSwatch>): Color
+fun fallbackAmbienceColor(): Color
+
+fun <T> retainPlayerVisualResource(
+    previous: NowPlayingResourceState<T>,
+    current: NowPlayingResourceState<T>,
+): NowPlayingResourceState<T>
+
+data class RetainedListSnapshot<T>(
+    val entries: List<T> = emptyList(),
+    val error: AppError? = null,
+    val initialLoadCompleted: Boolean = false,
+)
+```
+
 The persistent player re-entry surface remains:
 
 ```kotlin
@@ -168,6 +195,11 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 - History and password visibility are 52dp icon-only buttons. Use familiar recent-history and eye
   glyphs, preserve content descriptions `历史` and `显示或隐藏密码`, and do not place `历史`,
   `显示密码`, or `隐藏密码` inside the buttons.
+- Login form commands use the local foundation-based `LoginActionButton`, including history,
+  password visibility, login submission, and history-dialog actions. It owns a real focus target
+  plus `Modifier.clickable(Role.Button)` so the same callback works for D-pad and physical pointer
+  input inside the vertically scrollable form. Do not substitute TV Material `Button` on this
+  surface; it was observed to focus correctly while dropping physical pointer clicks.
 - Center field content vertically through `BasicTextField.decorationBox` with a full-height
   `Box(contentAlignment = Alignment.CenterStart)`. Center all command labels explicitly with
   `TextAlign.Center`; padding estimates are not a vertical-centering contract.
@@ -184,6 +216,18 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 - Metadata, artwork, and lyrics may finish independently, but a result publishes only while its
   presentation token and player style are still current. Late A or B completions in an A -> B -> A
   sequence must never replace the newest A revision.
+- Presenter publication and UI transition ownership are separate. The presenter still publishes
+  only the exact current identity. While the new current resource is `Loading`, the player may keep
+  the previous same-namespace `Ready`/`Absent` lyric visual and previous decoded artwork. Replace it
+  immediately when the current resource reaches `Ready`, `Absent`, or `RetryableFailure`; never feed
+  a retained visual back into the presenter or treat it as current resource state.
+- Decoded artwork keeps its complete `PlayerArtworkKey`. A new ready byte array is decoded and
+  quantized on `Dispatchers.Default`; the old decoded artwork and ambience remain visible until that
+  work completes. A current terminal artwork state clears the old visual immediately.
+- Generate artwork swatches with AndroidX Palette and choose the ambience seed by a deterministic
+  score that combines population, saturation, and useful lightness. A large neutral field must not
+  automatically defeat a smaller representative color. Map the result to a bounded dark surface;
+  missing artwork uses one fixed brand-neutral fallback, never a title/artist hash color.
 - `Ready` renders the resource; `Absent` is a valid terminal fallback; only
   `RetryableFailure` exposes retry. A retry reloads only failed resources and remains bound to the
   same identity. Missing `coverId` may be enriched from full metadata, which creates a new revision
@@ -216,6 +260,10 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 - The queue is a right-side overlay on the player, not a route. It shows `loadedCount`, continuous
   row numbers, title, artist, and the current marker. Opening scrolls to and focuses the current
   row; selecting a row calls `onSelect(item.queueIndex)` and keeps focus in the overlay.
+- Fixed-height text controls do not rely on TV Material's default content padding for Chinese font
+  centering. The roam exit label and queue retry label use a full-size centered `Box`. Queue rows use
+  zero button content padding plus a full-size vertically centered `Row`; the title/artist column has
+  explicit line heights and `Arrangement.Center`. Keep outer bounds and focus modifiers unchanged.
 - Queue row keys are occurrence-safe (`"$mediaId:$occurrence"`). Each `LazyColumn` row creates
   `remember(rowKey) { FocusRequester() }` inside the keyed row and requests focus from a
   row-owned `LaunchedEffect`; never retain detached row requesters in an overlay-level map.
@@ -228,6 +276,12 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 
 ### Async routes, return behavior, and layout
 
+- The user-facing product name is `回声台`. `@string/app_name`, loading/login/top-bar text,
+  launcher label, baseline-profile selectors, README title, launcher icon, and TV banner must move
+  together. The icon uses a charcoal background, a coral primary waveform, and a warm-white echo
+  waveform. Keep the same flat double-wave mark in both `ic_logo.xml` and `tv_banner.xml`; do not
+  add the retired teal node or play triangle. Internal package and command namespaces stay
+  `com.fnmusic.tv` so a visual rebrand remains an in-place signed Android upgrade.
 - On the first entry to a grid, detail, song list, or settings route, wait until the relevant async
   content has reached a terminal initial-load state, then focus the first actionable item in reading
   order. Do not request focus against a placeholder or an item not yet composed.
@@ -235,6 +289,11 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
   Returning from a child route restores the retained key and scroll position; it must not refetch
   page 1 or force focus back to the first item. If the retained key no longer exists, use that
   surface's deterministic first-action fallback.
+- Home playlists and All Playlists share one session-owned `RetainedListSnapshot`. My and the full
+  Artists/Albums grids share the same retained paged snapshots; shared libraries use another
+  retained list. A successful initial load is not repeated on route re-entry. An empty failed list
+  may retry on the next entry. The store is keyed by the signed-in user and must be discarded when
+  the account changes.
 - Home/My player re-entry is a compact music pill with fixed measured bounds, cover/fallback,
   playing state, ellipsized title/artist, and a trailing cue. Focus may change border, surface, and
   scale without reflow.
@@ -258,9 +317,15 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 | Login is rendered on any landscape device | Use the same centered form tree; no device-specific alternate UI |
 | Remember Login or HTTPS is activated by touch/Center | Toggle its `ToggleableState` and keep a valid focus target |
 | History/password side action is rendered | Show the 52dp familiar icon only and retain its exact content description |
+| Physical pointer taps an enabled Login action | Invoke its command exactly once; Login clears the submitted password and starts submission |
+| Physical pointer taps a disabled Login action | Do not invoke its command or create a focus target |
 | 1920x1080 login first frame | Show the complete Login button with no clipped bottom edge or overlapping control |
+| Launcher/app surface after rebrand | Display `回声台`; icon and TV banner share the coral/warm-white double-wave mark |
+| Existing signed installation receives the rebrand | Preserve `com.fnmusic.tv` and signer; increment managed version code |
 | New presentation identity/revision | Publish three `Loading` states and cancel the prior token |
 | Late resource result has an old namespace/media/revision/style | Ignore it; current UI state is unchanged |
+| Current artwork is Loading during a track switch | Keep the prior decoded artwork/background until current decode completes |
+| Current lyrics is Loading during a track switch | Keep the prior same-namespace renderable lyric state; do not flash loading/absent copy |
 | Metadata/artwork/lyrics is validly absent | Publish fallback/`Absent`; do not show retry |
 | One or more current resources exhaust retryable failure | Show one retry action bound to the current revision |
 | Focused retry action succeeds and disappears | Hand focus to progress before removal; Down reaches play/pause |
@@ -275,9 +340,11 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 | Focused queue row survives a mutation | Preserve focus by occurrence-safe row key |
 | Focused queue row is deleted | Focus the new current row, otherwise the first row |
 | Queue row is selected | Play `queueIndex`, update current marker, keep overlay focus valid |
+| Roam label or queue text is measured | Its content group is vertically centered inside the fixed button/row bounds |
 | Back with queue / controls visible | Close queue first; otherwise hide controls; do not leave player early |
 | Async route first load completes | Focus its first actionable content item exactly once |
 | Return to a retained route | Restore prior focus, scroll, pages, and continuation metadata |
+| Return to Home/My/All with successful retained summary data | Render retained entries on the first frame; do not request page 1 again |
 | Back at My root | Replace My with Home; do not background the task |
 | First Back at Home | Show confirmation only; playback and task remain active |
 | Second Back within 2,000 ms | Move task to background without clearing/stopping playback |
@@ -293,8 +360,14 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
   12 seconds, and request a relative seek of about 78 seconds without changing TV focus contracts.
 - Good: render the same centered login form on TV and a smaller landscape device; the TV shows the
   complete form initially, while the smaller viewport scrolls the same tree to the Login button.
+- Good: install `回声台` over the previous signed package and preserve app data because the package
+  name and signer are unchanged while the version code increases.
 - Good: switch A(rev 1) -> B(rev 2) -> A(rev 3), complete requests in reverse order, and display
   only A rev 3 metadata, artwork, and lyrics.
+- Good: switch A -> B, keep A's decoded cover and lyrics only while B is Loading, then replace each
+  independently as B reaches its current terminal state without showing a placeholder frame.
+- Good: a violet subject occupies less area than a pale neutral backdrop; Palette quantization plus
+  scoring selects the representative violet hue and maps it to a dark readable background.
 - Good: focus a retryable player error, press Center, transfer focus to progress, remove the retry
   button, then press Down to reach play/pause.
 - Good: traverse icon-only mode -> previous -> play/pause -> next -> queue using D-pad; every icon
@@ -308,6 +381,10 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 - Base: unavailable server history disables the history icon but keeps its stable 52dp bounds.
 - Base: a paused track changes its state treatment without changing the now-playing pill bounds.
 - Bad: keying artwork only by cover ID; two songs sharing a cover can reuse a failed or stale attempt.
+- Bad: clearing decoded artwork or renderable lyrics merely because the new exact identity first
+  projects `Loading`; this creates a visible placeholder flash even though a stable visual exists.
+- Bad: generating missing-artwork ambience from title/artist hashes; the background is unrelated to
+  the image and can jump to a misleading hue between tracks.
 - Bad: keeping every lazy row requester in an overlay-level map; a deleted/off-screen row leaves a
   requester detached from the focus tree.
 - Bad: drawing `列表循环` and `队列 5` as side-button text; it wastes TV control width and makes
@@ -320,6 +397,10 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 - Bad: rendering login warning and error as separate dynamic rows and clipping Login at 1080p.
 - Bad: adding separate TV/phone login Composables or conditionally removing controls for a phone.
 - Bad: rendering `ON 保持登录`, `OFF HTTPS`, `历史`, or `显示密码` as large text pills.
+- Bad: testing Login with semantics `performClick()` only; it bypasses the physical pointer path
+  that previously failed on TV Material buttons inside the scrollable form.
+- Bad: renaming the launcher label but leaving old branding in loading, login, top bar, banner,
+  baseline-profile selectors, or README; changing `applicationId` during this visual rebrand.
 - Bad: copying a `372 x 74` physical-pixel prototype size as dp at 320 dpi, producing a
   `744 x 148` physical-pixel surface.
 
@@ -336,6 +417,11 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
   text plus focused node.
 - Login touch test: inject a real pointer click on Account, then assert it is focused, exposes text
   editing, and accepts injected text without a D-pad center event.
+- Login command touch test: enter a valid server, account, and password, inject a real pointer click
+  on the enabled Login button, and assert the suspend login callback runs exactly once. Do not use
+  semantics `performClick()` as a substitute for this regression path.
+- Login command D-pad test: from the same valid state, focus Login through the declared graph,
+  press Center, and assert the same callback runs exactly once.
 - Login option test: activate Remember Login through semantics/touch and assert its
   `ToggleableState` changes from On to Off. D-pad traversal must still reach Remember Login and
   HTTPS in the declared order.
@@ -345,6 +431,14 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 - Route state tests: assert first actionable focus after async initial load; return from a child with
   the same focused key/scroll; retained page 2 does not request page 1; a removed key uses the
   deterministic fallback.
+- Retained summary tests: a successful list snapshot prevents another initial request, while an
+  empty failed snapshot is retryable on the next route entry. Home/My/full grids consume the same
+  user-scoped store keys.
+- Artwork ambience tests: a colorful minority swatch beats a large neutral backdrop, black margins
+  do not defeat a valid color, every mapped surface stays dark, and missing artwork returns the one
+  fixed brand neutral.
+- Player visual transition tests: `Loading` retains only prior `Ready`/`Absent` visuals; current
+  `Ready`, `Absent`, and `RetryableFailure` replace immediately. A namespace change retains nothing.
 - Player device test: assert the normal icon-only graph reaches all transports, mode, and queue;
   no visible mode/queue labels exist; content descriptions identify all four modes and the queue;
   four activations complete the mode cycle.
@@ -352,6 +446,8 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
   removed and progress is focused, then assert Down restores play/pause.
 - Queue device test: opening focuses current, selection uses the item's real `queueIndex`, a retained
   row keeps focus across mutation, and deleting the focused row moves focus to the new current row.
+- Queue/roam bounds test: compare unmerged text bounds with the owning semantics bounds and assert
+  the roam label center and queue title/artist group center match their fixed-height containers.
 - Back device test: assert queue -> controls -> player ordering, My -> Home, one Home Back only shows
   the prompt, and the confirmed Back backgrounds the task without stopping MediaSession playback.
 - Roam device test: assert mode and queue semantics are absent, disabled transports are skipped, and
@@ -369,6 +465,9 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
   not obscure required player controls incoherently.
 - Screenshot test at 1920x1080 also covers login base/error and the Home now-playing pill; assert the
   complete Login button is visible and the pill remains `372 x 74` physical pixels at 320 dpi.
+- Brand resource check: search user-facing sources for the retired product name, assert the merged
+  manifest label resolves to `回声台`, visually inspect the double-wave mark at launcher size, and
+  verify the newly versioned signed APK installs with replace over the prior package.
 - Home device test: focus the now-playing pill, press Center once, and assert the player title and
   progress semantics are present. Theme tests keep primary, muted, and status colors readable on
   the root background.
@@ -488,4 +587,40 @@ Button(
     modifier = Modifier.size(52.dp).semantics { contentDescription = "历史" },
     onClick = onHistory,
 ) { HistoryIcon() }
+```
+
+```xml
+<!-- Wrong: launcher text changes while in-app branding and upgrade identity drift. -->
+<string name="app_name">回声台</string>
+<!-- applicationId = "com.example.echostage" -->
+
+<!-- Correct: update all user-facing brand resources but preserve the installed identity. -->
+<string name="app_name">回声台</string>
+<!-- applicationId remains com.fnmusic.tv; versionCode increases for the formal release. -->
+```
+
+```kotlin
+// Wrong: exact-identity Loading is treated as a command to erase every stable visual.
+val artworkBitmap = readyArtwork?.let(::decodeArtwork)
+val lyrics = (presentation.lyrics as? Ready)?.value
+
+// Correct: identity validation remains strict, while the UI retains renderable visuals only
+// during the new current resource's Loading window.
+val displayedLyrics = retainPlayerVisualResource(previousTerminal, presentation.lyrics)
+val decoded by produceState<DecodedPlayerArtwork?>(null, request?.key, request?.bytes) {
+    val current = request ?: return@produceState // keep the existing value while Loading
+    value = withContext(Dispatchers.Default) { decodeAndExtractAmbience(current) }
+}
+```
+
+```kotlin
+// Wrong: padding guesses make a Chinese label look off-center inside a fixed TV button.
+Button(contentPadding = PaddingValues(vertical = 8.dp)) { Text("退出漫游") }
+
+// Correct: preserve the fixed outer target and center an explicit full-size content box.
+Button(contentPadding = PaddingValues(0.dp)) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Text("退出漫游", lineHeight = 14.sp)
+    }
+}
 ```
