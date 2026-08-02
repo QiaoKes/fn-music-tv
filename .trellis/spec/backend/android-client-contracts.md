@@ -182,6 +182,10 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   runtime or discard the active queue. A signed-in namespace binds preferences, artwork budget,
   playback credentials, and restore. Invalid auth durably clears playback before invalidating the
   departing namespace.
+- Explicit app exit is distinct from auth/session clearing: cancel in-flight queue/roam work, pause
+  playback, durably persist the current queue and position with pause intent, stop and release the
+  player/controller, then stop the playback service. Login, preferences, and repository caches are
+  retained for the next launch.
 - Current-track fields are captured from one `currentMediaItem.mediaMetadata` instance. A real item
   transition, or a material change to its ID/title/artist/format/cover, increments
   `presentationRevision`. The complete presentation identity is

@@ -1,5 +1,6 @@
 package com.fnmusic.tv.ui
 
+import androidx.compose.ui.graphics.luminance
 import com.fnmusic.tv.NowPlayingPresentation
 import com.fnmusic.tv.NowPlayingResourceState
 import com.fnmusic.tv.core.model.AppError
@@ -242,13 +243,107 @@ class PlayerUiStateTest {
         )
     }
 
-    @Test fun `poster surface preserves hue while lifting ambience`() {
+    @Test fun `poster surface preserves hue without forcing glare`() {
         val source = androidx.compose.ui.graphics.Color(0.1f, 0.2f, 0.34f)
         val surface = posterSurfaceColor(source)
 
-        assertEquals(0.44f, maxOf(surface.red, surface.green, surface.blue), 0.001f)
         assertTrue(surface.blue > surface.green)
         assertTrue(surface.green > surface.red)
+        assertTrue(perceptualChroma(surface) <= 0.091f)
+        assertTrue(textContrast(surface) >= 4.8f)
+    }
+
+    @Test fun `small hot pink edge accent stays close to the global cool cover`() {
+        val global = listOf(
+            ArtworkPaletteSwatch(0xFFE3DDE8.toInt(), population = 520),
+            ArtworkPaletteSwatch(0xFF6DB9D8.toInt(), population = 220),
+            ArtworkPaletteSwatch(0xFF7C5BA7.toInt(), population = 170),
+            ArtworkPaletteSwatch(0xFFE53483.toInt(), population = 90),
+        )
+        val surface = artworkPosterSurfaceColor(
+            globalSwatches = global,
+            edgeSwatches = listOf(
+                ArtworkPaletteSwatch(0xFFD9D6E0.toInt(), population = 320),
+                ArtworkPaletteSwatch(0xFFE53483.toInt(), population = 80),
+            ),
+        )
+        val globalSurface = artworkPosterSurfaceColor(global, global)
+
+        assertTrue(perceptualColorDistance(surface, globalSurface) < 0.05f)
+        assertTrue(perceptualChroma(surface) <= 0.091f)
+        assertTrue(textContrast(surface) >= 4.8f)
+    }
+
+    @Test fun `small red edge accent cannot turn a dark neutral cover vivid red`() {
+        val surface = artworkPosterSurfaceColor(
+            globalSwatches = listOf(
+                ArtworkPaletteSwatch(0xFF3B3B3D.toInt(), population = 620),
+                ArtworkPaletteSwatch(0xFF858184.toInt(), population = 280),
+                ArtworkPaletteSwatch(0xFFD31943.toInt(), population = 100),
+            ),
+            edgeSwatches = listOf(
+                ArtworkPaletteSwatch(0xFF343436.toInt(), population = 320),
+                ArtworkPaletteSwatch(0xFFD31943.toInt(), population = 80),
+            ),
+        )
+
+        assertTrue(surface.red - minOf(surface.green, surface.blue) < 0.16f)
+        assertTrue(perceptualChroma(surface) < 0.065f)
+        assertTrue(textContrast(surface) >= 4.8f)
+    }
+
+    @Test fun `neutral poster artwork is allowed to remain neutral`() {
+        val neutral = listOf(
+            ArtworkPaletteSwatch(0xFFCACACA.toInt(), population = 560),
+            ArtworkPaletteSwatch(0xFF545454.toInt(), population = 440),
+        )
+        val surface = artworkPosterSurfaceColor(neutral, neutral)
+
+        assertTrue(maxOf(surface.red, surface.green, surface.blue) - minOf(surface.red, surface.green, surface.blue) < 0.01f)
+        assertTrue(perceptualChroma(surface) < 0.005f)
+        assertTrue(textContrast(surface) >= 4.8f)
+    }
+
+    @Test fun `divergent edge color receives less influence than a related edge color`() {
+        val global = listOf(
+            ArtworkPaletteSwatch(0xFF66749A.toInt(), population = 700),
+            ArtworkPaletteSwatch(0xFF272B36.toInt(), population = 300),
+        )
+        val globalSurface = artworkPosterSurfaceColor(global, global)
+        val relatedEdgeSurface = artworkPosterSurfaceColor(
+            global,
+            listOf(
+                ArtworkPaletteSwatch(0xFF7787B2.toInt(), population = 800),
+                ArtworkPaletteSwatch(0xFF303744.toInt(), population = 200),
+            ),
+        )
+        val divergentEdgeSurface = artworkPosterSurfaceColor(
+            global,
+            listOf(ArtworkPaletteSwatch(0xFFE91E63.toInt(), population = 1_000)),
+        )
+
+        assertTrue(
+            perceptualColorDistance(divergentEdgeSurface, globalSurface) <=
+                perceptualColorDistance(relatedEdgeSurface, globalSurface),
+        )
+    }
+
+    @Test fun `globally warm cover remains warm but restrained`() {
+        val surface = artworkPosterSurfaceColor(
+            globalSwatches = listOf(
+                ArtworkPaletteSwatch(0xFFCF202E.toInt(), population = 640),
+                ArtworkPaletteSwatch(0xFF25181A.toInt(), population = 360),
+            ),
+            edgeSwatches = listOf(
+                ArtworkPaletteSwatch(0xFFB62D38.toInt(), population = 720),
+                ArtworkPaletteSwatch(0xFF2E2021.toInt(), population = 280),
+            ),
+        )
+
+        assertTrue(surface.red > surface.green)
+        assertTrue(surface.red > surface.blue)
+        assertTrue(perceptualChroma(surface) <= 0.091f)
+        assertTrue(textContrast(surface) >= 4.8f)
     }
 
     @Test fun `current presentation projects resources only for the complete identity`() {
@@ -403,6 +498,13 @@ class PlayerUiStateTest {
             ),
             window.segments.flatMap { it.playableItems },
         )
+    }
+
+    private fun textContrast(surface: androidx.compose.ui.graphics.Color): Float {
+        val text = androidx.compose.ui.graphics.Color(0xFFF4F2EC)
+        val lighter = maxOf(text.luminance(), surface.luminance())
+        val darker = minOf(text.luminance(), surface.luminance())
+        return (lighter + 0.05f) / (darker + 0.05f)
     }
 
     private fun nowPlayingIdentity() = NowPlayingIdentity(

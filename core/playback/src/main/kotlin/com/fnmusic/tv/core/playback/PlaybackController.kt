@@ -713,7 +713,28 @@ class PlaybackController(
     fun disconnect() {
         controller?.let { checkpointSnapshot(it, force = true) }
         beginStructuralTransition()
+        releaseController()
+    }
+
+    suspend fun stopForAppExit() {
+        beginStructuralTransition()
+        val player = controller
+        try {
+            player?.pause()
+            player?.let(::project)
+            player?.let { structuralSnapshot(it, PlaybackPlayIntent.Pause) }?.awaitCommitted()
+        } finally {
+            try {
+                player?.stop()
+            } finally {
+                releaseController()
+            }
+        }
+    }
+
+    private fun releaseController() {
         ticker?.cancel()
+        ticker = null
         controller?.removeListener(listener)
         controller?.release()
         controller = null
@@ -1152,14 +1173,19 @@ class PlaybackController(
         )
     }
 
-    private fun structuralSnapshot(player: Player): PlaybackTransition? {
+    private fun structuralSnapshot(
+        player: Player,
+        playIntentOverride: PlaybackPlayIntent? = null,
+    ): PlaybackTransition? {
         lastSnapshotAt = System.currentTimeMillis()
         val namespace = currentNamespace ?: return null
         val revision = ++snapshotRevision
         val request = PlaybackSnapshotWriteRequest(
             namespace = namespace,
             revision = revision,
-            payload = PlaybackSnapshotCodec.encode(captureSnapshot(player, revision)),
+            payload = PlaybackSnapshotCodec.encode(
+                captureSnapshot(player, revision, playIntentOverride = playIntentOverride),
+            ),
         )
         return trackTransition(namespace, revision, snapshotPersistence.submitStructural(request))
     }
@@ -1212,6 +1238,7 @@ class PlaybackController(
         player: Player,
         revision: Long,
         includeFrozen: Boolean = true,
+        playIntentOverride: PlaybackPlayIntent? = null,
     ): PlaybackSnapshot = PlaybackSnapshot(
         generation = generation,
         revision = revision,
@@ -1226,7 +1253,8 @@ class PlaybackController(
         roamWindow = roamWindow,
         currentRoamId = currentRoamId,
         frozen = frozenQueueSnapshot.takeIf { includeFrozen },
-        playIntent = if (player.playWhenReady) PlaybackPlayIntent.Play else PlaybackPlayIntent.Pause,
+        playIntent = playIntentOverride
+            ?: if (player.playWhenReady) PlaybackPlayIntent.Play else PlaybackPlayIntent.Pause,
     )
 
     private suspend fun restoreQueue(player: MediaController, encoded: String?, legacyFrozen: String?) {

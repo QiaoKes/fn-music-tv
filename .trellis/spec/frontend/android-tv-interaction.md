@@ -228,6 +228,12 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
   score that combines population, saturation, and useful lightness. A large neutral field must not
   automatically defeat a smaller representative color. Map the result to a bounded dark surface;
   missing artwork uses one fixed brand-neutral fallback, never a title/artist hash color.
+- Poster mode generates one panel color from separate complete-artwork and right-edge palettes. The
+  complete artwork is the anchor; the edge may contribute at most 35 percent and contributes less
+  as its OKLab distance from the global anchor increases. Use population-linear perceptual
+  averaging with no saturation reward or minimum saturation, cap OKLab chroma at 0.09, constrain
+  lightness and preserve at least 4.8:1 primary-text contrast. Fade the artwork into that single
+  panel hue; the far edge may only mix in a small amount of the app background.
 - `Ready` renders the resource; `Absent` is a valid terminal fallback; only
   `RetryableFailure` exposes retry. A retry reloads only failed resources and remains bound to the
   same identity. Missing `coverId` may be enriched from full metadata, which creates a new revision
@@ -296,12 +302,17 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
   the account changes.
 - Home/My player re-entry is a compact music pill with fixed measured bounds, cover/fallback,
   playing state, ellipsized title/artist, and a trailing cue. Focus may change border, surface, and
-  scale without reflow.
+  scale without reflow. Its compact status row disables Android font padding, while the bold title
+  enables it so fallback-script glyphs receive their full line box instead of being squeezed by
+  invisible status-row font metrics.
 - At a root route, Back from My replaces the root with Home. At Home, the first Back shows
-  `再按一次返回桌面`; a second Back within 2,000 ms calls `moveTaskToBack(true)`. It must not clear
-  the queue or stop playback. After the window expires, the next Back is a new first press.
-- Use fixed `sp` sizes and explicit responsive breakpoints, never viewport-scaled text. Archived
-  HTML measurements are physical pixels: at 320 dpi, `372px x 74px` is `186dp x 37dp`.
+  `再按一次退出`; a second Back within 2,000 ms saves a paused playback snapshot, stops playback and
+  its service, removes the task, and exits the process. It must not clear the saved queue, account
+  data, preferences, or caches. After the window expires, the next Back is a new first press.
+- Use fixed `sp` sizes and explicit responsive breakpoints, never viewport-scaled text. The compact
+  now-playing pill is `186dp` wide and `42dp` high at the default font scale. For larger configured
+  font scales, increase only its height by `28dp` per additional `1.0` scale so both font-padded rows
+  remain visible; do not use unconstrained intrinsic height with a fill-sized child.
 
 ## 4. Validation & Error Matrix
 
@@ -325,6 +336,9 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 | New presentation identity/revision | Publish three `Loading` states and cancel the prior token |
 | Late resource result has an old namespace/media/revision/style | Ignore it; current UI state is unchanged |
 | Current artwork is Loading during a track switch | Keep the prior decoded artwork/background until current decode completes |
+| Poster right-edge palette differs sharply from the complete-artwork palette | Reduce edge influence toward zero and keep the panel anchored to the complete artwork |
+| Poster edge palette is empty | Generate the single panel color from the complete-artwork palette |
+| Poster complete-artwork palette is empty | Use the fixed restrained brand-neutral panel fallback |
 | Current lyrics is Loading during a track switch | Keep the prior same-namespace renderable lyric state; do not flash loading/absent copy |
 | Metadata/artwork/lyrics is validly absent | Publish fallback/`Absent`; do not show retry |
 | One or more current resources exhaust retryable failure | Show one retry action bound to the current revision |
@@ -347,7 +361,7 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 | Return to Home/My/All with successful retained summary data | Render retained entries on the first frame; do not request page 1 again |
 | Back at My root | Replace My with Home; do not background the task |
 | First Back at Home | Show confirmation only; playback and task remain active |
-| Second Back within 2,000 ms | Move task to background without clearing/stopping playback |
+| Second Back within 2,000 ms | Save paused state, stop playback/service, remove the task, and exit without clearing account data |
 | Back after more than 2,000 ms | Show confirmation and begin a new window |
 | Long title/artist or compact viewport | Ellipsize independently; icons, controls, and queue rows do not overlap |
 | Current artwork is absent | Keep the same artwork bounds and render the restrained fallback |
@@ -368,6 +382,8 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
   independently as B reaches its current terminal state without showing a placeholder frame.
 - Good: a violet subject occupies less area than a pale neutral backdrop; Palette quantization plus
   scoring selects the representative violet hue and maps it to a dark readable background.
+- Good: a mostly gray poster with a small red edge accent stays neutral or subtly warm; the artwork
+  overlap fades into the same restrained panel hue used by the right half.
 - Good: focus a retryable player error, press Center, transfer focus to progress, remove the retry
   button, then press Down to reach play/pause.
 - Good: traverse icon-only mode -> previous -> play/pause -> next -> queue using D-pad; every icon
@@ -377,6 +393,8 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 - Base: no current queue row focuses the first row; an empty queue owns no row requester.
 - Base: roam has no normal mode/queue nodes and skips a disabled previous action.
 - Base: My Back returns Home; Home Back once only shows the confirmation while music continues.
+- Good: confirm Home exit, durably save the current queue and position as paused, then stop the
+  player/service and remove the app task without clearing login, preferences, or caches.
 - Base: an empty password disables Login while all preceding controls remain reachable.
 - Base: unavailable server history disables the history icon but keeps its stable 52dp bounds.
 - Base: a paused track changes its state treatment without changing the now-playing pill bounds.
@@ -385,6 +403,8 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
   projects `Loading`; this creates a visible placeholder flash even though a stable visual exists.
 - Bad: generating missing-artwork ambience from title/artist hashes; the background is unrelated to
   the image and can jump to a misleading hue between tracks.
+- Bad: selecting one highly saturated poster swatch, forcing a minimum saturation, and painting it
+  across the right half; a small red or pink accent becomes a glaring unrelated panel.
 - Bad: keeping every lazy row requester in an overlay-level map; a deleted/off-screen row leaves a
   requester detached from the focus tree.
 - Bad: drawing `列表循环` and `队列 5` as side-button text; it wastes TV control width and makes
@@ -401,8 +421,8 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
   that previously failed on TV Material buttons inside the scrollable form.
 - Bad: renaming the launcher label but leaving old branding in loading, login, top bar, banner,
   baseline-profile selectors, or README; changing `applicationId` during this visual rebrand.
-- Bad: copying a `372 x 74` physical-pixel prototype size as dp at 320 dpi, producing a
-  `744 x 148` physical-pixel surface.
+- Bad: copying physical-pixel prototype measurements directly as dp at 320 dpi and doubling the
+  intended on-screen surface.
 
 ## 6. Tests Required
 
@@ -437,6 +457,9 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 - Artwork ambience tests: a colorful minority swatch beats a large neutral backdrop, black margins
   do not defeat a valid color, every mapped surface stays dark, and missing artwork returns the one
   fixed brand neutral.
+- Poster panel color tests: a divergent right-edge accent stays closer to the complete-artwork
+  result than a related edge correction, neutral artwork stays neutral, a warm cover remains warm,
+  OKLab chroma is at most 0.09, and primary-text contrast is at least 4.8:1.
 - Player visual transition tests: `Loading` retains only prior `Ready`/`Absent` visuals; current
   `Ready`, `Absent`, and `RetryableFailure` replace immediately. A namespace change retains nothing.
 - Player device test: assert the normal icon-only graph reaches all transports, mode, and queue;
@@ -449,7 +472,8 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 - Queue/roam bounds test: compare unmerged text bounds with the owning semantics bounds and assert
   the roam label center and queue title/artist group center match their fixed-height containers.
 - Back device test: assert queue -> controls -> player ordering, My -> Home, one Home Back only shows
-  the prompt, and the confirmed Back backgrounds the task without stopping MediaSession playback.
+  the prompt, and the confirmed Back saves paused playback, stops the MediaSession service, and
+  removes the task.
 - Roam device test: assert mode and queue semantics are absent, disabled transports are skipped, and
   the remaining graph reaches exit roam.
 - Player progress device test: reveal controls, move Up from play/pause, seek Right, and assert the
@@ -464,7 +488,9 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
   icon/control bounds, readable focus state, current-row visibility, and a right-side queue that does
   not obscure required player controls incoherently.
 - Screenshot test at 1920x1080 also covers login base/error and the Home now-playing pill; assert the
-  complete Login button is visible and the pill remains `372 x 74` physical pixels at 320 dpi.
+  complete Login button is visible, the pill remains `372` physical pixels wide with at least `74`
+  physical pixels of height at 320 dpi, and no lower title glyph is clipped at the configured font
+  scale. Inspect rendered title pixels, not only semantic bounds.
 - Brand resource check: search user-facing sources for the retired product name, assert the merged
   manifest label resolves to `回声台`, visually inspect the double-wave mark at launcher size, and
   verify the newly versioned signed APK installs with replace over the prior package.
@@ -475,6 +501,12 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 ## 7. Wrong vs Correct
 
 ```kotlin
+// Wrong: one vivid accent independently decides the full poster panel.
+val panel = palette.swatches.maxBy(::saturation).rgb
+
+// Correct: the complete artwork anchors one restrained surface; the edge is bounded by agreement.
+val panel = artworkPosterSurfaceColor(globalSwatches, edgeSwatches)
+
 // Wrong: an editable field owns D-pad navigation and the key release reaches the IME.
 BasicTextField(readOnly = false, modifier = Modifier.onPreviewKeyEvent { false })
 
