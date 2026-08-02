@@ -42,6 +42,23 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
 
+      - name: Prepare release notes
+        if: steps.version.outputs.publish == 'true'
+        id: release_notes
+        shell: bash
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/release-notes.md"
+          awk -v version="$VERSION_NAME" '
+            $0 == "## " version || index($0, "## " version " - ") == 1 { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > "$notes"
+          test -s "$notes"
+          echo "path=$notes" >> "$GITHUB_OUTPUT"
+
       - name: Set up JDK 21
         uses: actions/setup-java@v5
         with:
@@ -124,10 +141,12 @@ jobs:
           VERSION_NAME: ${{ steps.version.outputs.name }}
           RELEASE_APK: ${{ steps.artifact.outputs.apk }}
           RELEASE_CHECKSUM: ${{ steps.artifact.outputs.checksum }}
+          RELEASE_NOTES: ${{ steps.release_notes.outputs.path }}
         run: |
           gh release create "$RELEASE_TAG" \
             "$RELEASE_APK#Android 6.0+ universal APK" \
             "$RELEASE_CHECKSUM#SHA-256 checksum" \
             --target "$GITHUB_SHA" \
             --title "回声台 v$VERSION_NAME" \
+            --notes "$(cat "$RELEASE_NOTES")" \
             --generate-notes
