@@ -10,6 +10,7 @@ class ThemeContrastTest {
         assertTrue(contrastRatio(FnColors.Text, FnColors.Background) >= 7.0f)
         assertTrue(contrastRatio(FnColors.Muted, FnColors.Background) >= 4.5f)
         assertTrue(contrastRatio(FnColors.Warning, FnColors.Background) >= 4.5f)
+        assertTrue(contrastRatio(FnColors.Text, FnColors.FocusFill) >= 4.5f)
     }
 
     private fun contrastRatio(foreground: Color, background: Color): Float {

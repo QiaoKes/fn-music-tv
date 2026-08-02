@@ -3,6 +3,7 @@ package com.fnmusic.tv.ui
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.tv.material3.LocalContentColor
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.darkColorScheme
@@ -13,6 +14,7 @@ object FnColors {
     val Text = Color(0xFFF4F2EC)
     val Muted = Color(0xFFA9ADB4)
     val Coral = Color(0xFFFF7657)
+    val FocusFill = lerp(Coral, Surface, 0.42f)
     val Teal = Color(0xFF55C5A5)
     val Warning = Color(0xFFE8C36A)
 }
