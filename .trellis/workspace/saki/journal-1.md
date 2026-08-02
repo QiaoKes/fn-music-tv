@@ -190,3 +190,24 @@ Improved artwork palette extraction, centered player and queue text, retained li
 ### Status
 
 [OK] **Completed**
+
+
+## Session 9: TV library details and roam polish
+
+**Date**: 2026-08-02
+**Task**: TV library details and roam polish
+**Branch**: `main`
+
+### Summary
+
+Redesigned artist, album, and all-tracks detail surfaces; added library roam entry behavior, softened focus colors, removed roam startup focus flicker, and released version 0.1.7 (9).
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0b85f3f` | (see git log) |
+
+### Status
+
+[OK] **Completed**
