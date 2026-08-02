@@ -21,6 +21,13 @@
 feature 设为必需；`sideload` flavor 将 TV/Leanback/touchscreen 都设为非必需，适配不声明
 标准 TV feature 的 Android 投影设备。
 
+## 发布
+
+`version.properties` 是唯一版本源。合并到 `main` 的提交只要修改了该文件，GitHub Actions
+就会使用固定发布证书构建包含 `arm64-v8a`、`armeabi-v7a`、`x86` 与 `x86_64` 的通用
+侧载 APK，校验包名、版本和签名后创建 `v<版本号>` 标签及 GitHub Release。同一版本不会
+被覆盖发布；准备下一版时必须同时递增 `VERSION_CODE` 和 `VERSION_NAME`。
+
 ## M0 外部验证
 
 发布前仍需在开发 NAS 与 Vidda C3 Pro 上完成以下门槛：设备 API/ABI、逻辑 surface、
