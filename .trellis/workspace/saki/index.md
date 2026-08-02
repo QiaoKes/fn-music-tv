@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 9
-- **Last Active**: 2026-08-02
+- **Total Sessions**: 10
+- **Last Active**: 2026-08-03
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~213 | Active |
+| `journal-1.md` | ~237 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 10 | 2026-08-03 | 完成 App 等量重构与 0.1.13 发布准备 | `8c87978`, `ba698fc`, `0286d35`, `08d1650` | `opt-recode-saki` |
 | 9 | 2026-08-02 | TV library details and roam polish | `0b85f3f` | `main` |
 | 8 | 2026-08-02 | Optimize player visuals and loading | `71fdd27` | `main` |
 | 7 | 2026-08-02 | 真实 NAS 播放回归与恢复加固 | `2dbc27a` | `codex/player-cache-playback-ux` |
