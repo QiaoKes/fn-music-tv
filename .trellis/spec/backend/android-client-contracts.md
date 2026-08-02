@@ -22,7 +22,13 @@ SessionRepository.login(
     username: String,
     password: CharArray,
     remember: Boolean,
+    accessCode: CharArray = charArrayOf(),
 )
+ConnectionResolver.resolve(input: String, useHttps: Boolean): ConnectionTarget
+ConnectionResolver.verifyAccessCode(
+    target: ConnectionTarget,
+    accessCode: String,
+): ConnectionAccess
 SessionRepository.restore()
 data class ApiEnvelope<T>(val code: Int, val msg: String = "", val data: T? = null)
 
@@ -72,6 +78,13 @@ data class NowPlayingIdentity(
     val audioFormat: String,
     val coverId: String?,
 )
+data class PlaybackCredentials(
+    val apiBase: String,
+    val rawAuthorization: String,
+    val cacheNamespace: String,
+    val accessCodeHeader: String? = null,
+    val relayMode: Boolean = false,
+)
 ```
 
 Room uses `AppDatabase` version 2 and exports JSON schemas. `MIGRATION_1_2` adds non-null
@@ -85,19 +98,33 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 
 - Accepted server schemes are HTTP and HTTPS only. Reject credentials, queries, fragments, empty
   hosts, and other schemes before any request.
+- Arbitrary user-supplied HTTP NAS origins require cleartext traffic in the application network
+  security config. The login UI must keep the visible unencrypted-connection warning whenever HTTP
+  is selected; never silently downgrade an HTTPS input.
 - Canonical API base ends in `/music/api/v1/`; an explicit scheme also updates the HTTPS toggle.
-- A host or IP without an explicit port uses port `5666`. Explicit ports, including `80`, are
-  preserved. `editableInput` displays only the host when the canonical URL uses port `5666` and
+- A bare HTTP host or IP without an explicit port uses legacy port `5666`; explicit `http://` uses
+  standard port `80`, and HTTPS without a port uses `443`. Explicit ports are always preserved.
+  `editableInput` displays only the host when the canonical URL uses its implicit port and
   the standard music API path; custom ports remain visible.
-- Password enters the repository as `CharArray` and is zero-filled in `finally`. It is never stored.
-  once at the API boundary so UI and repository code continue to handle the user's plain input.
+- A six-or-more-character alphanumeric/underscore/hyphen identifier with no URL punctuation is an
+  FNID. Resolve it through the signed FN Connect lookup, then concurrently probe internal IPv4,
+  public IPv6, public IPv4, and HTTPS relay candidates in that priority order. IP candidates try
+  HTTP before HTTPS; relay requests carry `Cookie: mode=relay`.
+- Probe `/access_code_verify` at the origin before the music API. Encode a supplied security code
+  once as base64 UTF-8 and attach `x-access-code` plus `x-access-source: app` to login,
+  authenticated API, artwork, and Media3 audio requests. Security codes are zero-filled at the UI
+  boundary and, only with remember-login, encrypted by Android Keystore storage.
+- Password enters the repository as `CharArray`, is hashed once at the API boundary, and is
+  zero-filled in `finally`. It is never stored.
 - Password login includes the stable installation `deviceId`. Authenticated API and playback HTTP
   use the returned token as the raw `Authorization` value, without a `Bearer` prefix.
-- `remember=true` stores only the user token in Android Keystore. `remember=false` keeps it in
-  memory.
+- `remember=true` stores the user token and any supplied security code with Android Keystore-backed
+  encryption. `remember=false` keeps both in memory only.
 - API code `120001`/`99999` maps to `Unauthenticated`; `120002` maps to `AccountDisabled`;
   `100005` maps to `NotFound`.
-- API clients keep redirects and OkHttp transport retries disabled. Their network interceptor adds
+- API clients keep automatic redirects and OkHttp transport retries disabled. Relay requests may
+  manually follow at most five redirects while preserving relay, access-code, and auth headers.
+  Their network interceptor adds
   `Connection: close` only to HTTP/1.1 requests so a FNOS nginx idle timeout cannot leave a stale
   pooled socket for the next logical request. HTTP/2 and Media3 audio streaming are unaffected.
 - `SessionRepository.restore()` contains server discovery, `me()`, user mapping, and signed-in state
@@ -170,7 +197,8 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 - Service startup idempotently deletes the legacy `cacheDir/media` tree. If that path is a symbolic
   link, unlink only the entry and never traverse its target. No normal playback path recreates it.
 - `ConfigureAuth` requires non-blank token and namespace and installs the raw `Authorization`
-  header; `ClearAuth` removes request properties. Neither command changes repository caches.
+  header plus optional access-code headers and relay token/mode cookies; `ClearAuth` removes all
+  request properties. Neither command changes repository caches.
 - `SetShuffleOrder` requires a non-negative `SnapshotRevision` and a `MediaIds` list that is the
   same size and exact set as the current Media3 queue, with no blank or duplicate IDs on either
   side. Invalid input returns `SessionError.ERROR_BAD_VALUE` without mutating shuffle order.
@@ -270,7 +298,13 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 | Decoded cache clear races an older load | Cancel the flight and reject its result by generation; memory stays empty |
 | Artwork disk budget exceeded | Evict globally least-recently-used files across all namespaces |
 | Bare host or IP | Add port `5666` and `/music/api/v1/` |
+| HTTPS input without a port | Use port `443`; never append `5666` |
+| Explicit `http://` without a port | Use port `80`; a bare HTTP host retains legacy `5666` |
 | Explicit port, including `80` | Preserve that port |
+| FNID lookup succeeds and one or more candidates respond | Select the first reachable candidate in declared priority order |
+| FNID lookup/probes have no reachable candidate | `AppException(FnIdUnavailable)` |
+| `/access_code_verify` rejects a blank code | `AppException(AccessCodeRequired)` |
+| `/access_code_verify` rejects a supplied code | `AppException(InvalidAccessCode)` |
 | Password login request | Send SHA-256 lowercase hex, never the plain password |
 | ConfigureAuth has blank token/namespace | `SessionError.ERROR_BAD_VALUE` |
 | SetShuffleOrder has negative revision or non-exact IDs | `SessionError.ERROR_BAD_VALUE`; do not apply shuffle |
@@ -303,6 +337,10 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   when revision 5 completes last.
 - Good: `10.0.0.115` normalizes to `http://10.0.0.115:5666/music/api/v1/` and is shown again as
   `10.0.0.115` on the login screen.
+- Good: `https://nas.example.com` and a bare host with HTTPS selected normalize to
+  `https://nas.example.com/music/api/v1/`, using port `443`, while an explicit custom port remains.
+- Good: FNID relay login, cover loading, and audio playback all carry the same access-code headers
+  and `mode=relay`; authenticated requests additionally carry the user token cookie.
 - Good: two HTTP/1.1 API reads each carry `Connection: close`, use distinct connections, and make
   exactly two server requests while `retryOnConnectionFailure` remains disabled.
 - Good: an expired remembered token returns to login, removes that token, and leaves startup alive;
@@ -323,6 +361,8 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   exact service acknowledgement.
 - Bad: using `mediaId` alone as current-presentation identity, combining a new MediaItem ID with old
   aggregate metadata, or converting cancellation into `NetworkUnavailable`.
+- Bad: checking the security code only during login, then omitting it from cover or audio requests;
+  this produces a signed-in UI whose media cannot load.
   token in Room, SharedPreferences, logs, tests, or workflow files.
 - Bad: `fallbackToDestructiveMigration`, an unexported schema version, or a cache row without a
   namespace.
@@ -333,8 +373,11 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 
 ## 6. Tests Required
 
-- `ServerUrlNormalizerTest`: default port `5666`, explicit/custom ports, editable host display,
-  schemes, paths, embedded credentials, query/fragment, and invalid hosts.
+- `ServerUrlNormalizerTest`: legacy bare HTTP port `5666`, standard HTTP/HTTPS ports `80`/`443`,
+  explicit/custom ports, editable host display, schemes, paths, embedded credentials,
+  query/fragment, and invalid hosts.
+- `ConnectionResolverTest`: direct HTTPS normalization, FNID signed lookup and candidate priority,
+  access-code base64/header construction, relay cookies, and required/invalid access-code errors.
   invalid JSON, redirects, retryable status classification, HTTP/1.1 close with distinct connection
   indices, no transport retry, exact request count, maximum three current-resource attempts, `404`
   terminal behavior, and cancellation calling `Call.cancel()`.
@@ -353,7 +396,8 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   `schemaRevision=1`, account isolation, LRU eviction, physical-budget reclaim, version-2 playback
   payload storage, and essential-state-preserving clear.
 - `CacheBudgetTest`: exactly 32/64/128/256 MiB artwork budgets, default 128 MiB, and no audio budget.
-- `PlaybackServiceConfigurationTest`: direct `DefaultHttpDataSource`, 50,000 ms min/max forward
+- `PlaybackServiceConfigurationTest`: direct `DefaultHttpDataSource`, access-code and relay request
+  headers, 50,000 ms min/max forward
   buffer, 15,000 ms back buffer, no retained back-buffer keyframes, safe/idempotent legacy media
   deletion, exact shuffle permutation validation, and explicit unstable-API opt-in/lint.
 - `PlaybackSnapshotCodecTest`/`PlaybackSnapshotWriterTest`: strict version-2 round trip and rejection
@@ -374,6 +418,30 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   same signed artifact with replace enabled before distribution.
 
 ## 7. Wrong vs Correct
+
+```kotlin
+// Wrong: every scheme without an explicit port is forced onto the legacy HTTP music port.
+if (!hasExplicitPort) originBuilder.port(5666)
+
+// Correct: preserve bare-HTTP compatibility while honoring standard URL scheme ports.
+if (!hasExplicitPort) {
+    originBuilder.port(
+        when {
+            scheme == "https" -> 443
+            hasExplicitScheme -> 80
+            else -> 5666
+        },
+    )
+}
+```
+
+```kotlin
+// Wrong: the access code is attached only to the password-login request.
+api.login(headers = accessCodeHeaders)
+
+// Correct: one ConnectionAccess supplies login, API, artwork, and playback request headers.
+val headers = connectionAccess.headers(authToken)
+```
 
 ```kotlin
 // Wrong: hard-coded version values and a Release build that silently uses no stable identity.

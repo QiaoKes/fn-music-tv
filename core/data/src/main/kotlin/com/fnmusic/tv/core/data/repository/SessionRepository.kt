@@ -5,6 +5,9 @@ import com.fnmusic.tv.core.data.api.TrimMusicApi
 import com.fnmusic.tv.core.data.security.SecureTokenStore
 import com.fnmusic.tv.core.data.security.TokenStore
 import com.fnmusic.tv.core.data.server.NormalizedServer
+import com.fnmusic.tv.core.data.server.ConnectionAccess
+import com.fnmusic.tv.core.data.server.ConnectionResolver
+import com.fnmusic.tv.core.data.server.ConnectionTarget
 import com.fnmusic.tv.core.data.server.ServerUrlNormalizer
 import com.fnmusic.tv.core.data.server.ServerUrlResult
 import com.fnmusic.tv.core.model.AppError
@@ -43,6 +46,8 @@ class SessionRepository internal constructor(
     private val _state = MutableStateFlow<SessionState>(SessionState.Loading)
     val state: StateFlow<SessionState> = _state.asStateFlow()
     private var memoryToken: String? = tokenStore.read()
+    private var memoryAccessCode: String? = tokenStore.readAccessCode()
+    private var connectionAccess = ConnectionAccess()
     private var api: TrimMusicApi? = null
     private val authVerification = Mutex()
 
@@ -64,9 +69,10 @@ class SessionRepository internal constructor(
             return
         }
         try {
-            val connected = connect(savedServer, useHttps = false)
+            val connected = connect(savedServer, useHttps = false, memoryAccessCode.orEmpty(), savedRelayMode)
             val user = connected.api.me().toDomain()
             api = connected.api
+            connectionAccess = connected.access
             _state.value = SessionState.SignedIn(connected.server, user)
         } catch (cause: CancellationException) {
             throw cause
@@ -78,17 +84,34 @@ class SessionRepository internal constructor(
         }
     }
 
-    suspend fun login(serverInput: String, useHttps: Boolean, username: String, password: CharArray, remember: Boolean) {
+    suspend fun login(
+        serverInput: String,
+        useHttps: Boolean,
+        username: String,
+        password: CharArray,
+        remember: Boolean,
+        accessCode: CharArray = charArrayOf(),
+    ) {
         try {
-            val connected = connect(serverInput, useHttps)
+            val rawAccessCode = accessCode.concatToString()
+            val connected = connect(serverInput, useHttps, rawAccessCode)
             val result = connected.api.login(username, password.concatToString(), deviceId)
             memoryToken = result.userToken
-            if (remember) tokenStore.write(result.userToken) else tokenStore.clear()
-            recordServer(connected.normalized.persistentApiBase())
+            memoryAccessCode = rawAccessCode.takeIf(String::isNotBlank)
+            if (remember) {
+                tokenStore.write(result.userToken)
+                if (rawAccessCode.isNotBlank()) tokenStore.writeAccessCode(rawAccessCode) else tokenStore.clearAccessCode()
+            } else {
+                tokenStore.clear()
+                tokenStore.clearAccessCode()
+            }
+            recordServer(connected.normalized.persistentApiBase(), connected.access.relayMode)
             api = connected.api
+            connectionAccess = connected.access
             _state.value = SessionState.SignedIn(connected.server, result.user.toDomain())
         } finally {
             password.fill('\u0000')
+            accessCode.fill('\u0000')
         }
     }
 
@@ -111,6 +134,8 @@ class SessionRepository internal constructor(
             currentApi.apiBase(),
             memoryToken ?: throw AppException(AppError.Unauthenticated),
             "${current.server.guid.value}:${current.user.guid.value}",
+            connectionAccess.encodedAccessCode,
+            connectionAccess.relayMode,
         )
     }
 
@@ -161,22 +186,43 @@ class SessionRepository internal constructor(
         _state.value = signedOut(error)
     }
 
-    private suspend fun connect(input: String, useHttps: Boolean): ConnectedServer {
-        val normalized = (ServerUrlNormalizer.normalize(input, useHttps) as? ServerUrlResult.Valid)?.server
-            ?: throw AppException(AppError.Unknown("invalid_server"))
-        val candidate = TrimMusicApi(normalized, clientFactory()) { memoryToken }
-        return ConnectedServer(normalized, candidate.systemConfig().toDomain(), candidate)
+    private suspend fun connect(
+        input: String,
+        useHttps: Boolean,
+        accessCode: String,
+        restoredRelayMode: Boolean? = null,
+    ): ConnectedServer {
+        try {
+            val client = clientFactory()
+            val resolver = ConnectionResolver(client)
+            val target = if (restoredRelayMode == null) {
+                resolver.resolve(input, useHttps)
+            } else {
+                val normalized = (ServerUrlNormalizer.normalize(input, useHttps) as? ServerUrlResult.Valid)?.server
+                    ?: throw AppException(AppError.Unknown("invalid_server"))
+                ConnectionTarget(normalized, restoredRelayMode)
+            }
+            val access = resolver.verifyAccessCode(target, accessCode)
+            val candidate = TrimMusicApi(target.server, client, { memoryToken }, access)
+            return ConnectedServer(target.server, candidate.systemConfig().toDomain(), candidate, access)
+        } catch (cause: java.io.IOException) {
+            throw AppException(AppError.NetworkUnavailable, cause)
+        }
     }
 
     private fun clearToken() {
         memoryToken = null
+        memoryAccessCode = null
+        connectionAccess = ConnectionAccess()
         tokenStore.clear()
+        tokenStore.clearAccessCode()
     }
 
-    private fun recordServer(server: String) {
+    private fun recordServer(server: String, relayMode: Boolean) {
         val updated = (listOf(server) + recentServers).distinct().take(MAX_RECENT_SERVERS)
         preferences.edit().apply {
             putString(SERVER, server)
+            putBoolean(RELAY_MODE, relayMode)
             repeat(MAX_RECENT_SERVERS) { remove("$RECENT_SERVER_PREFIX$it") }
             updated.forEachIndexed { index, value -> putString("$RECENT_SERVER_PREFIX$index", value) }
         }.apply()
@@ -192,12 +238,16 @@ class SessionRepository internal constructor(
         val normalized: NormalizedServer,
         val server: ServerIdentity,
         val api: TrimMusicApi,
+        val access: ConnectionAccess,
     )
 
     private companion object {
         const val SERVER = "server"
         const val DEVICE = "device_id"
+        const val RELAY_MODE = "relay_mode"
         const val RECENT_SERVER_PREFIX = "recent_server_"
         const val MAX_RECENT_SERVERS = 5
     }
+
+    private val savedRelayMode: Boolean get() = preferences.getBoolean(RELAY_MODE, false)
 }

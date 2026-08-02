@@ -39,8 +39,9 @@ class LoginSmokeTest {
                     savedServer = "",
                     recentServers = emptyList(),
                     initialError = null,
-                    onLogin = { _, _, _, password, _ ->
+                    onLogin = { _, _, _, password, _, accessCode ->
                         password.fill('\u0000')
+                        accessCode.fill('\u0000')
                         loginAttempts.incrementAndGet()
                     },
                 )
@@ -59,35 +60,40 @@ class LoginSmokeTest {
     }
 
     private fun enterValidCredentials() {
-        enterField("NAS 地址", "10.0.0.115")
+        enterField("NAS 地址或 FNID", "10.0.0.115")
         enterField("账号", "test")
         enterField("密码", "a123456")
     }
 
     @Test fun loginSurfaceRendersRequiredControls() {
         composeRule.waitUntil(timeoutMillis = 5_000) {
-            composeRule.onAllNodes(hasText("NAS 地址")).fetchSemanticsNodes().isNotEmpty()
+            composeRule.onAllNodes(hasText("NAS 地址或 FNID")).fetchSemanticsNodes().isNotEmpty()
         }
-        composeRule.onNodeWithText("NAS 地址").fetchSemanticsNode()
+        composeRule.onNodeWithText("NAS 地址或 FNID").fetchSemanticsNode()
         composeRule.onNodeWithText("账号").fetchSemanticsNode()
         composeRule.onNodeWithText("密码").fetchSemanticsNode()
         composeRule.onNodeWithContentDescription("登录").fetchSemanticsNode()
         composeRule.onNodeWithContentDescription("账号").fetchSemanticsNode()
         composeRule.onNodeWithContentDescription("密码").fetchSemanticsNode()
+        composeRule.onNodeWithContentDescription("安全码（未启用可留空）").fetchSemanticsNode()
         composeRule.onNodeWithContentDescription("保持登录").fetchSemanticsNode()
         composeRule.onNodeWithContentDescription("HTTPS").fetchSemanticsNode()
     }
 
     @Test fun loginDpadFocusGraphTraversesEveryControl() {
         composeRule.waitUntil(timeoutMillis = 5_000) {
-            composeRule.onAllNodes(hasText("NAS 地址")).fetchSemanticsNodes().isNotEmpty()
+            composeRule.onAllNodes(hasText("NAS 地址或 FNID")).fetchSemanticsNodes().isNotEmpty()
         }
-        val server = composeRule.onNodeWithContentDescription("NAS 地址")
+        val server = composeRule.onNodeWithContentDescription("NAS 地址或 FNID")
         val username = composeRule.onNodeWithContentDescription("账号")
         val password = composeRule.onNodeWithContentDescription("密码")
 
         server.assertIsFocused()
         server.performKeyInput { pressKey(Key.DirectionDown) }
+        username.assertIsFocused()
+        username.performKeyInput { pressKey(Key.DirectionRight) }
+        composeRule.onNodeWithContentDescription("安全码（未启用可留空）").assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionLeft) }
         username.assertIsFocused()
         username.performKeyInput { pressKey(Key.DirectionDown) }
         password.assertIsFocused()
@@ -102,9 +108,9 @@ class LoginSmokeTest {
 
     @Test fun serverEditingReturnsToBrowseBeforeDpadNavigation() {
         composeRule.waitUntil(timeoutMillis = 5_000) {
-            composeRule.onAllNodes(hasText("NAS 地址")).fetchSemanticsNodes().isNotEmpty()
+            composeRule.onAllNodes(hasText("NAS 地址或 FNID")).fetchSemanticsNodes().isNotEmpty()
         }
-        val server = composeRule.onNodeWithContentDescription("NAS 地址")
+        val server = composeRule.onNodeWithContentDescription("NAS 地址或 FNID")
         val username = composeRule.onNodeWithContentDescription("账号")
 
         server.assertIsFocused().performKeyInput { pressKey(Key.DirectionCenter) }

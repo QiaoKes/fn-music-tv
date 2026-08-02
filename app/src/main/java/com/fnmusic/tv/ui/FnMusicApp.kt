@@ -74,10 +74,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.foundation.verticalScroll
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.tv.material3.Button
 import androidx.tv.material3.Text
 import com.fnmusic.tv.AppContainer
 import com.fnmusic.tv.core.data.repository.SessionState
+import com.fnmusic.tv.core.data.server.ConnectionResolver
 import com.fnmusic.tv.core.data.server.ServerUrlNormalizer
 import com.fnmusic.tv.core.data.server.ServerUrlResult
 import com.fnmusic.tv.core.model.AppError
@@ -101,8 +101,8 @@ fun FnMusicApp(container: AppContainer, onExitApplication: () -> Unit) {
                         savedServer = current.savedServer,
                         recentServers = current.recentServers,
                         initialError = current.error,
-                        onLogin = { server, https, user, password, remember ->
-                            container.sessionRepository.login(server, https, user, password, remember)
+                        onLogin = { server, https, user, password, remember, accessCode ->
+                            container.sessionRepository.login(server, https, user, password, remember, accessCode)
                         },
                     )
                 }
@@ -128,12 +128,13 @@ internal fun LoginScreen(
     savedServer: String,
     recentServers: List<String>,
     initialError: AppError?,
-    onLogin: suspend (String, Boolean, String, CharArray, Boolean) -> Unit,
+    onLogin: suspend (String, Boolean, String, CharArray, Boolean, CharArray) -> Unit,
 ) {
     val initialServer = remember(savedServer) { ServerUrlNormalizer.editableInput(savedServer, false) }
     var server by remember(initialServer) { mutableStateOf(initialServer.address) }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var accessCode by remember { mutableStateOf("") }
     var rememberLogin by remember { mutableStateOf(true) }
     var https by remember(initialServer) { mutableStateOf(initialServer.useHttps) }
     var passwordVisible by remember { mutableStateOf(false) }
@@ -147,10 +148,12 @@ internal fun LoginScreen(
     val usernameFocus = remember { FocusRequester() }
     val passwordFocus = remember { FocusRequester() }
     val visibilityFocus = remember { FocusRequester() }
+    val accessCodeFocus = remember { FocusRequester() }
     val rememberFocus = remember { FocusRequester() }
     val httpsFocus = remember { FocusRequester() }
     val loginFocus = remember { FocusRequester() }
-    val validServer = ServerUrlNormalizer.normalize(server, https) is ServerUrlResult.Valid
+    val fnIdInput = ConnectionResolver.isFnId(server)
+    val validServer = fnIdInput || ServerUrlNormalizer.normalize(server, https) is ServerUrlResult.Valid
     val canSubmit = !submitting && validServer && username.isNotBlank() && password.isNotBlank()
     LaunchedEffect(Unit) { if (savedServer.isBlank()) serverFocus.requestFocus() else usernameFocus.requestFocus() }
 
@@ -179,7 +182,7 @@ internal fun LoginScreen(
                         server = edited.address
                         https = edited.useHttps
                     },
-                    label = "NAS 地址",
+                    label = "NAS 地址或 FNID",
                     modifier = Modifier.weight(1f),
                     downFocus = usernameFocus,
                     rightFocus = historyFocus.takeIf { recentServers.isNotEmpty() },
@@ -202,17 +205,37 @@ internal fun LoginScreen(
                     HistoryIcon(enabled = recentServers.isNotEmpty())
                 }
             }
-            TvTextField(
-                username,
-                { username = it },
-                "账号",
-                upFocus = serverFocus,
-                downFocus = passwordFocus,
-                inputModifier = Modifier.focusRequester(usernameFocus).focusProperties {
-                    up = serverFocus
-                    down = passwordFocus
-                },
-            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                TvTextField(
+                    value = username,
+                    onValueChange = { username = it },
+                    label = "账号",
+                    modifier = Modifier.weight(1f),
+                    upFocus = serverFocus,
+                    downFocus = passwordFocus,
+                    rightFocus = accessCodeFocus,
+                    inputModifier = Modifier.focusRequester(usernameFocus).focusProperties {
+                        up = serverFocus
+                        right = accessCodeFocus
+                        down = passwordFocus
+                    },
+                )
+                TvTextField(
+                    value = accessCode,
+                    onValueChange = { accessCode = it },
+                    label = "安全码（未启用可留空）",
+                    modifier = Modifier.weight(1f),
+                    upFocus = serverFocus,
+                    downFocus = passwordFocus,
+                    leftFocus = usernameFocus,
+                    inputModifier = Modifier.focusRequester(accessCodeFocus).focusProperties {
+                        up = serverFocus
+                        left = usernameFocus
+                        down = passwordFocus
+                    },
+                    visualTransformation = PasswordVisualTransformation(),
+                )
+            }
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -273,7 +296,11 @@ internal fun LoginScreen(
             }
             val statusMessage = error?.let {
                 if (loginAttempted && it == AppError.Unauthenticated) "账号或密码错误" else errorMessage(it)
-            } ?: if (!https) "局域网 HTTP 连接未加密" else ""
+            } ?: when {
+                fnIdInput -> "FNID 将自动选择可用连接"
+                !https -> "局域网 HTTP 连接未加密"
+                else -> ""
+            }
             Text(
                 statusMessage,
                 color = if (error == null) FnColors.Warning else FnColors.Coral,
@@ -288,9 +315,13 @@ internal fun LoginScreen(
                     loginAttempted = true
                     error = null
                     val submittedPassword = password.toCharArray()
+                    val submittedAccessCode = accessCode.toCharArray()
                     password = ""
+                    accessCode = ""
                     scope.launch {
-                        runCatching { onLogin(server, https, username, submittedPassword, rememberLogin) }
+                        runCatching {
+                            onLogin(server, https, username, submittedPassword, rememberLogin, submittedAccessCode)
+                        }
                             .onFailure { error = (it as? AppException)?.error ?: AppError.Unknown() }
                         submitting = false
                     }
@@ -464,7 +495,20 @@ private fun TvTextField(
 
     Column(
         modifier.onPreviewKeyEvent { event ->
-            if (editing) return@onPreviewKeyEvent false
+            if (editing) {
+                val target = when (event.key) {
+                    Key.DirectionUp -> upFocus
+                    Key.DirectionDown -> downFocus
+                    Key.DirectionLeft -> leftFocus
+                    Key.DirectionRight -> rightFocus
+                    else -> null
+                }
+                if (!imeVisible && event.type == KeyEventType.KeyDown && target != null) {
+                    finishEditing(target)
+                    return@onPreviewKeyEvent true
+                }
+                return@onPreviewKeyEvent false
+            }
             if (event.key == Key.Enter || event.key == Key.DirectionCenter) {
                 if (event.type == KeyEventType.KeyDown) editing = true
                 return@onPreviewKeyEvent true
@@ -781,7 +825,10 @@ private fun PlayerScreen(
 private fun errorMessage(error: AppError): String = when (error) {
     AppError.Unauthenticated -> "登录已失效，请重新登录"
     AppError.AccountDisabled -> "账号已禁用"
+    AppError.AccessCodeRequired -> "此服务器需要安全码"
+    AppError.InvalidAccessCode -> "安全码错误"
     AppError.NetworkUnavailable -> "无法连接 NAS，请检查地址和网络"
     AppError.NotFound -> "服务器接口不可用"
+    AppError.FnIdUnavailable -> "FNID 无可用连接，请检查输入或网络"
     else -> "连接失败，请重试"
 }

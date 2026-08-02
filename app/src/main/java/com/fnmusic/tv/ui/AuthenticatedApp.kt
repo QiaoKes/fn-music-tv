@@ -19,7 +19,10 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -44,8 +47,10 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -83,6 +88,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -100,7 +106,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.palette.graphics.Palette
-import androidx.tv.material3.Button
+import androidx.tv.material3.Button as TvMaterialButton
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Border
 import androidx.tv.material3.LocalContentColor
@@ -3588,7 +3594,7 @@ internal fun PlayerControlOverlay(
     var progressFocused by remember { mutableStateOf(false) }
     val fraction = playerProgressFraction(positionMs, durationMs)
     Column(
-        modifier.fillMaxWidth().height(94.dp)
+        modifier.fillMaxWidth().height(124.dp)
             .background(
                 Brush.verticalGradient(
                     0f to Color.Transparent,
@@ -3599,7 +3605,7 @@ internal fun PlayerControlOverlay(
             .padding(start = 47.dp, top = 8.dp, end = 47.dp, bottom = 8.dp),
     ) {
         Canvas(
-            Modifier.fillMaxWidth().height(14.dp)
+            Modifier.fillMaxWidth().height(48.dp)
                 .focusProperties {
                     up = if (statusRetryAvailable) statusRetryFocus else FocusRequester.Cancel
                     down = playFocus
@@ -3763,44 +3769,68 @@ private fun PlayerSideActionButton(
     onFocus: () -> Unit,
     onClick: () -> Unit,
 ) {
-    Button(
-        onClick = onClick,
-        modifier = modifier.size(width = if (glyph == null) 104.dp else 36.dp, height = 29.dp)
-            .focusProperties {
-                up = upFocus
-                down = FocusRequester.Cancel
-                left = leftFocus ?: FocusRequester.Cancel
-                right = rightFocus ?: FocusRequester.Cancel
-            }
-            .focusRequester(focusRequester)
-            .onFocusChanged { if (it.isFocused) onFocus() }
-            .semantics { contentDescription = description },
-        scale = ButtonDefaults.scale(focusedScale = 1.1f),
-        colors = ButtonDefaults.colors(
-            containerColor = if (emphasized) Color(0x66382A27) else Color.Transparent,
-            contentColor = if (emphasized) Color(0xFFF0D9D1) else FnColors.Text,
-            focusedContainerColor = FnColors.Coral,
-            focusedContentColor = FnColors.Background,
-            pressedContainerColor = FnColors.Coral,
-            pressedContentColor = FnColors.Background,
-        ),
-        contentPadding = PaddingValues(0.dp),
+    val buttonWidth = if (glyph == null) 104.dp else 36.dp
+    Box(
+        modifier
+            .size(width = if (glyph == null) 104.dp else 48.dp, height = 48.dp)
+            .playerTouchTarget(onClick = onClick),
+        contentAlignment = Alignment.Center,
     ) {
-        if (glyph != null) {
-            PlayerSideActionIcon(glyph)
-        } else {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    label.orEmpty(),
-                    fontSize = 11.sp,
-                    lineHeight = 14.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+        TvMaterialButton(
+            onClick = onClick,
+            modifier = Modifier.size(width = buttonWidth, height = 29.dp)
+                .focusProperties {
+                    up = upFocus
+                    down = FocusRequester.Cancel
+                    left = leftFocus ?: FocusRequester.Cancel
+                    right = rightFocus ?: FocusRequester.Cancel
+                }
+                .focusRequester(focusRequester)
+                .onFocusChanged { if (it.isFocused) onFocus() }
+                .semantics { contentDescription = description },
+            scale = ButtonDefaults.scale(focusedScale = 1.1f),
+            colors = ButtonDefaults.colors(
+                containerColor = if (emphasized) Color(0x66382A27) else Color.Transparent,
+                contentColor = if (emphasized) Color(0xFFF0D9D1) else FnColors.Text,
+                focusedContainerColor = FnColors.Coral,
+                focusedContentColor = FnColors.Background,
+                pressedContainerColor = FnColors.Coral,
+                pressedContentColor = FnColors.Background,
+            ),
+            contentPadding = PaddingValues(0.dp),
+        ) {
+            if (glyph != null) {
+                PlayerSideActionIcon(glyph)
+            } else {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        label.orEmpty(),
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }
 }
+
+private fun Modifier.playerTouchTarget(enabled: Boolean = true, onClick: () -> Unit): Modifier =
+    if (!enabled) {
+        this
+    } else {
+        pointerInput(onClick) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                down.consume()
+                waitForUpOrCancellation(pass = PointerEventPass.Initial)?.let { up ->
+                    up.consume()
+                    onClick()
+                }
+            }
+        }
+    }
 
 private enum class PlayerSideActionGlyph { RepeatAll, Shuffle, RepeatOne, Sequence, Queue }
 
@@ -3909,62 +3939,67 @@ private fun PlayerTransportButton(
     onFocus: () -> Unit,
     onClick: () -> Unit,
 ) {
-    Button(
-        enabled = enabled,
-        onClick = onClick,
-        modifier = Modifier.size(if (emphasized) 36.dp else 29.dp)
-            .focusProperties {
-                up = upFocus
-                down = FocusRequester.Cancel
-                left = leftFocus ?: FocusRequester.Cancel
-                right = rightFocus ?: FocusRequester.Cancel
-            }
-            .focusRequester(focusRequester)
-            .onFocusChanged { if (it.isFocused) onFocus() }
-            .semantics { contentDescription = description },
-        scale = ButtonDefaults.scale(focusedScale = 1.1f),
-        colors = ButtonDefaults.colors(
-            containerColor = if (emphasized) FnColors.Text else Color.Transparent,
-            contentColor = if (emphasized) FnColors.Background else FnColors.Text,
-            focusedContainerColor = FnColors.Coral,
-            focusedContentColor = FnColors.Background,
-            pressedContainerColor = FnColors.Coral,
-            pressedContentColor = FnColors.Background,
-            disabledContainerColor = Color.Transparent,
-            disabledContentColor = FnColors.Muted.copy(alpha = 0.45f),
-        ),
-        contentPadding = PaddingValues(0.dp),
+    Box(
+        Modifier.size(48.dp).playerTouchTarget(enabled, onClick),
+        contentAlignment = Alignment.Center,
     ) {
-        val iconColor = LocalContentColor.current
-        Canvas(Modifier.size(if (emphasized) 18.dp else 14.dp)) {
-            val stroke = 2.5.dp.toPx()
-            when (glyph) {
-                TransportGlyph.Play -> {
-                    val path = Path().apply {
-                        moveTo(size.width * 0.28f, size.height * 0.16f)
-                        lineTo(size.width * 0.78f, size.height * 0.5f)
-                        lineTo(size.width * 0.28f, size.height * 0.84f)
-                        close()
-                    }
-                    drawPath(path, iconColor)
+        TvMaterialButton(
+            enabled = enabled,
+            onClick = onClick,
+            modifier = Modifier.size(if (emphasized) 36.dp else 29.dp)
+                .focusProperties {
+                    up = upFocus
+                    down = FocusRequester.Cancel
+                    left = leftFocus ?: FocusRequester.Cancel
+                    right = rightFocus ?: FocusRequester.Cancel
                 }
-                TransportGlyph.Pause -> {
-                    drawRoundRect(iconColor, topLeft = androidx.compose.ui.geometry.Offset(size.width * 0.23f, size.height * 0.16f), size = androidx.compose.ui.geometry.Size(size.width * 0.18f, size.height * 0.68f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(stroke))
-                    drawRoundRect(iconColor, topLeft = androidx.compose.ui.geometry.Offset(size.width * 0.59f, size.height * 0.16f), size = androidx.compose.ui.geometry.Size(size.width * 0.18f, size.height * 0.68f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(stroke))
-                }
-                TransportGlyph.Previous, TransportGlyph.Next -> {
-                    val reverse = glyph == TransportGlyph.Previous
-                    val near = if (reverse) size.width * 0.68f else size.width * 0.32f
-                    val far = if (reverse) size.width * 0.3f else size.width * 0.7f
-                    val path = Path().apply {
-                        moveTo(near, size.height * 0.18f)
-                        lineTo(far, size.height * 0.5f)
-                        lineTo(near, size.height * 0.82f)
-                        close()
+                .focusRequester(focusRequester)
+                .onFocusChanged { if (it.isFocused) onFocus() }
+                .semantics { contentDescription = description },
+            scale = ButtonDefaults.scale(focusedScale = 1.1f),
+            colors = ButtonDefaults.colors(
+                containerColor = if (emphasized) FnColors.Text else Color.Transparent,
+                contentColor = if (emphasized) FnColors.Background else FnColors.Text,
+                focusedContainerColor = FnColors.Coral,
+                focusedContentColor = FnColors.Background,
+                pressedContainerColor = FnColors.Coral,
+                pressedContentColor = FnColors.Background,
+                disabledContainerColor = Color.Transparent,
+                disabledContentColor = FnColors.Muted.copy(alpha = 0.45f),
+            ),
+            contentPadding = PaddingValues(0.dp),
+        ) {
+            val iconColor = LocalContentColor.current
+            Canvas(Modifier.size(if (emphasized) 18.dp else 14.dp)) {
+                val stroke = 2.5.dp.toPx()
+                when (glyph) {
+                    TransportGlyph.Play -> {
+                        val path = Path().apply {
+                            moveTo(size.width * 0.28f, size.height * 0.16f)
+                            lineTo(size.width * 0.78f, size.height * 0.5f)
+                            lineTo(size.width * 0.28f, size.height * 0.84f)
+                            close()
+                        }
+                        drawPath(path, iconColor)
                     }
-                    drawPath(path, iconColor)
-                    val lineX = if (reverse) size.width * 0.24f else size.width * 0.76f
-                    drawLine(iconColor, androidx.compose.ui.geometry.Offset(lineX, size.height * 0.18f), androidx.compose.ui.geometry.Offset(lineX, size.height * 0.82f), stroke, StrokeCap.Round)
+                    TransportGlyph.Pause -> {
+                        drawRoundRect(iconColor, topLeft = androidx.compose.ui.geometry.Offset(size.width * 0.23f, size.height * 0.16f), size = androidx.compose.ui.geometry.Size(size.width * 0.18f, size.height * 0.68f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(stroke))
+                        drawRoundRect(iconColor, topLeft = androidx.compose.ui.geometry.Offset(size.width * 0.59f, size.height * 0.16f), size = androidx.compose.ui.geometry.Size(size.width * 0.18f, size.height * 0.68f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(stroke))
+                    }
+                    TransportGlyph.Previous, TransportGlyph.Next -> {
+                        val reverse = glyph == TransportGlyph.Previous
+                        val near = if (reverse) size.width * 0.68f else size.width * 0.32f
+                        val far = if (reverse) size.width * 0.3f else size.width * 0.7f
+                        val path = Path().apply {
+                            moveTo(near, size.height * 0.18f)
+                            lineTo(far, size.height * 0.5f)
+                            lineTo(near, size.height * 0.82f)
+                            close()
+                        }
+                        drawPath(path, iconColor)
+                        val lineX = if (reverse) size.width * 0.24f else size.width * 0.76f
+                        drawLine(iconColor, androidx.compose.ui.geometry.Offset(lineX, size.height * 0.18f), androidx.compose.ui.geometry.Offset(lineX, size.height * 0.82f), stroke, StrokeCap.Round)
+                    }
                 }
             }
         }
@@ -4303,7 +4338,13 @@ private fun SettingsScreen(container: AppContainer) {
         yield()
         runCatching { coverStyleFocus.requestFocus() }
     }
-    Column(Modifier.fillMaxSize().padding(72.dp, 50.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(72.dp, 50.dp),
+        verticalArrangement = Arrangement.spacedBy(24.dp),
+    ) {
         Text("设置", fontSize = 42.sp, fontWeight = FontWeight.Bold)
         Text("播放界面", fontSize = 25.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {

@@ -10,9 +10,13 @@ class ServerUrlNormalizerTest {
         assertEquals("http://192.0.2.10:5666/music/api/v1/", ip.server.apiBase.toString())
         val host = ServerUrlNormalizer.normalize("nas.local:5666", false) as ServerUrlResult.Valid
         assertEquals("http://nas.local:5666/music/api/v1/", host.server.apiBase.toString())
+        val explicitWeb = ServerUrlNormalizer.normalize("http://nas.local", true) as ServerUrlResult.Valid
+        assertEquals("http://nas.local/music/api/v1/", explicitWeb.server.apiBase.toString())
         val web = ServerUrlNormalizer.normalize("https://nas.local/music/", false) as ServerUrlResult.Valid
-        assertEquals("https://nas.local:5666/music/api/v1/", web.server.apiBase.toString())
+        assertEquals("https://nas.local/music/api/v1/", web.server.apiBase.toString())
         assertTrue(web.server.useHttps)
+        val toggledHttps = ServerUrlNormalizer.normalize("nas.dqchub.top", true) as ServerUrlResult.Valid
+        assertEquals("https://nas.dqchub.top/music/api/v1/", toggledHttps.server.apiBase.toString())
         val customPort = ServerUrlNormalizer.normalize("nas.local:7443", true) as ServerUrlResult.Valid
         assertEquals("https://nas.local:7443/music/api/v1/", customPort.server.apiBase.toString())
         val explicitHttpPort = ServerUrlNormalizer.normalize("http://nas.local:80", false) as ServerUrlResult.Valid
@@ -57,6 +61,10 @@ class ServerUrlNormalizerTest {
         assertEquals(
             EditableServerInput("nas.local", true),
             ServerUrlNormalizer.editableInput("https://nas.local/music/api/v1/", false),
+        )
+        assertEquals(
+            EditableServerInput("nas.local", true),
+            ServerUrlNormalizer.editableInput("https://nas.local:443/music/api/v1/", false),
         )
         assertEquals(
             EditableServerInput("nas.local", false),

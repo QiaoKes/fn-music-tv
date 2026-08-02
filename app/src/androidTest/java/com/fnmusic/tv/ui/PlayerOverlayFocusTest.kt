@@ -290,7 +290,7 @@ class PlayerOverlayFocusTest {
         play.assertIsFocused()
     }
 
-    @Test fun modeClickResetsTheInteractionTimer() {
+    @Test fun touchingModeResetsTheInteractionTimer() {
         val interactions = AtomicInteger(0)
         composeRule.setContent {
             FnMusicTheme {
@@ -306,7 +306,7 @@ class PlayerOverlayFocusTest {
         composeRule.onNodeWithContentDescription("播放模式：列表循环").assertIsFocused()
         composeRule.runOnIdle { interactions.set(0) }
         composeRule.onNodeWithContentDescription("播放模式：列表循环")
-            .performKeyInput { pressKey(Key.DirectionCenter) }
+            .performTouchInput { click() }
         composeRule.runOnIdle { assertTrue(interactions.get() > 0) }
     }
 
@@ -328,6 +328,29 @@ class PlayerOverlayFocusTest {
             .performTouchInput { click() }
 
         composeRule.runOnIdle { assertTrue(seekDelta.get() in 77_000L..79_000L) }
+    }
+
+    @Test fun touchingTransportInvokesTheExistingPlaybackCallback() {
+        val playPauseCalls = AtomicInteger(0)
+        composeRule.setContent {
+            FnMusicTheme {
+                PlayerControlHarness(
+                    roaming = false,
+                    onCycleMode = {},
+                    onExitRoam = {},
+                    onInteraction = {},
+                    onPlayPause = { playPauseCalls.incrementAndGet() },
+                )
+            }
+        }
+
+        val playBounds = composeRule.onNodeWithContentDescription("播放")
+            .fetchSemanticsNode().boundsInRoot
+        composeRule.onRoot().performTouchInput {
+            click(androidx.compose.ui.geometry.Offset(playBounds.right + 4f, playBounds.center.y))
+        }
+
+        composeRule.runOnIdle { assertEquals(1, playPauseCalls.get()) }
     }
 
     @Test fun elapsedAndDurationLabelsSitBelowTheProgressBar() {
@@ -528,6 +551,7 @@ private fun PlayerControlHarness(
     onExitRoam: () -> Unit,
     onInteraction: () -> Unit,
     onSeek: (Long) -> Unit = {},
+    onPlayPause: () -> Unit = {},
 ) {
     val progressFocus = remember { FocusRequester() }
     val previousFocus = remember { FocusRequester() }
@@ -564,7 +588,7 @@ private fun PlayerControlHarness(
             onInteraction = onInteraction,
             onSeek = onSeek,
             onPrevious = {},
-            onPlayPause = {},
+            onPlayPause = onPlayPause,
             onNext = {},
             onCyclePlayMode = {
                 playMode = playMode.next()
