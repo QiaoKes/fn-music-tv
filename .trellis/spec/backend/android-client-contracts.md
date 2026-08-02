@@ -238,6 +238,10 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 - CI uses JDK 21 and SDK 36, runs all app/library unit tests and lint variants, builds sideload/store
   debug and unsigned release APKs, compiles both app Android-test APKs, and builds both benchmark
   variants. Application and verification artifacts are retained for 14 days.
+- A `version.properties` change on `main` starts the formal release workflow. It restores the fixed
+  signing identity from protected repository secrets, runs the release gates, verifies package,
+  version, signer, and all four supported ABIs, then creates the immutable `v<VERSION_NAME>` tag and
+  GitHub Release with exactly one universal sideload APK plus its SHA-256 checksum.
 - `baselineprofile` resolves the app's `distribution` dimension to `sideload`.
 
 ## 4. Validation & Error Matrix
