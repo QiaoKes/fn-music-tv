@@ -26,23 +26,22 @@
 
 ## 界面预览
 
-<!--
-请使用当前版本重新截图后，将图片放入 docs/screenshots/，再取消下列内容的注释：
-
 | 首页 | 我的音乐 |
 | --- | --- |
-| ![首页](docs/screenshots/home.png) | ![我的音乐](docs/screenshots/library.png) |
+| ![首页](docs/images/hub.png) | ![我的音乐](docs/images/me.png) |
 
-| 歌曲列表 | CD 播放器 |
+| 歌手歌曲 | 歌手歌专辑 |
 | --- | --- |
-| ![歌曲列表](docs/screenshots/all-tracks.png) | ![CD 播放器](docs/screenshots/player-cd.png) |
+| ![歌手歌曲](docs/images/artist.png) | ![歌手专辑](docs/images/album.png) |
 
-| 大海报播放器 | 播放控制与队列 |
+| 播放控制 | CD 播放器 |
 | --- | --- |
-| ![大海报播放器](docs/screenshots/player-poster.png) | ![播放控制与队列](docs/screenshots/player-controls.png) |
--->
+| ![播放控制](docs/images/full-screen-play-bar.png) | ![CD 播放器](docs/images/full-screen-cd.png) |
 
-截图待补充。
+<p align="center"><strong>大海报播放器</strong></p>
+<p align="center">
+  <img src="docs/images/full-screen-play.png" alt="大海报播放器">
+</p>
 
 ## 安装
 
