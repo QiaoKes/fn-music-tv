@@ -159,12 +159,28 @@ data class RetainedListSnapshot<T>(
     val error: AppError? = null,
     val initialLoadCompleted: Boolean = false,
 )
+
+LibraryRouteStateLifecycle.update(stack: List<LibraryRoute>): List<LibraryRoute>
+LibraryRetainedStateStore.remove(keys: Set<String>)
 ```
 
 The persistent player re-entry surface remains:
 
 ```kotlin
 NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
+```
+
+Authenticated surfaces receive explicit dependencies and actions rather than the application
+container itself:
+
+```kotlin
+interface AuthenticatedAppDependencies
+interface AuthenticatedAppActions {
+    suspend fun verifyCurrentSession()
+    suspend fun switchAccount()
+    suspend fun clearAllEvictableCaches()
+    suspend fun shutdownForExit()
+}
 ```
 
 ## 3. Contracts
@@ -242,6 +258,9 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
   the previous same-namespace `Ready`/`Absent` lyric visual and previous decoded artwork. Replace it
   immediately when the current resource reaches `Ready`, `Absent`, or `RetryableFailure`; never feed
   a retained visual back into the presenter or treat it as current resource state.
+- The visual-continuity owner is remembered at the authenticated-session route host, not inside the
+  player route. Leaving the player and selecting another song must reuse the same continuity state;
+  disposing and recreating `ImmersivePlayer` cannot clear the last renderable lyric or decoded artwork.
 - Decoded artwork keeps its complete `PlayerArtworkKey`. A new ready byte array is decoded and
   quantized on `Dispatchers.Default`; the old decoded artwork and ambience remain visible until that
   work completes. A current terminal artwork state clears the old visual immediately.
@@ -297,12 +316,19 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 - On a queue mutation, preserve the previously focused row when its key remains. If it disappears,
   scroll to and focus the new current row; if there is no current row, focus the first row. An empty
   queue has no row focus target.
+- Programmatic `scrollToItem` and `requestFocus` run only when the overlay first opens or the focused
+  row key disappears. A normal D-pad focus move updates the remembered key but must not launch an
+  outer scroll/focus effect; `LazyColumn` owns its incremental focus-following scroll.
 - Back handling is layered: close queue -> hide controls -> leave player. Closing the queue restores
   focus to its queue icon. Returning focus is requested only after the disappearing overlay has
   left composition.
 
 ### Async routes, return behavior, and layout
 
+- Authenticated page composition must depend on `AuthenticatedAppDependencies` and invoke
+  cross-module operations through `AuthenticatedAppActions`. Do not expose `AppContainer` to UI or
+  duplicate logout/cache/playback ordering in a page callback. Playback error display may use the
+  typed failure's display name, but behavior must use its typed properties.
 - The user-facing product name is `回声台`. `@string/app_name`, loading/login/top-bar text,
   launcher label, baseline-profile selectors, README title, launcher icon, and TV banner must move
   together. The icon uses a charcoal background, a coral primary waveform, and a warm-white echo
@@ -321,6 +347,12 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
   retained list. A successful initial load is not repeated on route re-entry. An empty failed list
   may retry on the next entry. The store is keyed by the signed-in user and must be discarded when
   the account changes.
+- Saveable and retained state have different ownership. Session summaries shared by Home/My/full
+  lists remain until the account changes. Playlist, artist, and album detail data belongs to its
+  dynamic route key. After a route key is completely absent from the new back stack and the new
+  route has composed, call both `SaveableStateHolder.removeState(storageKey)` and
+  `LibraryRetainedStateStore.remove(retainedStateKeys)`. Do not release a key that still exists
+  lower in the stack; reopening a fully removed detail creates fresh state.
 - Remote artwork keeps fixed bounds and renders a deterministic placeholder until its exact
   `CoverVariant` bitmap is ready. Initialize Compose state from the application decoded cache so a
   page return does not flash the placeholder. Artist/album lockup focus may prefetch the exact Grid
@@ -384,6 +416,9 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 | Back with queue / controls visible | Close queue first; otherwise hide controls; do not leave player early |
 | Async route first load completes | Focus its first actionable content item exactly once |
 | Return to a retained route | Restore prior focus, scroll, pages, and continuation metadata |
+| Dynamic detail remains anywhere in the back stack | Keep its saveable and retained state |
+| Dynamic detail key fully leaves the back stack | Remove its saveable state and detail-owned retained entries after composition |
+| Session summary route leaves the back stack | Remove route-local saveable state but keep shared retained summary data |
 | Return to Home/My/All with successful retained summary data | Render retained entries on the first frame; do not request page 1 again |
 | Exact artwork bitmap is already decoded | Render it on the first composition without an empty/placeholder frame |
 | Detail Grid artwork is still loading | Keep the fixed deterministic placeholder; never substitute the Compact list bitmap |
@@ -394,11 +429,15 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 | Back after more than 2,000 ms | Show confirmation and begin a new window |
 | Long title/artist or compact viewport | Ellipsize independently; icons, controls, and queue rows do not overlap |
 | Current artwork is absent | Keep the same artwork bounds and render the restrained fallback |
+| Typed playback failure requires session verification | Invoke the authenticated action once for that failure value |
+| Switch account is activated | Delegate once to the authenticated action; the page does not sequence repositories |
 
 ## 5. Good / Base / Bad Cases
 
 - Good: enter an async album page, wait for data, and focus its first album; open a child and Back,
   then restore the exact album and horizontal scroll rather than returning to index zero.
+- Good: visit 100 distinct album details and Back from each; only active-stack detail entries remain,
+  while the Home/My shared summaries stay warm for the signed-in session.
 - Good: focus an album card, keep its Compact image unchanged, then open detail and immediately use
   the independently prefetched Grid bitmap when available.
 - Good: tap Account, type with a phone IME, tap the center of a three-minute progress track from
@@ -456,6 +495,8 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
   baseline-profile selectors, or README; changing `applicationId` during this visual rebrand.
 - Bad: copying physical-pixel prototype measurements directly as dp at 320 dpi and doubling the
   intended on-screen surface.
+- Bad: retaining every historical detail key for the whole session, removing state while the route
+  key still exists lower in the stack, or clearing shared Home/My summaries when a detail pops.
 
 ## 6. Tests Required
 
@@ -483,7 +524,8 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
   icon-only, field text is vertically centered, and no legacy left-side branding/equalizer remains.
 - Route state tests: assert first actionable focus after async initial load; return from a child with
   the same focused key/scroll; retained page 2 does not request page 1; a removed key uses the
-  deterministic fallback.
+  deterministic fallback; a route key still in the stack is retained; a fully removed detail drops
+  both its saveable and detail-owned retained entries while session summaries remain.
 - Retained summary tests: a successful list snapshot prevents another initial request, while an
   empty failed snapshot is retryable on the next route entry. Home/My/full grids consume the same
   user-scoped store keys.
@@ -533,6 +575,8 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 - Home device test: focus the now-playing pill, press Center once, and assert the player title and
   progress semantics are present. Theme tests keep primary, muted, and status colors readable on
   the root background.
+- Architecture check: authenticated UI sources contain no `AppContainer`, `BAD_HTTP_STATUS`, or
+  direct logout/verification call; coordinator order tests cover switch-account and invalid auth.
 
 ## 7. Wrong vs Correct
 
@@ -700,4 +744,25 @@ Button(contentPadding = PaddingValues(0.dp)) {
         Text("退出漫游", lineHeight = 14.sp)
     }
 }
+```
+
+```kotlin
+// Wrong: historical details remain in both state stores forever.
+stack = stack.dropLast(1)
+
+// Correct: after the new stack composes, release only keys absent from the complete stack.
+routeLifecycle.update(stack).forEach { removedRoute ->
+    stateHolder.removeState(removedRoute.storageKey())
+    retainedStore.remove(removedRoute.retainedStateKeys())
+}
+```
+
+```kotlin
+// Wrong: a page reaches through a service locator and owns a cross-module transaction.
+container.playbackController.clearSessionDurably()
+container.musicRepository.clearLocalNamespace(true)
+container.sessionRepository.logout()
+
+// Correct: the page emits one explicit action; the coordinator owns ordering and cancellation.
+dependencies.authenticatedActions.switchAccount()
 ```
