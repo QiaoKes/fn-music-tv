@@ -1,0 +1,33 @@
+{
+  "id": "app-performance-refactor",
+  "name": "app-performance-refactor",
+  "title": "App 等量重构与性能优化",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "saki",
+  "assignee": "saki",
+  "createdAt": "2026-08-03",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "08-03-compatibility-quality-baseline",
+    "08-03-playback-state-performance",
+    "08-03-route-state-lifecycle",
+    "08-03-cache-startup-performance",
+    "08-03-architecture-decoupling",
+    "08-03-source-cleanup-performance-validation"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
