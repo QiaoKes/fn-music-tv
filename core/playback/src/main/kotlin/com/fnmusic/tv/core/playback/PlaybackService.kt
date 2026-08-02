@@ -59,6 +59,16 @@ internal fun createPlaybackHttpDataSourceFactory(): DefaultHttpDataSource.Factor
         .setAllowCrossProtocolRedirects(false)
         .setUserAgent("FnMusicTV/0.1")
 
+internal fun playbackRequestHeaders(token: String, accessCode: String?, relayMode: Boolean): Map<String, String> =
+    buildMap {
+        put("Authorization", token)
+        if (relayMode) put("Cookie", "music-token=$token; mode=relay")
+        if (!accessCode.isNullOrBlank()) {
+            put("x-access-code", accessCode)
+            put("x-access-source", "app")
+        }
+    }
+
 internal fun deleteLegacyAudioCache(cacheDirectory: File): Boolean = runCatching {
     val canonicalCacheDirectory = cacheDirectory.canonicalFile
     val legacyCache = File(canonicalCacheDirectory, LEGACY_AUDIO_CACHE_DIRECTORY)
@@ -124,7 +134,10 @@ class PlaybackService : MediaSessionService() {
                         if (token.isNullOrBlank() || namespace.isNullOrBlank()) {
                             return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
                         }
-                        httpFactory.setDefaultRequestProperties(mapOf("Authorization" to token))
+                        val relayMode = args.getBoolean(PlaybackCommands.RelayMode, false)
+                        val accessCode = args.getString(PlaybackCommands.AccessCode)
+                        val headers = playbackRequestHeaders(token, accessCode, relayMode)
+                        httpFactory.setDefaultRequestProperties(headers)
                         return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                     }
                     if (customCommand.customAction == PlaybackCommands.SetShuffleOrder) {

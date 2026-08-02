@@ -82,6 +82,8 @@ data class PlaybackCredentials(
     val apiBase: String,
     val rawAuthorization: String,
     val cacheNamespace: String,
+    val accessCodeHeader: String? = null,
+    val relayMode: Boolean = false,
 )
 
 data class PlaybackTrack(

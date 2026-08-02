@@ -7,6 +7,8 @@ internal object PlaybackCommands {
     const val ClearAuth = "com.fnmusic.tv.CLEAR_AUTH"
     const val SetShuffleOrder = "com.fnmusic.tv.SET_SHUFFLE_ORDER"
     const val Token = "raw_authorization"
+    const val AccessCode = "access_code"
+    const val RelayMode = "relay_mode"
     const val CacheNamespace = "cache_namespace"
     const val MediaIds = "media_ids"
     const val SnapshotRevision = "snapshot_revision"

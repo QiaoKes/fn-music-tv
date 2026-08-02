@@ -1,6 +1,7 @@
 package com.fnmusic.tv.core.data.api
 
 import com.fnmusic.tv.core.data.server.NormalizedServer
+import com.fnmusic.tv.core.data.server.ConnectionAccess
 import com.fnmusic.tv.core.data.repository.withCurrentResourceRetry
 import com.fnmusic.tv.core.model.AppError
 import com.fnmusic.tv.core.model.AppException
@@ -79,6 +80,40 @@ class TrimMusicApiTest {
         assertEquals("POST", request.method)
         assertEquals("/music/api/v1/user/logout", request.target)
         assertEquals("raw-user-token", request.headers["Authorization"])
+    }
+
+    @Test fun `relay and access code headers cover login and authenticated requests`() = runBlocking {
+        server.enqueue(
+            MockResponse.Builder()
+                .body(
+                    """{"code":0,"msg":"success","data":{"userToken":"token","user":{"guid":"user-1","name":"test"}}}""",
+                )
+                .build(),
+        )
+        server.enqueue(
+            MockResponse.Builder()
+                .body("""{"code":0,"msg":"success","data":{"guid":"user-1","name":"test"}}""")
+                .build(),
+        )
+        val origin = server.url("/")
+        val api = TrimMusicApi(
+            server = NormalizedServer(origin, origin.resolve("music/api/v1/")!!, useHttps = false),
+            client = TrimMusicApi.client(),
+            token = { "raw-user-token" },
+            access = ConnectionAccess(encodedAccessCode = "encoded-code", relayMode = true),
+        )
+
+        api.login("test", "password", "device-1")
+        api.me()
+
+        val login = server.takeRequest()
+        assertEquals("mode=relay", login.headers["Cookie"])
+        assertEquals("encoded-code", login.headers["x-access-code"])
+        assertEquals("app", login.headers["x-access-source"])
+        val me = server.takeRequest()
+        assertEquals("raw-user-token", me.headers["Authorization"])
+        assertEquals("music-token=raw-user-token; mode=relay", me.headers["Cookie"])
+        assertEquals("encoded-code", me.headers["x-access-code"])
     }
 
     @Test fun `playlist tracks use bounded paging and raw authorization`() = runBlocking {

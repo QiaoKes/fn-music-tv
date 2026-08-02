@@ -27,6 +27,16 @@ class PlaybackServiceConfigurationTest {
     }
 
     @Test
+    fun `playback request headers include access code and relay cookies`() {
+        val headers = playbackRequestHeaders("token", "encoded-code", relayMode = true)
+
+        assertEquals("token", headers["Authorization"])
+        assertEquals("music-token=token; mode=relay", headers["Cookie"])
+        assertEquals("encoded-code", headers["x-access-code"])
+        assertEquals("app", headers["x-access-source"])
+    }
+
+    @Test
     fun `playback keeps fifty seconds forward and fifteen seconds back`() {
         val loadControl = createPlaybackLoadControl()
 
