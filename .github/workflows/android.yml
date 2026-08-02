@@ -147,6 +147,6 @@ jobs:
             "$RELEASE_APK#Android 6.0+ universal APK" \
             "$RELEASE_CHECKSUM#SHA-256 checksum" \
             --target "$GITHUB_SHA" \
-            --title "回声台 v$VERSION_NAME" \
+            --title "$RELEASE_TAG" \
             --notes "$(cat "$RELEASE_NOTES")" \
             --generate-notes
