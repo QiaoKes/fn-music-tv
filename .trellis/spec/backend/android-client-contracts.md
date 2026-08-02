@@ -66,7 +66,13 @@ PlaybackCommands.SetShuffleOrderCommand
 
 PlaybackSnapshotCodec.Version == 2
 PlaybackTransition.awaitCommitted()
+PlaybackController.state: StateFlow<PlaybackUiState>
+PlaybackController.progress: StateFlow<PlaybackProgressState>
+interface PlaybackSessionStore
+interface PlaybackContentSource
+data class PlaybackFailure(val code: Int, val displayName: String)
 version.properties: VERSION_CODE=<monotonic Int>, VERSION_NAME=<display SemVer>
+app/src/main/baseline-prof.txt
 release signing alias: fn-music-tv
 release signing default files: ~/.config/fn-music-tv/release.jks, release.password
 data class NowPlayingIdentity(
@@ -120,6 +126,10 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   use the returned token as the raw `Authorization` value, without a `Bearer` prefix.
 - `remember=true` stores the user token and any supplied security code with Android Keystore-backed
   encryption. `remember=false` keeps both in memory only.
+- `SessionRepository` construction performs no token or access-code decryption. `restore()` loads
+  remembered credentials once on `Dispatchers.IO` while `SessionState.Loading` remains published;
+  login and invalidation then own the in-memory values. Application/container construction must
+  never call Android Keystore reads on the main thread.
 - API code `120001`/`99999` maps to `Unauthenticated`; `120002` maps to `AccountDisabled`;
   `100005` maps to `NotFound`.
 - API clients keep automatic redirects and OkHttp transport retries disabled. Relay requests may
@@ -156,6 +166,11 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 - Essential account state and evictable page/lyric/index payloads remain separate. Evict payloads
   at a 24 MiB target and cap physical DB + WAL + SHM at 32 MiB. Namespace clearing checkpoints WAL
   and runs incremental vacuum; cache-only clearing preserves `account_state`.
+- `LocalStore` performs one exact payload/physical audit when its process-local estimate is absent.
+  Subsequent writes add the encoded payload size conservatively and trigger another exact audit only
+  when the 24 MiB payload estimate, 32 MiB physical estimate, 4 MiB unverified growth, or 32-write
+  interval is reached. `wal_checkpoint(TRUNCATE)` plus incremental vacuum runs only after actual
+  eviction or explicit clear, never after an ordinary under-budget save.
 - Every Room schema change increments the database version, exports its JSON schema, supplies a
   lossless migration, and preserves queue/settings/account namespaces. Destructive migration is
   forbidden.
@@ -179,6 +194,13 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   32/64/128/256 MiB budget; the default is 128 MiB.
 - Artwork initialization purges unattributable legacy flat files and stale temporary files, then
   enforces the global budget off the main thread. Changing account must not multiply the budget.
+- Artwork initialization or a missing ledger performs one full-tree calibration. Thereafter every
+  successful replace/delete adjusts a `diskMutex`-owned byte ledger; an under-budget write must not
+  walk or sort the tree. Full LRU scan/sort remains required when the ledger crosses the selected
+  budget, when the user applies a lower budget, or when error recovery invalidates the ledger.
+- A network or validated Room fallback DTO decoded during one repository call is reused for
+  persistence metadata and the returned domain projection. Process-cache hits from another call
+  still decode their serialized payload once; serialized cache and Room formats do not change.
 - `invalidateNamespace(namespace, includeEssential=false)` clears that namespace's response memory,
   in-flight work, artwork memory/files, and evictable Room rows while preserving its account row.
   Logout/auth invalidation may pass `includeEssential=true`. `clearAllEvictableCaches()` invalidates
@@ -189,6 +211,15 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 
 ### Playback, snapshot, and current presentation
 
+- `core:playback` owns the narrow `PlaybackSessionStore` and `PlaybackContentSource` capability
+  contracts and must not depend on `core:data`. The app composition root adapts `LocalStore` and
+  `MusicRepository`; adapters are stateless parameter mappings and cannot add cache semantics.
+- Media3 failures are projected as `PlaybackFailure`. Session verification is selected by the
+  numeric Media3 error code (`ERROR_CODE_IO_BAD_HTTP_STATUS`), never by parsing `errorCodeName`.
+- `AuthenticatedAppCoordinator` is the sole owner of signed-in session orchestration: namespace
+  binding, invalid-auth playback/cache cleanup, account switch, cache clear, and explicit exit.
+  Account switch preserves playback clear -> artwork clear -> local namespace clear -> logout;
+  the existing best-effort playback-clear boundary remains non-blocking for later cleanup.
 - `PlaybackService` constructs `DefaultMediaSourceFactory` directly from an authenticated
   `DefaultHttpDataSource.Factory`. Persistent audio cache classes (`SimpleCache`,
   `CacheDataSource`, cache-key factories, download stores) are forbidden.
@@ -217,7 +248,15 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   `PlaybackTransition.awaitCommitted()`; navigation, normal-queue replacement, roam exit, and
   logout/auth invalidation wait at their durability boundaries. A late position checkpoint is
   skipped and cannot overwrite a newer queue, mode, roam transition, or clear. A decoded legacy
-  snapshot is normalized and immediately rewritten as version 2.
+  snapshot is normalized and immediately rewritten as version 2. Capture Media3 state on its
+  owning thread, but encode the immutable snapshot on `Dispatchers.Default` inside that same FIFO
+  writer; encoding jobs outside the writer may reorder structural revisions and are forbidden.
+- The 250 ms ticker updates only `PlaybackController.progress`. `PlaybackController.state` owns
+  stable playback metadata, presentation identity, queue/mode, errors, and transport availability,
+  and must not emit for a position-only tick. Queue projection is reused for progress, playback
+  state, and error-only events; rebuild it only for timeline, media-item-transition, or media-
+  metadata events. Player lyrics and progress controls observe the progress flow in their own
+  composition scopes so Home/My/root and the queue overlay are not invalidated at 4 Hz.
 - Playback controller and `NowPlayingPresenter` are application-scoped and start exactly once from
   `Application.onCreate`; Activity recreation or returning to desktop must not create a second
   runtime or discard the active queue. A signed-in namespace binds preferences, artwork budget,
@@ -231,6 +270,11 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   transition, or a material change to its ID/title/artist/format/cover, increments
   `presentationRevision`. The complete presentation identity is
   `(namespace, mediaId, presentationRevision)`; `mediaId` alone is not sufficient.
+- `MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED` does not unconditionally force another
+  presentation revision: queue installation and metadata enrichment already project their material
+  field change, and the following Media3 callback must not cancel and restart the same artwork/lyric
+  requests. Seek/auto/repeat transitions still force a revision; playlist changes rely on the
+  captured presentation-key comparison and only publish when those fields actually differ.
 - A new presentation identity immediately publishes resource `Loading` states and cancels the old
   presentation/retry jobs. Metadata, artwork, and lyrics may complete independently, but only the
   current identity token and player style may update UI state. Late A -> B -> A completions from an
@@ -252,6 +296,11 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 
 ### CI
 
+- The application applies the Baseline Profile consumer plugin and connects the
+  `:baselineprofile` generator through its `baselineProfile` dependency. Release builds keep
+  automatic device generation disabled, consume the checked-in app profile, and merge rules for
+  the application's own startup, session, authenticated UI, and playback classes. The generator's
+  login/home/collection/player journeys remain the source for device-based refreshes.
 - `version.properties` is the single source of application versioning. The first formal package is
   `VERSION_NAME=0.1.0` with monotonic `VERSION_CODE=2`, which is higher than the previous development
   package. Every later distributable must increase `VERSION_CODE`; display version changes alone do
@@ -297,6 +346,12 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 | Only another artwork variant is decoded | Treat as a miss; keep the stable placeholder and load the exact variant |
 | Decoded cache clear races an older load | Cancel the flight and reject its result by generation; memory stays empty |
 | Artwork disk budget exceeded | Evict globally least-recently-used files across all namespaces |
+| Artwork write remains within the tracked budget | Adjust the byte ledger; do not walk or sort the cache tree |
+| Artwork process starts or ledger is invalidated | Calibrate from disk once, purge legacy/temp files, then enforce the budget |
+| Ordinary Room cache write stays below all audit thresholds | Update conservative estimates; do not run SUM/checkpoint/vacuum |
+| Room estimate crosses a target or audit interval | Run exact payload/physical queries; evict if needed and reclaim only after removal |
+| SessionRepository is constructed | Publish Loading with zero secure-store reads |
+| Session restore needs remembered credentials | Read token and access code once on `Dispatchers.IO` |
 | Bare host or IP | Add port `5666` and `/music/api/v1/` |
 | HTTPS input without a port | Use port `443`; never append `5666` |
 | Explicit `http://` without a port | Use port `80`; a bare HTTP host retains legacy `5666` |
@@ -312,9 +367,16 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 | Shuffle acknowledgement is stale or no longer matches the queue | Controller ignores it and applies the declared fallback mode |
 | Unknown MediaSession command | `SessionError.ERROR_NOT_SUPPORTED` |
 | Playback snapshot violates any version-2 invariant | Reject the entire snapshot; do not partially restore |
+| Position-only ticker update | Publish `PlaybackProgressState`; do not emit `PlaybackUiState` or rebuild queue items |
+| Timeline, media-item, or media-metadata event | Rebuild the bounded queue projection and publish stable playback state |
+| Captured snapshot is ready to persist | Enqueue it first, then encode on the writer's background dispatcher in FIFO order |
+| Media3 failure is `ERROR_CODE_IO_BAD_HTTP_STATUS` | Publish typed failure and ask the coordinator to verify the session |
+| Other Media3 failure | Publish typed failure for display; do not verify the session |
+| Account switch is activated | Clear playback, artwork, local namespace, then logout through the coordinator |
 | Legacy `cacheDir/media` exists at service startup | Delete safely; continue with direct HTTP and do not recreate it |
 | DB payload or physical budget exceeded | LRU batch eviction, checkpoint, incremental vacuum |
 | CI produces no APK | Artifact upload fails the job |
+| Release merged art profile contains no `Lcom/fnmusic/tv` rule | Profile wiring is incomplete; fail performance acceptance |
 | Local Release packaging has no fixed key/password | Fail before packaging; never silently emit a formal unsigned APK |
 | CI explicitly sets `allowUnsignedRelease=true` | Permit unsigned Release compile/package verification only |
 | Later formal version does not increase `VERSION_CODE` | Android may reject the update; release is invalid |
@@ -331,8 +393,18 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 - Good: two Grid consumers for one cover join one decode; a Compact hit neither satisfies nor
   visually substitutes for the Grid request.
 - Good: a 128 MiB artwork setting caps the total under `cacheDir/artwork`, not 128 MiB per account.
+- Good: after startup calibration, 100 small artwork writes below 128 MiB update the ledger without
+  100 full directory sorts; crossing the limit performs one global LRU prune.
+- Good: small Room payload saves reuse the exact baseline estimate; an actual over-budget audit
+  evicts rows, performs one reclaim pass, and preserves account state.
 - Good: `SetShuffleOrder([c, a, b], revision=12)` against canonical `[a, b, c]` succeeds and echoes
   exactly `[c, a, b]` plus revision `12` before the controller activates shuffle.
+- Good: four position ticks update only the progress flow; Home/My do not recompose and the existing
+  queue list instance is retained until a structural player event occurs.
+- Good: revisions 12 and 13 enter the snapshot writer in order, are encoded on its background
+  dispatcher, and remain separated by the same structural durability barrier.
+- Good: playback compiles against model and Media3 capabilities only; the app adapts data
+  repositories and a typed bad-HTTP-status failure triggers coordinator-owned verification.
 - Good: a switch A(revision 5) -> B(6) -> A(7) accepts only revision 7 metadata/artwork/lyrics even
   when revision 5 completes last.
 - Good: `10.0.0.115` normalizes to `http://10.0.0.115:5666/music/api/v1/` and is shown again as
@@ -353,12 +425,18 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   final attempt; a `404` makes exactly one request and becomes `Absent`.
 - Bad: a response/artwork key without namespace, an unbounded map, a permanent negative cache entry,
   or allowing a cleared flight to write back.
+- Bad: sorting every artwork file after each successful write, running three SUM queries plus vacuum
+  after every Room upsert, or decrypting Keystore values in `AppContainer` construction.
 - Bad: keying decoded artwork by cover ID alone, retaining decoded entries across an account change,
   or launching independent decode jobs from every composable.
 - Bad: `SimpleCache`, `CacheDataSource`, a Media3 `ClearCache` command, or any normal playback write
   below `cacheDir/media`.
+- Bad: `core:playback` importing a concrete data repository, UI parsing `errorCodeName`, or a page
+  independently coordinating playback, cache, namespace, and logout operations.
 - Bad: accepting a shuffle list that merely has the same length, or activating shuffle before an
   exact service acknowledgement.
+- Bad: copying position into the aggregate `PlaybackUiState` every 250 ms, rebuilding 250 queue rows
+  for `EVENT_IS_PLAYING_CHANGED`, or launching independent snapshot encoding jobs before FIFO entry.
 - Bad: using `mediaId` alone as current-presentation identity, combining a new MediaItem ID with old
   aggregate metadata, or converting cancellation into `NetworkUnavailable`.
 - Bad: checking the security code only during login, then omitting it from cover or audio requests;
@@ -383,18 +461,19 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   terminal behavior, and cancellation calling `Call.cancel()`.
 - `SessionRepositoryTest`: remembered-token `401` and `120002` are contained and clear credentials;
   transient restore failure is contained but retains credentials; cancellation is rethrown without
-  publishing an error state.
+  publishing an error state; construction performs zero secure reads and restore reads off main.
 - `SerializedResponseCacheTest`: 8 MiB-equivalent byte LRU ordering, namespace isolation, same-key
   single-flight, one-of-many waiter cancellation, final-waiter upstream cancellation, failed fetch
   retryability, namespace/global generations, and late-persist rejection.
 - `ArtworkCacheTest`/`ArtworkValidationTest`: namespaced memory/disk hits, same-key single-flight,
   waiter cancellation, invalid-byte rejection, atomic temporary replacement, hit touching, global
-  cross-namespace budget, legacy/temp cleanup, and clear-versus-late-write races.
+  cross-namespace budget, startup ledger calibration, no rescan for under-budget writes,
+  legacy/temp cleanup, and clear-versus-late-write races.
 - `ArtworkBitmapCacheTest`: exact-variant isolation, same-key decode single-flight, exact Grid
   prefetch, and decoded clear-versus-late-write rejection.
 - `AppDatabaseMigrationTest`/`LocalStoreTest`: version-1 to version-2 preservation,
   `schemaRevision=1`, account isolation, LRU eviction, physical-budget reclaim, version-2 playback
-  payload storage, and essential-state-preserving clear.
+  payload storage, estimated-audit reuse without reclaim, and essential-state-preserving clear.
 - `CacheBudgetTest`: exactly 32/64/128/256 MiB artwork budgets, default 128 MiB, and no audio budget.
 - `PlaybackServiceConfigurationTest`: direct `DefaultHttpDataSource`, access-code and relay request
   headers, 50,000 ms min/max forward
@@ -402,13 +481,14 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   deletion, exact shuffle permutation validation, and explicit unstable-API opt-in/lint.
 - `PlaybackSnapshotCodecTest`/`PlaybackSnapshotWriterTest`: strict version-2 round trip and rejection
   matrix, exact queue page segments, 250-item/unique-ID bounds, roam/frozen constraints, legacy
-  rewrite, FIFO structural acknowledgements, stale-checkpoint skipping, clear ordering, and
-  cancellation propagation.
+  rewrite, FIFO structural acknowledgements, background encoding dispatcher, stale-checkpoint
+  skipping, clear ordering, and cancellation propagation.
 - `PlaybackProjectionTest`/`PlaybackTransitionGuardsTest`: one-MediaItem field capture, monotonic
-  presentation revision, exact shuffle acknowledgement guards, and committed structural
-  transitions.
+  presentation revision, progress-only queue reuse, structural event classification, exact shuffle
+  acknowledgement guards, typed failure classification, and committed structural transitions.
 - `AppContainerRuntimeTest`/`NowPlayingPresenterTest`: one application runtime, durable invalid-auth
-  clear, `(namespace, mediaId, presentationRevision)` identity, A -> B -> A stale rejection,
+  clear, account-switch cleanup order, `(namespace, mediaId, presentationRevision)` identity,
+  A -> B -> A stale rejection,
   missing-cover enrichment, selective manual retry, terminal `404`/empty fallback, and cancellation
   without a retryable UI error.
 - CI-equivalent local gate: all named workflow Gradle tasks must succeed and output four app APKs,
@@ -416,6 +496,9 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 - Formal APK verification: `aapt dump badging` asserts package `com.fnmusic.tv`, the managed version
   name/code, and `apksigner verify --print-certs` asserts one fixed signer. Install and reinstall the
   same signed artifact with replace enabled before distribution.
+- Baseline profile check: both Sideload and Store merged art profiles contain app-owned
+  `Lcom/fnmusic/tv` rules; on a connected target, run profile collection and the startup/frame
+  macrobenchmark before replacing the checked-in profile.
 
 ## 7. Wrong vs Correct
 
@@ -516,6 +599,27 @@ responses.getOrFetch(ResponseCacheKey(namespace, "index", "album:$guid")) {
 ```
 
 ```kotlin
+// Wrong: every hot-path write rescans/sorts disk and reclaims Room pages.
+writeArtwork(bytes); pruneDisk(budget)
+dao.upsertPage(page); enforceBudgetWithSumsAndVacuum()
+
+// Correct: update conservative ledgers and run exact expensive work only at a boundary.
+trackedDiskBytes = trackedDiskBytes?.plus(newBytes - replacedBytes)
+if (trackedDiskBytes > budget) trackedDiskBytes = pruneDisk(budget)
+recordEvictableWrite(page.payload) // audits only when an estimate/interval requires it
+```
+
+```kotlin
+// Wrong: Application construction decrypts secure values on the main thread.
+private var token = tokenStore.read()
+
+// Correct: Loading remains visible while restore performs one IO-bound credential load.
+val (token, accessCode) = withContext(Dispatchers.IO) {
+    tokenStore.read() to tokenStore.readAccessCode()
+}
+```
+
+```kotlin
 // Wrong: every composition starts empty and Compact is reused as a blurry Grid preview.
 produceState<Bitmap?>(null, coverId) { value = decode(repository.artwork(coverId, Compact)) }
 
@@ -546,6 +650,35 @@ if (requestedIds.size == player.mediaItemCount) player.shuffleModeEnabled = true
 val indices = validatedShuffleIndices(canonicalIds, requestedIds)
     ?: return SessionResult(SessionError.ERROR_BAD_VALUE)
 player.setShuffleOrder(DefaultShuffleOrder(indices, revision))
+```
+
+```kotlin
+// Wrong: a position tick invalidates every playback consumer and rebuilds the queue.
+_state.value = projectEverything(player)
+
+// Correct: high-frequency progress is isolated; stable projection classifies structural events.
+_progress.value = PlaybackProgressState(player.currentPosition, player.duration)
+if (shouldRebuildPlaybackQueue(timelineChanged, itemTransition, metadataChanged)) {
+    projectedQueueItems = projectQueue(player)
+}
+```
+
+```kotlin
+// Wrong: encoding starts before FIFO admission and later revisions may overtake it.
+scope.async(Dispatchers.Default) { PlaybackSnapshotCodec.encode(snapshot) }
+
+// Correct: enqueue the captured immutable snapshot; the FIFO writer encodes it off main in order.
+writer.writeStructural(PlaybackSnapshotWriteRequest(namespace, revision, null, snapshot))
+```
+
+```kotlin
+// Wrong: playback imports concrete storage and UI guesses infrastructure meaning from a name.
+PlaybackController(context, localStore, musicRepository)
+if (playback.error?.contains("BAD_HTTP_STATUS") == true) verifySession()
+
+// Correct: app adapters satisfy playback-owned ports and errors carry typed behavior.
+PlaybackController(context, sessionStore, contentSource)
+if (playback.error?.requiresSessionVerification == true) actions.verifyCurrentSession()
 ```
 
 ```kotlin
