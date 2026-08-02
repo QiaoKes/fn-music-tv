@@ -179,6 +179,21 @@ class PlayerUiStateTest {
         assertTrue(maxOf(color.red, color.green, color.blue) <= 0.35f)
     }
 
+    @Test fun `small hot pink accent cannot overpower a mixed cool cover`() {
+        val color = artworkAmbienceColor(
+            listOf(
+                ArtworkPaletteSwatch(0xFFE3DDE8.toInt(), population = 520),
+                ArtworkPaletteSwatch(0xFF6DB9D8.toInt(), population = 220),
+                ArtworkPaletteSwatch(0xFF7C5BA7.toInt(), population = 170),
+                ArtworkPaletteSwatch(0xFFE53483.toInt(), population = 90),
+            ),
+        )
+
+        assertTrue(color.blue > color.red)
+        assertTrue(color.red > color.green)
+        assertTrue(maxOf(color.red, color.green, color.blue) - minOf(color.red, color.green, color.blue) <= 0.12f)
+    }
+
     @Test fun `missing artwork ambience uses one stable brand neutral`() {
         val first = fallbackAmbienceColor()
         assertEquals(first, fallbackAmbienceColor())

@@ -41,6 +41,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -58,6 +59,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -85,8 +87,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -321,6 +325,7 @@ internal fun AuthenticatedApp(
     }
     val open: (LibraryRoute) -> Unit = { stack = stack + it }
     val root: (LibraryRoute) -> Unit = { stack = listOf(it) }
+    val back: () -> Unit = { if (stack.size > 1) stack = stack.dropLast(1) }
     LaunchedEffect(route.storageKey()) { lastHomeBackAt = 0L }
     BackHandler {
         when {
@@ -391,10 +396,21 @@ internal fun AuthenticatedApp(
             loader = container.musicRepository::allTracks,
             queueSource = QueueSource::LibraryAllTracks,
             onPlayer = { open(LibraryRoute.Player(it)) },
+            detailHeader = TrackDetailHeader(
+                kind = "音乐库",
+                onBack = back,
+            ),
+            primaryAction = TrackCollectionPrimaryAction.StartRoam {
+                open(LibraryRoute.Player(null))
+            },
         )
-        is LibraryRoute.ArtistDetail -> ArtistDetail(container, route.artist, onAlbum = { open(LibraryRoute.AlbumDetail(it)) }) {
-            open(LibraryRoute.Player(it))
-        }
+        is LibraryRoute.ArtistDetail -> ArtistDetail(
+            container = container,
+            artist = route.artist,
+            onBack = back,
+            onAlbum = { open(LibraryRoute.AlbumDetail(it)) },
+            onPlayer = { open(LibraryRoute.Player(it)) },
+        )
         is LibraryRoute.AlbumDetail -> TrackCollection(
             container = container,
             stateKey = "album:${route.album.guid.value}:tracks",
@@ -404,6 +420,12 @@ internal fun AuthenticatedApp(
             loader = { container.musicRepository.albumTracks(route.album.guid.value, it) },
             queueSource = { sort -> QueueSource.Album(route.album.guid.value, sort) },
             onPlayer = { open(LibraryRoute.Player(it)) },
+            detailHeader = TrackDetailHeader(
+                kind = "专辑",
+                extraMetadata = route.album.releaseDate,
+                declaredTrackCount = route.album.trackCount,
+                onBack = back,
+            ),
         )
         is LibraryRoute.Player -> ImmersivePlayer(
             container,
@@ -600,6 +622,7 @@ private fun BrowseHome(
     val playlists = playlistSnapshot.entries
     val playlistsLoaded = playlistSnapshot.initialLoadCompleted
     var actionError by remember { mutableStateOf<AppError?>(null) }
+    var roamActionRunning by remember { mutableStateOf(false) }
     var focusedKey by rememberSaveable { mutableStateOf<String?>(null) }
     var initialFocusRequested by remember { mutableStateOf(false) }
     val contentFocus = remember { FocusRequester() }
@@ -608,13 +631,13 @@ private fun BrowseHome(
     LaunchedEffect(Unit) {
         retainedStore.loadListOnce(playlistState, container.musicRepository::playlists)
     }
-    LaunchedEffect(playlistsLoaded, playback.roamBusy, playback.hasMedia, focusedKey) {
+    LaunchedEffect(playlistsLoaded, playback.hasMedia, focusedKey) {
         if (initialFocusRequested) return@LaunchedEffect
         val restoringNowPlaying = playback.hasMedia && focusedKey == "now-playing"
         if (!playlistsLoaded && !restoringNowPlaying) return@LaunchedEffect
         val availableKeys = buildList {
             if (playlistsLoaded) {
-                if (!playback.roamBusy) add("roam")
+                add("roam")
                 addAll(playlists.take(12).map { "playlist:${it.guid.value}" })
                 add("all-playlists")
             }
@@ -648,11 +671,10 @@ private fun BrowseHome(
             item {
                 PlaylistTile(
                     "随机漫游",
-                    if (playback.roamBusy) "正在准备" else "从曲库里遇见下一首",
+                    "从曲库里遇见下一首",
                     null,
                     FnColors.Teal,
                     showArtworkInitial = false,
-                    enabled = !playback.roamBusy,
                     modifier = Modifier
                         .then(if (focusedKey == "roam") Modifier.focusRequester(contentFocus) else Modifier)
                         .onFocusChanged { if (it.isFocused) focusedKey = "roam" },
@@ -661,12 +683,18 @@ private fun BrowseHome(
                         onPlayer()
                         return@PlaylistTile
                     }
+                    if (roamActionRunning || playback.roamBusy) return@PlaylistTile
+                    roamActionRunning = true
                     scope.launch {
-                        if (container.playbackController.startRoam()) {
-                            actionError = null
-                            onPlayer()
-                        } else {
-                            actionError = container.playbackController.state.value.roamError ?: AppError.Unknown()
+                        try {
+                            if (container.playbackController.startRoam()) {
+                                actionError = null
+                                onPlayer()
+                            } else {
+                                actionError = container.playbackController.state.value.roamError ?: AppError.Unknown()
+                            }
+                        } finally {
+                            roamActionRunning = false
                         }
                     }
                 }
@@ -1041,83 +1069,254 @@ private fun <T> GridPage(
     }
 }
 
+private enum class ArtistDetailSection { Songs, Albums }
+
+private data class TrackDetailTab(
+    val key: String,
+    val label: String,
+    val selected: Boolean,
+    val onFocus: () -> Unit,
+    val onSelect: () -> Unit,
+)
+
+private data class TrackDetailHeader(
+    val kind: String,
+    val declaredTrackCount: Int? = null,
+    val extraMetadata: String? = null,
+    val tabs: List<TrackDetailTab> = emptyList(),
+    val onBack: () -> Unit,
+)
+
+private sealed interface TrackCollectionPrimaryAction {
+    data object PlayAll : TrackCollectionPrimaryAction
+    data class StartRoam(val onStarted: () -> Unit) : TrackCollectionPrimaryAction
+}
+
 @Composable
-private fun ArtistDetail(container: AppContainer, artist: Artist, onAlbum: (Album) -> Unit, onPlayer: (Track) -> Unit) {
+private fun ArtistDetail(
+    container: AppContainer,
+    artist: Artist,
+    onBack: () -> Unit,
+    onAlbum: (Album) -> Unit,
+    onPlayer: (Track) -> Unit,
+) {
     val stateKey = "artist:${artist.guid.value}"
     val retainedStore = LocalLibraryRetainedState.current
     val albumState = retainedStore.paged<Album>("$stateKey:albums")
     val albumSnapshot = albumState.snapshot
-    val albums = albumSnapshot.entries.take(8)
-    var focusedSectionKey by rememberSaveable(stateKey) { mutableStateOf<String?>(null) }
-    var initialAlbumFocusRequested by remember(stateKey) { mutableStateOf(false) }
-    val albumFocus = remember(stateKey) { FocusRequester() }
-    val albumRowState = rememberLazyListState()
-    fun loadAlbums() {
-        if (albumState.loading || !shouldLoadInitialPage(albumState.snapshot)) return
+    val albums = albumSnapshot.entries
+    var selectedSection by rememberSaveable(stateKey) { mutableStateOf(ArtistDetailSection.Songs) }
+    var focusedArea by rememberSaveable(stateKey) { mutableStateOf("songs") }
+    fun loadAlbums(target: Int) {
+        if (albumState.loading || target > 1 && !albumState.snapshot.hasNext) return
         albumState.loading = true
         retainedStore.scope.launch {
-            runCatching { container.musicRepository.artistAlbums(artist.guid.value, 1) }
+            runCatching { container.musicRepository.artistAlbums(artist.guid.value, target) }
                 .onSuccess {
                     albumState.snapshot = retainLoadedPage(albumState.snapshot, it) { album -> album.guid.value }
                 }
                 .onFailure {
                     albumState.snapshot = albumState.snapshot.copy(
                         error = (it as? AppException)?.error ?: AppError.Unknown(),
-                        initialLoadCompleted = true,
+                        initialLoadCompleted = albumState.snapshot.initialLoadCompleted || target == 1,
                     )
                 }
             albumState.loading = false
         }
     }
-    LaunchedEffect(stateKey) { loadAlbums() }
-    LaunchedEffect(albumSnapshot.initialLoadCompleted, albums, focusedSectionKey) {
-        if (
-            !albumSnapshot.initialLoadCompleted || albums.isEmpty() ||
-            focusedSectionKey == "tracks" || initialAlbumFocusRequested
-        ) {
+    LaunchedEffect(stateKey) {
+        if (shouldLoadInitialPage(albumState.snapshot)) loadAlbums(1)
+    }
+    val tabs = ArtistDetailSection.entries.map { section ->
+        TrackDetailTab(
+            key = "artist-tab:${section.name}",
+            label = if (section == ArtistDetailSection.Songs) "歌曲" else "专辑",
+            selected = selectedSection == section,
+            onFocus = { focusedArea = "tabs" },
+            onSelect = {
+                selectedSection = section
+                focusedArea = "tabs"
+            },
+        )
+    }
+    TrackCollection(
+        container = container,
+        stateKey = "$stateKey:tracks",
+        title = artist.name,
+        coverId = artist.coverId,
+        loader = { container.musicRepository.artistTracks(artist.guid.value, it) },
+        queueSource = { sort -> QueueSource.Artist(artist.guid.value, sort) },
+        onPlayer = onPlayer,
+        initialFocusEnabled = selectedSection == ArtistDetailSection.Songs && focusedArea == "songs",
+        onFocusOwnerChanged = { focusedArea = "songs" },
+        detailHeader = TrackDetailHeader(
+            kind = "歌手",
+            declaredTrackCount = artist.trackCount,
+            extraMetadata = artist.albumCount?.let { "$it 张专辑" },
+            tabs = tabs,
+            onBack = onBack,
+        ),
+        showTrackList = selectedSection == ArtistDetailSection.Songs,
+        alternateContent = {
+            ArtistAlbumGrid(
+                stateKey = "$stateKey:album-grid",
+                snapshot = albumSnapshot,
+                loading = albumState.loading,
+                initialFocusEnabled = selectedSection == ArtistDetailSection.Albums && focusedArea == "albums",
+                onLoad = ::loadAlbums,
+                onFocused = { focusedArea = "albums" },
+                onAlbum = onAlbum,
+            )
+        },
+    )
+}
+
+@Composable
+private fun ArtistAlbumGrid(
+    stateKey: String,
+    snapshot: RetainedPageSnapshot<Album>,
+    loading: Boolean,
+    initialFocusEnabled: Boolean,
+    onLoad: (Int) -> Unit,
+    onFocused: () -> Unit,
+    onAlbum: (Album) -> Unit,
+) {
+    val albums = snapshot.entries
+    var focusedKey by rememberSaveable(stateKey) { mutableStateOf<String?>(null) }
+    var initialFocusRequested by remember(stateKey) { mutableStateOf(false) }
+    val restoredFocus = remember(stateKey) { FocusRequester() }
+    val gridState = rememberLazyGridState()
+    LaunchedEffect(snapshot.initialLoadCompleted, albums, initialFocusEnabled, focusedKey) {
+        if (!initialFocusEnabled || !snapshot.initialLoadCompleted || albums.isEmpty() || initialFocusRequested) return@LaunchedEffect
+        val availableKeys = albums.map { it.guid.value }
+        val targetKey = focusedKey?.takeIf(availableKeys::contains) ?: availableKeys.first()
+        if (focusedKey != targetKey) {
+            focusedKey = targetKey
             return@LaunchedEffect
         }
-        val keys = albums.map { "album:${it.guid.value}" }
-        focusedSectionKey = focusedSectionKey?.takeIf(keys::contains) ?: keys.first()
-        yield()
-        runCatching { albumFocus.requestFocus() }
-        initialAlbumFocusRequested = true
+        repeat(3) {
+            withFrameNanos { }
+            if (runCatching { restoredFocus.requestFocus() }.getOrDefault(false)) {
+                initialFocusRequested = true
+                return@LaunchedEffect
+            }
+        }
     }
-    Column(Modifier.fillMaxSize()) {
-        Column(Modifier.padding(horizontal = 64.dp, vertical = 32.dp)) {
-            Text(artist.name, fontSize = 40.sp, fontWeight = FontWeight.Bold)
-            albumSnapshot.error?.let { InlineError(it) }
-            if (albums.isNotEmpty()) {
-                LazyRow(state = albumRowState, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(albums, key = { it.guid.value }) { album ->
-                        val focusKey = "album:${album.guid.value}"
-                        AlbumLockup(
-                            album.name,
-                            album.artistName.orEmpty(),
-                            album.coverId,
-                            modifier = Modifier
-                                .then(if (focusedSectionKey == focusKey) Modifier.focusRequester(albumFocus) else Modifier)
-                                .onFocusChanged { if (it.isFocused) focusedSectionKey = focusKey },
-                        ) {
-                            focusedSectionKey = focusKey
-                            onAlbum(album)
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(3),
+        state = gridState,
+        modifier = Modifier.fillMaxSize().padding(top = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (albums.isEmpty() && loading) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Text("正在加载专辑", color = FnColors.Muted, fontSize = 16.sp, modifier = Modifier.padding(vertical = 20.dp))
+            }
+        }
+        items(albums, key = { it.guid.value }) { album ->
+            val index = albums.indexOf(album)
+            DetailAlbumCard(
+                album = album,
+                modifier = Modifier
+                    .then(if (focusedKey == album.guid.value) Modifier.focusRequester(restoredFocus) else Modifier)
+                    .onFocusChanged {
+                        if (it.isFocused) {
+                            focusedKey = album.guid.value
+                            onFocused()
+                            if (snapshot.hasNext && index >= albums.size - 6) onLoad(snapshot.page + 1)
                         }
-                    }
+                    },
+                onClick = {
+                    focusedKey = album.guid.value
+                    onAlbum(album)
+                },
+            )
+        }
+        if (albums.isEmpty() && !loading && snapshot.error != null) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Button(onClick = { onLoad(1) }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                    Text("专辑加载失败，重试")
                 }
             }
         }
-        Box(Modifier.weight(1f)) {
-            TrackCollection(
-                container = container,
-                stateKey = "$stateKey:tracks",
-                title = "歌曲",
-                loader = { container.musicRepository.artistTracks(artist.guid.value, it) },
-                queueSource = { sort -> QueueSource.Artist(artist.guid.value, sort) },
-                onPlayer = onPlayer,
-                initialFocusEnabled = albumSnapshot.initialLoadCompleted &&
-                    (albums.isEmpty() || focusedSectionKey == "tracks"),
-                onFocusOwnerChanged = { focusedSectionKey = "tracks" },
-            )
+        if (snapshot.hasNext) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Button(
+                    enabled = !loading,
+                    onClick = { onLoad(snapshot.page + 1) },
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                ) {
+                    Text(if (loading) "正在加载" else "加载更多专辑")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DetailAlbumCard(album: Album, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(6.dp)
+    Button(
+        onClick = onClick,
+        modifier = modifier.fillMaxWidth().height(106.dp),
+        shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
+        scale = ButtonDefaults.scale(focusedScale = 1.025f),
+        colors = ButtonDefaults.colors(
+            containerColor = FnColors.Surface,
+            contentColor = FnColors.Text,
+            focusedContainerColor = FnColors.FocusFill,
+            focusedContentColor = FnColors.Text,
+            pressedContainerColor = FnColors.FocusFill,
+            pressedContentColor = FnColors.Text,
+        ),
+        contentPadding = PaddingValues(9.dp),
+    ) {
+        val contentColor = LocalContentColor.current
+        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+            val artworkShape = RoundedCornerShape(4.dp)
+            val albumCoverId = album.coverId
+            if (albumCoverId != null) {
+                RemoteArtwork(
+                    container = LocalAppContainer.current,
+                    coverId = albumCoverId,
+                    variant = CoverVariant.Compact,
+                    modifier = Modifier.size(88.dp),
+                    shape = artworkShape,
+                    contentScale = ContentScale.Crop,
+                    placeholderContent = {
+                        GeometricArtworkPlaceholder(album.name, FnColors.Coral, Modifier.fillMaxSize(), artworkShape)
+                    },
+                )
+            } else {
+                GeometricArtworkPlaceholder(album.name, FnColors.Coral, Modifier.size(88.dp), artworkShape)
+            }
+            Spacer(Modifier.width(11.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+                Text(
+                    album.name,
+                    color = contentColor,
+                    fontSize = 16.sp,
+                    lineHeight = 19.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val metadata = listOfNotNull(
+                    album.releaseDate?.takeIf(String::isNotBlank),
+                    album.trackCount?.let { "$it 首" },
+                ).joinToString(" · ")
+                if (metadata.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        metadata,
+                        color = contentColor.copy(alpha = 0.68f),
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
     }
 }
@@ -1134,6 +1333,10 @@ private fun TrackCollection(
     onPlayer: (Track) -> Unit,
     initialFocusEnabled: Boolean = true,
     onFocusOwnerChanged: () -> Unit = {},
+    detailHeader: TrackDetailHeader? = null,
+    primaryAction: TrackCollectionPrimaryAction = TrackCollectionPrimaryAction.PlayAll,
+    showTrackList: Boolean = true,
+    alternateContent: @Composable () -> Unit = {},
 ) {
     val retainedStore = LocalLibraryRetainedState.current
     val retained = retainedStore.tracks(stateKey)
@@ -1151,6 +1354,7 @@ private fun TrackCollection(
     val restoredFocus = remember(stateKey) { FocusRequester() }
     val listState = rememberLazyListState()
     val actionScope = rememberCoroutineScope()
+    var primaryActionRunning by remember(stateKey) { mutableStateOf(false) }
     fun setError(value: AppError?) {
         retained.snapshot = retained.snapshot.copy(error = value)
     }
@@ -1221,26 +1425,147 @@ private fun TrackCollection(
                 .onFailure { setError(AppError.Unknown(it.message)) }
         }
     }
+    fun runPrimaryAction() {
+        when (val action = primaryAction) {
+            TrackCollectionPrimaryAction.PlayAll -> play(tracks.indexOfFirst(::isTrackPlayable))
+            is TrackCollectionPrimaryAction.StartRoam -> {
+                if (primaryActionRunning) return
+                if (container.playbackController.state.value.queueKind == QueueKind.Roam) {
+                    action.onStarted()
+                    return
+                }
+                primaryActionRunning = true
+                actionScope.launch {
+                    if (container.playbackController.startRoam()) {
+                        setError(null)
+                        action.onStarted()
+                    } else {
+                        setError(container.playbackController.state.value.roamError ?: AppError.Unknown())
+                    }
+                    primaryActionRunning = false
+                }
+            }
+        }
+    }
     LaunchedEffect(stateKey) {
         if (!retained.snapshot.initialLoadCompleted) {
             load(1)
         }
     }
     val playableTracks = tracks.filter(::isTrackPlayable)
-    val playAllEnabled = playableTracks.isNotEmpty()
-    LaunchedEffect(loading, tracks, focusedKey, initialFocusEnabled) {
-        if (!initialFocusEnabled || loading || tracks.isEmpty() || initialFocusRequested) return@LaunchedEffect
+    val primaryActionEnabled = when (primaryAction) {
+        TrackCollectionPrimaryAction.PlayAll -> playableTracks.isNotEmpty()
+        is TrackCollectionPrimaryAction.StartRoam -> true
+    }
+    val primaryActionLabel = when (primaryAction) {
+        TrackCollectionPrimaryAction.PlayAll -> "播放全部"
+        is TrackCollectionPrimaryAction.StartRoam -> "随机漫游"
+    }
+    LaunchedEffect(snapshot.initialLoadCompleted, tracks, focusedKey, initialFocusEnabled, showTrackList, primaryActionEnabled) {
+        if (!initialFocusEnabled || !snapshot.initialLoadCompleted || initialFocusRequested) return@LaunchedEffect
         val availableKeys = buildList {
-            if (playAllEnabled) add("play-all")
-            addAll(playableTracks.map { it.guid.value })
+            if (primaryActionEnabled) add("primary-action")
+            detailHeader?.tabs?.filter { it.selected }?.forEach { add(it.key) }
+            if (showTrackList) addAll(playableTracks.map { it.guid.value })
+            if (detailHeader != null) add("detail-back")
         }
-        focusedKey = focusedKey?.takeIf(availableKeys::contains) ?: availableKeys.firstOrNull()
-        yield()
-        if (focusedKey != null) {
-            runCatching { restoredFocus.requestFocus() }
-            initialFocusRequested = true
+        val targetKey = focusedKey?.takeIf(availableKeys::contains) ?: availableKeys.firstOrNull()
+        if (focusedKey != targetKey) {
+            focusedKey = targetKey
+            return@LaunchedEffect
+        }
+        if (targetKey != null) {
+            repeat(3) {
+                withFrameNanos { }
+                if (runCatching { restoredFocus.requestFocus() }.getOrDefault(false)) {
+                    initialFocusRequested = true
+                    return@LaunchedEffect
+                }
+            }
         }
     }
+    if (detailHeader != null) {
+        DetailTrackCollection(
+            container = container,
+            header = detailHeader,
+            title = title,
+            subtitle = subtitle,
+            coverId = coverId,
+            trackCount = detailHeader.declaredTrackCount ?: expectedTotal?.takeIf { it > 0 },
+            tracks = tracks,
+            loading = loading,
+            error = error,
+            hasNext = hasNext,
+            listState = listState,
+            focusedKey = focusedKey,
+            restoredFocus = restoredFocus,
+            primaryActionLabel = primaryActionLabel,
+            primaryActionEnabled = primaryActionEnabled,
+            showTrackList = showTrackList,
+            onFocusKey = {
+                focusedKey = it
+                onFocusOwnerChanged()
+            },
+            onPrimaryAction = ::runPrimaryAction,
+            onTrackFocused = { index, key ->
+                focusedKey = key
+                onFocusOwnerChanged()
+                if (hasNext && index >= tracks.size - 15) load(page + 1)
+            },
+            onTrack = ::play,
+            onLoadMore = { load(page + 1) },
+            alternateContent = alternateContent,
+        )
+    } else {
+        LegacyTrackCollection(
+            container = container,
+            title = title,
+            subtitle = subtitle,
+            coverId = coverId,
+            tracks = tracks,
+            loading = loading,
+            error = error,
+            hasNext = hasNext,
+            listState = listState,
+            focusedKey = focusedKey,
+            restoredFocus = restoredFocus,
+            primaryActionEnabled = primaryActionEnabled,
+            onFocusKey = {
+                focusedKey = it
+                onFocusOwnerChanged()
+            },
+            onPrimaryAction = ::runPrimaryAction,
+            onTrackFocused = { index, key ->
+                focusedKey = key
+                onFocusOwnerChanged()
+                if (hasNext && index >= tracks.size - 15) load(page + 1)
+            },
+            onTrack = ::play,
+            onLoadMore = { load(page + 1) },
+        )
+    }
+}
+
+@Composable
+private fun LegacyTrackCollection(
+    container: AppContainer,
+    title: String,
+    subtitle: String,
+    coverId: String?,
+    tracks: List<Track>,
+    loading: Boolean,
+    error: AppError?,
+    hasNext: Boolean,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    focusedKey: String?,
+    restoredFocus: FocusRequester,
+    primaryActionEnabled: Boolean,
+    onFocusKey: (String) -> Unit,
+    onPrimaryAction: () -> Unit,
+    onTrackFocused: (Int, String) -> Unit,
+    onTrack: (Int) -> Unit,
+    onLoadMore: () -> Unit,
+) {
     Row(Modifier.fillMaxSize().padding(horizontal = 56.dp, vertical = 38.dp), horizontalArrangement = Arrangement.spacedBy(34.dp)) {
         Column(Modifier.width(330.dp)) {
             if (coverId != null) RemoteArtwork(container, coverId, CoverVariant.Grid, Modifier.size(300.dp))
@@ -1248,44 +1573,326 @@ private fun TrackCollection(
             if (subtitle.isNotBlank()) Text(subtitle, color = FnColors.Muted, fontSize = 21.sp)
             Spacer(Modifier.height(18.dp))
             Button(
-                enabled = playAllEnabled,
-                onClick = { play(tracks.indexOfFirst(::isTrackPlayable)) },
+                enabled = primaryActionEnabled,
+                onClick = onPrimaryAction,
                 modifier = Modifier
-                    .then(if (focusedKey == "play-all") Modifier.focusRequester(restoredFocus) else Modifier)
-                    .onFocusChanged {
-                        if (it.isFocused) {
-                            focusedKey = "play-all"
-                            onFocusOwnerChanged()
-                        }
-                    },
+                    .then(if (focusedKey == "primary-action") Modifier.focusRequester(restoredFocus) else Modifier)
+                    .onFocusChanged { if (it.isFocused) onFocusKey("primary-action") },
             ) {
                 Text("播放全部")
             }
             error?.let { InlineError(it) }
         }
         LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(tracks, key = { it.guid.value }) { track ->
-                val index = tracks.indexOf(track)
-                val restoreModifier = if (focusedKey == track.guid.value) Modifier.focusRequester(restoredFocus) else Modifier
+            itemsIndexed(tracks, key = { _, track -> track.guid.value }) { index, track ->
                 TrackRow(
                     track,
                     enabled = isTrackPlayable(track),
-                    modifier = restoreModifier.onFocusChanged { state ->
-                        if (state.isFocused) {
-                            focusedKey = track.guid.value
-                            onFocusOwnerChanged()
-                            if (hasNext && index >= tracks.size - 15) load(page + 1)
-                        }
-                    },
-                ) {
-                    play(tracks.indexOf(track))
-                }
+                    modifier = Modifier
+                        .then(if (focusedKey == track.guid.value) Modifier.focusRequester(restoredFocus) else Modifier)
+                        .onFocusChanged { if (it.isFocused) onTrackFocused(index, track.guid.value) },
+                ) { onTrack(index) }
             }
             if (hasNext) item {
-                Button(enabled = !loading, onClick = { load(page + 1) }, modifier = Modifier.fillMaxWidth().height(58.dp)) {
+                Button(enabled = !loading, onClick = onLoadMore, modifier = Modifier.fillMaxWidth().height(58.dp)) {
                     Text(if (loading) "正在加载" else "加载更多")
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun DetailTrackCollection(
+    container: AppContainer,
+    header: TrackDetailHeader,
+    title: String,
+    subtitle: String,
+    coverId: String?,
+    trackCount: Int?,
+    tracks: List<Track>,
+    loading: Boolean,
+    error: AppError?,
+    hasNext: Boolean,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    focusedKey: String?,
+    restoredFocus: FocusRequester,
+    primaryActionLabel: String,
+    primaryActionEnabled: Boolean,
+    showTrackList: Boolean,
+    onFocusKey: (String) -> Unit,
+    onPrimaryAction: () -> Unit,
+    onTrackFocused: (Int, String) -> Unit,
+    onTrack: (Int) -> Unit,
+    onLoadMore: () -> Unit,
+    alternateContent: @Composable () -> Unit,
+) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 42.dp, vertical = 24.dp)) {
+        Row(Modifier.fillMaxWidth().height(184.dp), verticalAlignment = Alignment.Top) {
+            DetailBackButton(
+                modifier = Modifier
+                    .then(if (focusedKey == "detail-back") Modifier.focusRequester(restoredFocus) else Modifier)
+                    .onFocusChanged { if (it.isFocused) onFocusKey("detail-back") },
+                onClick = header.onBack,
+            )
+            Spacer(Modifier.width(18.dp))
+            val artworkShape = RoundedCornerShape(6.dp)
+            if (coverId != null) {
+                RemoteArtwork(
+                    container = container,
+                    coverId = coverId,
+                    variant = CoverVariant.Grid,
+                    modifier = Modifier.size(184.dp),
+                    shape = artworkShape,
+                    contentScale = ContentScale.Crop,
+                    placeholderContent = {
+                        GeometricArtworkPlaceholder(title, FnColors.Coral, Modifier.fillMaxSize(), artworkShape, showInitial = false)
+                    },
+                )
+            } else {
+                GeometricArtworkPlaceholder(
+                    text = title,
+                    accent = FnColors.Coral,
+                    modifier = Modifier.size(184.dp),
+                    shape = artworkShape,
+                    showInitial = false,
+                )
+            }
+            Spacer(Modifier.width(24.dp))
+            Column(Modifier.weight(1f).fillMaxHeight()) {
+                Text(header.kind, color = FnColors.Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(7.dp))
+                Text(
+                    title,
+                    fontSize = 31.sp,
+                    lineHeight = 35.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val metadata = buildList {
+                    if (subtitle.isNotBlank()) add(subtitle)
+                    trackCount?.let { add("$it 首歌曲") }
+                    header.extraMetadata?.takeIf(String::isNotBlank)?.let(::add)
+                }.joinToString("  ·  ")
+                if (metadata.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(metadata, color = FnColors.Muted, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Spacer(Modifier.weight(1f))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    header.tabs.forEach { tab ->
+                        DetailTabButton(
+                            label = tab.label,
+                            selected = tab.selected,
+                            modifier = Modifier
+                                .then(if (focusedKey == tab.key) Modifier.focusRequester(restoredFocus) else Modifier)
+                                .onFocusChanged {
+                                    if (it.isFocused) {
+                                        onFocusKey(tab.key)
+                                        tab.onFocus()
+                                    }
+                                },
+                            onClick = tab.onSelect,
+                        )
+                    }
+                    val primaryShape = RoundedCornerShape(6.dp)
+                    Button(
+                        enabled = primaryActionEnabled,
+                        onClick = onPrimaryAction,
+                        modifier = Modifier
+                            .then(if (focusedKey == "primary-action") Modifier.focusRequester(restoredFocus) else Modifier)
+                            .onFocusChanged { if (it.isFocused) onFocusKey("primary-action") }
+                            .height(44.dp),
+                        shape = ButtonDefaults.shape(
+                            primaryShape,
+                            primaryShape,
+                            primaryShape,
+                            primaryShape,
+                            primaryShape,
+                        ),
+                        scale = ButtonDefaults.scale(focusedScale = 1.035f),
+                        colors = ButtonDefaults.colors(
+                            containerColor = FnColors.Surface,
+                            contentColor = FnColors.Text,
+                            focusedContainerColor = FnColors.FocusFill,
+                            focusedContentColor = FnColors.Text,
+                            pressedContainerColor = FnColors.FocusFill,
+                            pressedContentColor = FnColors.Text,
+                        ),
+                        border = ButtonDefaults.border(
+                            border = Border(BorderStroke(1.dp, FnColors.Coral.copy(alpha = 0.76f)), shape = primaryShape),
+                            focusedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = primaryShape),
+                            pressedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = primaryShape),
+                        ),
+                        contentPadding = PaddingValues(horizontal = 19.dp, vertical = 0.dp),
+                    ) {
+                        Text("▶  $primaryActionLabel", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(18.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.12f)))
+        if (showTrackList) {
+            DetailTrackColumnHeader()
+            Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.09f)))
+            LazyColumn(Modifier.weight(1f), state = listState) {
+                if (error != null) {
+                    item { InlineError(error) }
+                }
+                if (tracks.isEmpty() && loading) {
+                    item {
+                        Text("正在加载歌曲", color = FnColors.Muted, fontSize = 16.sp, modifier = Modifier.padding(vertical = 20.dp))
+                    }
+                }
+                itemsIndexed(tracks, key = { _, track -> track.guid.value }) { index, track ->
+                    DetailTrackRow(
+                        index = index,
+                        track = track,
+                        enabled = isTrackPlayable(track),
+                        modifier = Modifier
+                            .then(if (focusedKey == track.guid.value) Modifier.focusRequester(restoredFocus) else Modifier)
+                            .onFocusChanged { if (it.isFocused) onTrackFocused(index, track.guid.value) },
+                        onClick = { onTrack(index) },
+                    )
+                }
+                if (hasNext) {
+                    item {
+                        Button(
+                            enabled = !loading,
+                            onClick = onLoadMore,
+                            modifier = Modifier.fillMaxWidth().height(52.dp).padding(top = 5.dp),
+                        ) {
+                            Text(if (loading) "正在加载" else "加载更多")
+                        }
+                    }
+                }
+            }
+        } else {
+            Box(Modifier.weight(1f).fillMaxWidth()) { alternateContent() }
+        }
+    }
+}
+
+@Composable
+private fun DetailBackButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val shape = CircleShape
+    Button(
+        onClick = onClick,
+        modifier = modifier.size(46.dp).semantics { contentDescription = "返回" },
+        shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
+        scale = ButtonDefaults.scale(focusedScale = 1.08f),
+        colors = ButtonDefaults.colors(
+            containerColor = FnColors.Surface,
+            contentColor = FnColors.Text,
+            focusedContainerColor = FnColors.FocusFill,
+            focusedContentColor = FnColors.Text,
+            pressedContainerColor = FnColors.FocusFill,
+            pressedContentColor = FnColors.Text,
+        ),
+        contentPadding = PaddingValues(0.dp),
+    ) {
+        Text("‹", fontSize = 36.sp, lineHeight = 36.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun DetailTabButton(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(5.dp)
+    Button(
+        onClick = onClick,
+        modifier = modifier.height(40.dp).semantics { this.selected = selected },
+        shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
+        scale = ButtonDefaults.scale(focusedScale = 1.04f),
+        colors = ButtonDefaults.colors(
+            containerColor = if (selected) FnColors.Coral.copy(alpha = 0.2f) else Color.Transparent,
+            contentColor = if (selected) FnColors.Coral else FnColors.Muted,
+            focusedContainerColor = FnColors.FocusFill,
+            focusedContentColor = FnColors.Text,
+            pressedContainerColor = FnColors.FocusFill,
+            pressedContentColor = FnColors.Text,
+        ),
+        contentPadding = PaddingValues(horizontal = 17.dp, vertical = 0.dp),
+    ) {
+        Text(label, fontSize = 15.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun DetailTrackColumnHeader() {
+    Row(
+        Modifier.fillMaxWidth().height(34.dp).padding(horizontal = 15.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("#", color = FnColors.Muted, fontSize = 12.sp, modifier = Modifier.width(54.dp))
+        Text("歌曲", color = FnColors.Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+        Text("歌手", color = FnColors.Muted, fontSize = 12.sp, modifier = Modifier.width(220.dp))
+        Text("时长", color = FnColors.Muted, fontSize = 12.sp, textAlign = TextAlign.End, modifier = Modifier.width(70.dp))
+    }
+}
+
+@Composable
+private fun DetailTrackRow(
+    index: Int,
+    track: Track,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(5.dp)
+    Button(
+        enabled = enabled,
+        onClick = onClick,
+        modifier = modifier
+            .fillMaxWidth()
+            .height(58.dp)
+            .semantics {
+                contentDescription = "${index + 1}. ${track.title} ${track.artistName.orEmpty()}"
+            },
+        shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
+        scale = ButtonDefaults.scale(focusedScale = 1f),
+        colors = ButtonDefaults.colors(
+            containerColor = Color.Transparent,
+            contentColor = FnColors.Text,
+            focusedContainerColor = FnColors.FocusFill,
+            focusedContentColor = FnColors.Text,
+            pressedContainerColor = FnColors.FocusFill,
+            pressedContentColor = FnColors.Text,
+            disabledContainerColor = Color.Transparent,
+            disabledContentColor = FnColors.Muted.copy(alpha = 0.5f),
+        ),
+        contentPadding = PaddingValues(horizontal = 15.dp, vertical = 0.dp),
+    ) {
+        val contentColor = LocalContentColor.current
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                (index + 1).toString().padStart(2, '0'),
+                color = contentColor.copy(alpha = 0.66f),
+                fontSize = 13.sp,
+                modifier = Modifier.width(54.dp),
+            )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+                Text(track.title, color = contentColor, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                track.albumName?.takeIf(String::isNotBlank)?.let {
+                    Text(it, color = contentColor.copy(alpha = 0.6f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            Text(
+                track.artistName.orEmpty(),
+                color = contentColor.copy(alpha = 0.72f),
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.width(220.dp),
+            )
+            Text(
+                if (track.isCue) "需兼容" else formatDuration(track.durationMs ?: 0),
+                color = contentColor.copy(alpha = 0.72f),
+                fontSize = 14.sp,
+                textAlign = TextAlign.End,
+                modifier = Modifier.width(70.dp),
+            )
         }
     }
 }
@@ -3239,8 +3846,12 @@ private fun extractArtworkAmbienceColor(bitmap: Bitmap): Color = runCatching {
 
 internal fun artworkAmbienceColor(swatches: List<ArtworkPaletteSwatch>): Color {
     val candidates = swatches.filter { it.population > 0 }
-    val totalPopulation = candidates.sumOf(ArtworkPaletteSwatch::population).coerceAtLeast(1)
-    val selected = candidates.maxByOrNull { swatch ->
+    if (candidates.isEmpty()) return fallbackAmbienceColor()
+    var weightedRed = 0f
+    var weightedGreen = 0f
+    var weightedBlue = 0f
+    var totalWeight = 0f
+    candidates.forEach { swatch ->
         val red = (swatch.rgb ushr 16 and 0xFF) / 255f
         val green = (swatch.rgb ushr 8 and 0xFF) / 255f
         val blue = (swatch.rgb and 0xFF) / 255f
@@ -3248,19 +3859,27 @@ internal fun artworkAmbienceColor(swatches: List<ArtworkPaletteSwatch>): Color {
         val floor = minOf(red, green, blue)
         val saturation = if (peak == 0f) 0f else (peak - floor) / peak
         val lightness = (peak + floor) / 2f
-        val population = kotlin.math.sqrt(swatch.population.toFloat() / totalPopulation)
         val usefulLightness = (1f - kotlin.math.abs(lightness - 0.52f) / 0.52f).coerceIn(0f, 1f)
-        val extremePenalty = when {
-            peak < 0.08f -> 0.35f
-            floor > 0.94f -> 0.55f
-            else -> 0f
+        val extremeWeight = when {
+            peak < 0.08f -> 0.05f
+            floor > 0.94f -> 0.12f
+            else -> 1f
         }
-        population * 0.34f + saturation * 0.51f + usefulLightness * 0.15f - extremePenalty
-    } ?: return fallbackAmbienceColor()
-    val red = (selected.rgb ushr 16 and 0xFF) / 255f
-    val green = (selected.rgb ushr 8 and 0xFF) / 255f
-    val blue = (selected.rgb and 0xFF) / 255f
-    return normalizedAmbienceColor(red, green, blue)
+        val weight = swatch.population *
+            (0.12f + saturation * 0.88f) *
+            (0.35f + usefulLightness * 0.65f) *
+            extremeWeight
+        weightedRed += red * weight
+        weightedGreen += green * weight
+        weightedBlue += blue * weight
+        totalWeight += weight
+    }
+    if (totalWeight <= 0f) return fallbackAmbienceColor()
+    return normalizedAmbienceColor(
+        red = weightedRed / totalWeight,
+        green = weightedGreen / totalWeight,
+        blue = weightedBlue / totalWeight,
+    )
 }
 
 internal fun fallbackAmbienceColor(): Color = Color(0xFF29312F)
@@ -3285,7 +3904,7 @@ private fun normalizedAmbienceColor(red: Float, green: Float, blue: Float): Colo
             blue = (value + (blue - average) * 0.08f).coerceIn(0f, 1f),
         )
     }
-    val saturation = (sourceSaturation * 0.68f).coerceIn(0.2f, 0.5f)
+    val saturation = (sourceSaturation * 0.52f).coerceIn(0.1f, 0.32f)
     return hsvColor(hue, saturation, value = 0.34f)
 }
 
