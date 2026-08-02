@@ -15,6 +15,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -22,6 +23,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
 import androidx.test.platform.app.InstrumentationRegistry
 import com.fnmusic.tv.core.model.playback.PlayMode
@@ -30,6 +32,7 @@ import com.fnmusic.tv.core.model.playback.next
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -219,6 +222,26 @@ class PlayerOverlayFocusTest {
         composeRule.runOnIdle { assertTrue(interactions.get() > 0) }
     }
 
+    @Test fun touchingProgressSeeksToTheTappedPosition() {
+        val seekDelta = AtomicLong(Long.MIN_VALUE)
+        composeRule.setContent {
+            FnMusicTheme {
+                PlayerControlHarness(
+                    roaming = false,
+                    onCycleMode = {},
+                    onExitRoam = {},
+                    onInteraction = {},
+                    onSeek = seekDelta::set,
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("播放进度 0:12 / 3:00")
+            .performTouchInput { click() }
+
+        composeRule.runOnIdle { assertTrue(seekDelta.get() in 77_000L..79_000L) }
+    }
+
     @Test fun capturePlayerAndQueueEvidence() {
         val items = List(8) { index ->
             PlaybackQueueItem(
@@ -304,6 +327,7 @@ private fun PlayerControlHarness(
     onCycleMode: () -> Unit,
     onExitRoam: () -> Unit,
     onInteraction: () -> Unit,
+    onSeek: (Long) -> Unit = {},
 ) {
     val progressFocus = remember { FocusRequester() }
     val previousFocus = remember { FocusRequester() }
@@ -338,7 +362,7 @@ private fun PlayerControlHarness(
             playMode = playMode,
             queueCount = 5,
             onInteraction = onInteraction,
-            onSeek = {},
+            onSeek = onSeek,
             onPrevious = {},
             onPlayPause = {},
             onNext = {},

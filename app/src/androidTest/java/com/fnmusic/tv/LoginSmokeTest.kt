@@ -1,6 +1,7 @@
 package com.fnmusic.tv
 
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasText
@@ -9,6 +10,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
@@ -87,5 +89,19 @@ class LoginSmokeTest {
         Thread.sleep(200)
         server.assertIsFocused().performKeyInput { pressKey(Key.DirectionDown) }
         username.assertIsFocused()
+    }
+
+    @Test fun touchingAFieldEntersEditingAndAcceptsText() {
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodes(hasText("账号")).fetchSemanticsNodes().isNotEmpty()
+        }
+        val username = composeRule.onNodeWithContentDescription("账号")
+
+        username.performTouchInput { click() }
+        composeRule.waitForIdle()
+        Thread.sleep(300)
+        username.assertIsFocused().performTextInput("touch-user")
+
+        username.assertTextContains("touch-user")
     }
 }

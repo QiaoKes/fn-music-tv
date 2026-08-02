@@ -20,6 +20,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -80,6 +81,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
@@ -1792,6 +1794,11 @@ private fun ImmersivePlayer(
                     else -> false
                 }
             }
+            .pointerInput(controlsVisible, queueVisible) {
+                if (!controlsVisible && !queueVisible) {
+                    detectTapGestures { revealControls() }
+                }
+            }
             .focusable(),
     ) {
         if (poster) {
@@ -2705,6 +2712,15 @@ internal fun PlayerControlOverlay(
                                 true
                             }
                             else -> false
+                        }
+                    }
+                    .pointerInput(positionMs, durationMs) {
+                        if (durationMs > 0L) {
+                            detectTapGestures { offset ->
+                                val targetMs = (durationMs * (offset.x / size.width).coerceIn(0f, 1f)).toLong()
+                                onSeek(targetMs - positionMs)
+                                onInteraction()
+                            }
                         }
                     }
                     .focusable()

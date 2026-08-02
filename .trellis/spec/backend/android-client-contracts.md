@@ -55,6 +55,9 @@ PlaybackCommands.SetShuffleOrderCommand
 
 PlaybackSnapshotCodec.Version == 2
 PlaybackTransition.awaitCommitted()
+version.properties: VERSION_CODE=<monotonic Int>, VERSION_NAME=<display SemVer>
+release signing alias: fn-music-tv
+release signing default files: ~/.config/fn-music-tv/release.jks, release.password
 data class NowPlayingIdentity(
     val namespace: String,
     val mediaId: String,
@@ -204,6 +207,15 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 
 ### CI
 
+- `version.properties` is the single source of application versioning. The first formal package is
+  `VERSION_NAME=0.1.0` with monotonic `VERSION_CODE=2`, which is higher than the previous development
+  package. Every later distributable must increase `VERSION_CODE`; display version changes alone do
+  not make an Android upgrade.
+- Local Release APK packaging fails closed unless the fixed `fn-music-tv` signing identity is
+  available from the default protected directory, Gradle properties, or
+  `FN_MUSIC_RELEASE_PASSWORD`. Keystores and passwords never enter Git. CI may opt into unsigned
+  Release compilation only with explicit `-PallowUnsignedRelease=true`; those APKs are verification
+  artifacts and must not be distributed as formal updates.
 - Media3 unstable APIs require `androidx.annotation.OptIn(UnstableApi::class)` at the implementation
   boundary so lint accepts usage without making callers opt in.
 - CI uses JDK 21 and SDK 36, runs all app/library unit tests and lint variants, builds sideload/store
@@ -243,11 +255,16 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 | Legacy `cacheDir/media` exists at service startup | Delete safely; continue with direct HTTP and do not recreate it |
 | DB payload or physical budget exceeded | LRU batch eviction, checkpoint, incremental vacuum |
 | CI produces no APK | Artifact upload fails the job |
+| Local Release packaging has no fixed key/password | Fail before packaging; never silently emit a formal unsigned APK |
+| CI explicitly sets `allowUnsignedRelease=true` | Permit unsigned Release compile/package verification only |
+| Later formal version does not increase `VERSION_CODE` | Android may reject the update; release is invalid |
 
 ## 5. Good / Base / Bad Cases
 
 - Good: two concurrent reads of one namespaced album page make one NAS request; canceling one caller
   leaves the other caller and shared result intact.
+- Good: `0.1.0` reads version code `2` from `version.properties`, is signed by the fixed release
+  certificate, and every future formal APK reuses that certificate with a higher version code.
 - Good: clearing namespace A during an artwork download cancels A, prevents its late file write, and
   leaves namespace B plus its files untouched.
 - Good: a 128 MiB artwork setting caps the total under `cacheDir/artwork`, not 128 MiB per account.
@@ -280,6 +297,8 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   namespace.
 - Bad: running a root `test` selector that accidentally schedules connected benchmark tests; CI
   names every non-device task explicitly.
+- Bad: committing the release keystore/password, rebuilding with a different certificate, or
+  changing only `VERSION_NAME` and expecting Android to accept an upgrade.
 
 ## 6. Tests Required
 
@@ -317,8 +336,25 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   without a retryable UI error.
 - CI-equivalent local gate: all named workflow Gradle tasks must succeed and output four app APKs,
   two app Android-test APKs, and benchmark APKs.
+- Formal APK verification: `aapt dump badging` asserts package `com.fnmusic.tv`, the managed version
+  name/code, and `apksigner verify --print-certs` asserts one fixed signer. Install and reinstall the
+  same signed artifact with replace enabled before distribution.
 
 ## 7. Wrong vs Correct
+
+```kotlin
+// Wrong: hard-coded version values and a Release build that silently uses no stable identity.
+defaultConfig { versionCode = 1; versionName = "0.1.0" }
+
+// Correct: read one tracked version file and require local formal packaging to use the fixed key.
+defaultConfig {
+    versionCode = versionProperties.getProperty("VERSION_CODE").toInt()
+    versionName = versionProperties.getProperty("VERSION_NAME")
+}
+buildTypes.release {
+    signingConfig = signingConfigs.getByName("release")
+}
+```
 
 ```kotlin
 // Wrong: a stale HTTP/1.1 socket may be reused, or a hidden transport retry can exceed request limits.
