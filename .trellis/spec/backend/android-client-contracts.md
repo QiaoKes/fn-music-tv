@@ -263,8 +263,9 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 
 - Good: two concurrent reads of one namespaced album page make one NAS request; canceling one caller
   leaves the other caller and shared result intact.
-- Good: `0.1.0` reads version code `2` from `version.properties`, is signed by the fixed release
-  certificate, and every future formal APK reuses that certificate with a higher version code.
+- Good: the initial `0.1.0` package uses version code `2`; the `回声台` rebrand ships as `0.1.1`
+  with version code `3`, reuses the fixed release certificate, and installs over the same
+  `com.fnmusic.tv` package.
 - Good: clearing namespace A during an artwork download cancels A, prevents its late file write, and
   leaves namespace B plus its files untouched.
 - Good: a 128 MiB artwork setting caps the total under `cacheDir/artwork`, not 128 MiB per account.

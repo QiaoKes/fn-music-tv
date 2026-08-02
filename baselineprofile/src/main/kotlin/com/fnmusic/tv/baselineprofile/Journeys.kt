@@ -8,7 +8,7 @@ internal const val PACKAGE_NAME = "com.fnmusic.tv"
 private const val WAIT_MS = 5_000L
 
 internal fun MacrobenchmarkScope.exerciseLoginOrHome() {
-    device.wait(Until.hasObject(By.text("飞牛音乐 TV")), WAIT_MS)
+    device.wait(Until.hasObject(By.text("回声台")), WAIT_MS)
     if (device.hasObject(By.text("NAS 地址"))) {
         device.pressDPadDown()
         device.pressDPadDown()
