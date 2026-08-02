@@ -318,9 +318,10 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   checksum as a 14-day workflow artifact. Unit tests, lint, store/test APKs, and benchmark variants
   remain explicit local gates rather than CI packaging work.
 - If `v<VERSION_NAME>` has not been published, the same packaging job creates the immutable tag and
-  GitHub Release after verification. An already-published version is rebuilt as a workflow artifact
-  without overwriting its release. Lint ignores `OldTargetApi` because the project target is pinned
-  while that check varies with the newest platform installed in the environment.
+  GitHub Release after verification. The GitHub Release title is the exact `v<VERSION_NAME>` tag;
+  do not prefix it with the product name. An already-published version is rebuilt as a workflow
+  artifact without overwriting its release. Lint ignores `OldTargetApi` because the project target
+  is pinned while that check varies with the newest platform installed in the environment.
 - `baselineprofile` resolves the app's `distribution` dimension to `sideload`.
 
 ## 4. Validation & Error Matrix
