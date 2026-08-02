@@ -83,6 +83,10 @@ android {
     }
 }
 
+base {
+    archivesName.set("fn-music-tv-$managedVersionName")
+}
+
 val verifyReleaseSigning by tasks.registering {
     group = "verification"
     description = "Verifies the local Fn Music TV release signing identity."

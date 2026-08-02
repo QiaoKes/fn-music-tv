@@ -110,7 +110,6 @@ import com.fnmusic.tv.core.model.CoverVariant
 import com.fnmusic.tv.core.model.Page
 import com.fnmusic.tv.core.model.PlayerStyle
 import com.fnmusic.tv.core.model.Playlist
-import com.fnmusic.tv.core.model.SharedLibrary
 import com.fnmusic.tv.core.model.Track
 import com.fnmusic.tv.core.model.playback.QueueSource
 import com.fnmusic.tv.core.model.playback.QueueKind
@@ -458,9 +457,29 @@ private fun LibraryTopBar(
         } else {
             Text("回声台", fontSize = 28.sp, fontWeight = FontWeight.Bold)
         }
+        val tabColors = ButtonDefaults.colors(
+            containerColor = Color.Transparent,
+            contentColor = FnColors.Text,
+            focusedContainerColor = FnColors.Coral,
+            focusedContentColor = FnColors.Background,
+            pressedContainerColor = FnColors.Coral,
+            pressedContentColor = FnColors.Background,
+            disabledContainerColor = Color(0xFF382A27),
+            disabledContentColor = Color(0xFFF0D9D1),
+        )
         Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Button(onClick = onHome, enabled = !selectedHome) { Text("首页", fontSize = 21.sp) }
-            Button(onClick = onMy, enabled = selectedHome) { Text("我的", fontSize = 21.sp) }
+            Button(
+                onClick = onHome,
+                enabled = !selectedHome,
+                colors = tabColors,
+                scale = ButtonDefaults.scale(focusedScale = 1.07f),
+            ) { Text("首页", fontSize = 21.sp) }
+            Button(
+                onClick = onMy,
+                enabled = selectedHome,
+                colors = tabColors,
+                scale = ButtonDefaults.scale(focusedScale = 1.07f),
+            ) { Text("我的", fontSize = 21.sp) }
         }
     }
 }
@@ -632,6 +651,7 @@ private fun BrowseHome(
                     if (playback.roamBusy) "正在准备" else "从曲库里遇见下一首",
                     null,
                     FnColors.Teal,
+                    showArtworkInitial = false,
                     enabled = !playback.roamBusy,
                     modifier = Modifier
                         .then(if (focusedKey == "roam") Modifier.focusRequester(contentFocus) else Modifier)
@@ -669,6 +689,7 @@ private fun BrowseHome(
                     "浏览完整列表",
                     null,
                     FnColors.Muted,
+                    showArtworkInitial = false,
                     modifier = Modifier
                         .then(if (focusedKey == "all-playlists") Modifier.focusRequester(contentFocus) else Modifier)
                         .onFocusChanged { if (it.isFocused) focusedKey = "all-playlists" },
@@ -704,13 +725,10 @@ private fun BrowseMy(
     val retainedStore = LocalLibraryRetainedState.current
     val artistState = retainedStore.paged<Artist>("grid:artists")
     val albumState = retainedStore.paged<Album>("grid:albums")
-    val libraryState = retainedStore.list<SharedLibrary>("shared-libraries")
     val artists = artistState.snapshot.entries
     val albums = albumState.snapshot.entries
-    val libraries = libraryState.snapshot.entries
     val artistsLoaded = artistState.snapshot.initialLoadCompleted
     val albumsLoaded = albumState.snapshot.initialLoadCompleted
-    val librariesLoaded = libraryState.snapshot.initialLoadCompleted
     var focusedKey by rememberSaveable { mutableStateOf<String?>(null) }
     var initialFocusRequested by remember { mutableStateOf(false) }
     val contentFocus = remember { FocusRequester() }
@@ -719,11 +737,10 @@ private fun BrowseMy(
     LaunchedEffect(Unit) {
         retainedStore.loadFirstPageOnce(artistState, container.musicRepository::artists) { it.guid.value }
         retainedStore.loadFirstPageOnce(albumState, container.musicRepository::albums) { it.guid.value }
-        retainedStore.loadListOnce(libraryState, container.musicRepository::sharedLibraries)
     }
-    LaunchedEffect(artistsLoaded, albumsLoaded, librariesLoaded, playback.hasMedia, focusedKey) {
+    LaunchedEffect(artistsLoaded, albumsLoaded, playback.hasMedia, focusedKey) {
         if (initialFocusRequested) return@LaunchedEffect
-        val allContentLoaded = artistsLoaded && albumsLoaded && librariesLoaded
+        val allContentLoaded = artistsLoaded && albumsLoaded
         val restoringChrome = focusedKey == "settings" || playback.hasMedia && focusedKey == "now-playing"
         if (!allContentLoaded && !restoringChrome) return@LaunchedEffect
         val availableKeys = buildList {
@@ -733,8 +750,6 @@ private fun BrowseMy(
                 addAll(albums.take(8).map { "album:${it.guid.value}" })
                 add("all-albums")
                 add("all-tracks")
-                addAll(libraries.filter { it.accessStatus == 0 }.map { "library:${it.name}" })
-                add("all-libraries")
             }
             if (playback.hasMedia) add("now-playing")
             add("settings")
@@ -815,20 +830,10 @@ private fun BrowseMy(
                 )
             }
             item {
-                val libraryEntries = listOf(BandEntry("全部歌曲", "完整曲库", null, BandKind.Library, "all-tracks", onAllTracks)) + libraries.map {
-                    BandEntry(
-                        it.name,
-                        if (it.accessStatus == 0) "可访问" else "暂不可用",
-                        null,
-                        BandKind.Library,
-                        "library:${it.name}",
-                        if (it.accessStatus == 0) onAllTracks else null,
-                    )
-                }
                 MediaBand(
                     "音乐库",
-                    libraryEntries,
-                    BandEntry("全部音乐库", "浏览完整列表", null, BandKind.Library, "all-libraries", onAllTracks),
+                    emptyList(),
+                    BandEntry("全部歌曲", "完整曲库", null, BandKind.Library, "all-tracks", onAllTracks),
                     focusedKey,
                     contentFocus,
                     onFocused = { focusedKey = it },
@@ -1377,6 +1382,7 @@ private fun PlaylistTile(
     coverId: String?,
     accent: Color,
     modifier: Modifier = Modifier,
+    showArtworkInitial: Boolean = true,
     enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
@@ -1402,7 +1408,13 @@ private fun PlaylistTile(
         contentPadding = PaddingValues(0.dp),
     ) {
         Column(Modifier.fillMaxSize()) {
-            PlaylistTileArtwork(title, coverId, accent, Modifier.fillMaxWidth().height(108.dp))
+            PlaylistTileArtwork(
+                title = title,
+                coverId = coverId,
+                accent = accent,
+                modifier = Modifier.fillMaxWidth().height(108.dp),
+                showInitial = showArtworkInitial,
+            )
             Row(
                 Modifier.fillMaxWidth().height(34.dp).padding(horizontal = 9.dp, vertical = 2.dp),
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -1425,7 +1437,13 @@ private fun PlaylistTile(
 }
 
 @Composable
-private fun PlaylistTileArtwork(title: String, coverId: String?, accent: Color, modifier: Modifier = Modifier) {
+private fun PlaylistTileArtwork(
+    title: String,
+    coverId: String?,
+    accent: Color,
+    modifier: Modifier = Modifier,
+    showInitial: Boolean = true,
+) {
     val container = LocalAppContainer.current
     val shape = RectangleShape
     if (coverId != null) {
@@ -1436,10 +1454,12 @@ private fun PlaylistTileArtwork(title: String, coverId: String?, accent: Color, 
             modifier = modifier,
             shape = shape,
             contentScale = ContentScale.Crop,
-            placeholderContent = { GeometricArtworkPlaceholder(title, accent, Modifier.fillMaxSize(), shape) },
+            placeholderContent = {
+                GeometricArtworkPlaceholder(title, accent, Modifier.fillMaxSize(), shape, showInitial)
+            },
         )
     } else {
-        GeometricArtworkPlaceholder(title, accent, modifier, shape)
+        GeometricArtworkPlaceholder(title, accent, modifier, shape, showInitial)
     }
 }
 
@@ -2385,6 +2405,7 @@ private fun GeometricArtworkPlaceholder(
     accent: Color,
     modifier: Modifier,
     shape: Shape,
+    showInitial: Boolean = true,
 ) {
     Box(modifier.clip(shape).background(Color(0xFF19201F))) {
         Canvas(Modifier.fillMaxSize()) {
@@ -2430,13 +2451,15 @@ private fun GeometricArtworkPlaceholder(
                 cap = StrokeCap.Round,
             )
         }
-        Text(
-            text.take(1).ifBlank { "音" },
-            color = FnColors.Text.copy(alpha = 0.9f),
-            fontSize = 28.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = 8.dp),
-        )
+        if (showInitial) {
+            Text(
+                text.take(1).ifBlank { "音" },
+                color = FnColors.Text.copy(alpha = 0.9f),
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = 8.dp),
+            )
+        }
     }
 }
 
@@ -3004,12 +3027,14 @@ private fun PlayerSideActionButton(
             .focusRequester(focusRequester)
             .onFocusChanged { if (it.isFocused) onFocus() }
             .semantics { contentDescription = description },
-        scale = ButtonDefaults.scale(focusedScale = 1.04f),
+        scale = ButtonDefaults.scale(focusedScale = 1.1f),
         colors = ButtonDefaults.colors(
             containerColor = if (emphasized) Color(0xFF382A27) else Color(0xFF202624),
             contentColor = if (emphasized) Color(0xFFF0D9D1) else FnColors.Text,
-            focusedContainerColor = if (emphasized) FnColors.Coral else Color(0xFF303734),
-            focusedContentColor = if (emphasized) FnColors.Background else FnColors.Text,
+            focusedContainerColor = FnColors.Coral,
+            focusedContentColor = FnColors.Background,
+            pressedContainerColor = FnColors.Coral,
+            pressedContentColor = FnColors.Background,
         ),
         contentPadding = PaddingValues(0.dp),
     ) {
@@ -3149,12 +3174,14 @@ private fun PlayerTransportButton(
             .focusRequester(focusRequester)
             .onFocusChanged { if (it.isFocused) onFocus() }
             .semantics { contentDescription = description },
-        scale = ButtonDefaults.scale(focusedScale = 1.04f),
+        scale = ButtonDefaults.scale(focusedScale = 1.1f),
         colors = ButtonDefaults.colors(
             containerColor = if (emphasized) FnColors.Text else Color.Transparent,
             contentColor = if (emphasized) FnColors.Background else FnColors.Text,
-            focusedContainerColor = if (emphasized) FnColors.Coral else Color(0xFF303734),
-            focusedContentColor = if (emphasized) FnColors.Background else FnColors.Text,
+            focusedContainerColor = FnColors.Coral,
+            focusedContentColor = FnColors.Background,
+            pressedContainerColor = FnColors.Coral,
+            pressedContentColor = FnColors.Background,
             disabledContainerColor = Color.Transparent,
             disabledContentColor = FnColors.Muted.copy(alpha = 0.45f),
         ),
@@ -3363,11 +3390,6 @@ private fun SettingsScreen(container: AppContainer) {
         }
         Text(
             "当前 ${formatBytes(usage.totalBytes)}（图片 ${formatBytes(usage.artworkBytes)} / 资料 ${formatBytes(usage.indexBytes)}）",
-            color = FnColors.Muted,
-            fontSize = 18.sp,
-        )
-        Text(
-            "图片额度立即生效；资料缓存独立遵守 24 MB 目标、32 MB 物理上限",
             color = FnColors.Muted,
             fontSize = 18.sp,
         )

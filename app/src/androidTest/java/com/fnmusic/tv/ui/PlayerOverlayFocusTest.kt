@@ -312,6 +312,10 @@ class PlayerOverlayFocusTest {
                 }
             }
         }
+        composeRule.onNodeWithContentDescription("播放")
+            .assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionLeft) }
+        composeRule.onNodeWithContentDescription("上一首").assertIsFocused()
         saveEvidence("player-controls")
         composeRule.runOnIdle { showQueue.value = true }
         saveEvidence("player-queue")

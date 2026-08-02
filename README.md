@@ -16,7 +16,8 @@
 ```
 
 侧载包允许用户配置的局域网 HTTP NAS，产物位于
-`app/build/outputs/apk/sideload/debug/`。`store` flavor 强制 HTTPS，并将 TV/Leanback
+`app/build/outputs/apk/sideload/<build-type>/`，文件名包含 `version.properties` 中的版本号。
+`store` flavor 强制 HTTPS，并将 TV/Leanback
 feature 设为必需；`sideload` flavor 将 TV/Leanback/touchscreen 都设为非必需，适配不声明
 标准 TV feature 的 Android 投影设备。
 
