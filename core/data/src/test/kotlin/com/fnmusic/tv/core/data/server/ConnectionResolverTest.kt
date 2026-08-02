@@ -66,4 +66,21 @@ class ConnectionResolverTest {
             assertEquals(AppError.AccessCodeRequired, error.error)
         }
     }
+
+    @Test fun `access code verification preserves relay request headers`() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(MockResponse.Builder().code(204).build())
+            val normalized = ServerUrlNormalizer.normalize(server.url("/").toString(), false) as ServerUrlResult.Valid
+            val resolver = ConnectionResolver(OkHttpClient())
+
+            val access = resolver.verifyAccessCode(ConnectionTarget(normalized.server, relayMode = true), "safe-code")
+
+            val request = server.takeRequest()
+            assertEquals("c2FmZS1jb2Rl", access.encodedAccessCode)
+            assertEquals("mode=relay", request.headers["Cookie"])
+            assertEquals("c2FmZS1jb2Rl", request.headers["x-access-code"])
+            assertEquals("app", request.headers["x-access-source"])
+        }
+    }
 }
