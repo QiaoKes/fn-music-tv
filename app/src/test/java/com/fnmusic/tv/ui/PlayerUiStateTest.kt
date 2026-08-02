@@ -4,6 +4,8 @@ import androidx.compose.ui.graphics.luminance
 import com.fnmusic.tv.NowPlayingPresentation
 import com.fnmusic.tv.NowPlayingResourceState
 import com.fnmusic.tv.core.model.AppError
+import com.fnmusic.tv.core.model.Artist
+import com.fnmusic.tv.core.model.CollectionGuid
 import com.fnmusic.tv.core.model.Page
 import com.fnmusic.tv.core.model.PlayerStyle
 import com.fnmusic.tv.core.model.Track
@@ -18,6 +20,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlinx.coroutines.runBlocking
 
 class PlayerUiStateTest {
     @Test fun `home back confirmation requires a second press within two seconds`() {
@@ -25,6 +28,39 @@ class PlayerUiStateTest {
         assertTrue(!isHomeBackConfirmed(previousBackAt = 1_000, currentBackAt = 3_001))
         assertTrue(!isHomeBackConfirmed(previousBackAt = 0, currentBackAt = 1_000))
         assertTrue(!isHomeBackConfirmed(previousBackAt = 2_000, currentBackAt = 1_999))
+    }
+
+    @Test fun `route lifecycle releases only routes that fully leave the back stack`() {
+        val lifecycle = LibraryRouteStateLifecycle()
+        val artistRoute = LibraryRoute.ArtistDetail(
+            Artist(CollectionGuid("artist-a"), "Artist A", coverId = null),
+        )
+
+        assertTrue(lifecycle.update(listOf(LibraryRoute.Home)).isEmpty())
+        assertTrue(lifecycle.update(listOf(LibraryRoute.Home, artistRoute)).isEmpty())
+        assertEquals(listOf(artistRoute), lifecycle.update(listOf(LibraryRoute.Home)))
+        assertTrue(lifecycle.update(listOf(LibraryRoute.Home, artistRoute)).isEmpty())
+        assertEquals(
+            setOf(LibraryRoute.Home, artistRoute),
+            lifecycle.update(listOf(LibraryRoute.My)).toSet(),
+        )
+    }
+
+    @Test fun `dynamic route cleanup removes its retained states without clearing session summaries`() = runBlocking {
+        val store = LibraryRetainedStateStore(this)
+        val artistRoute = LibraryRoute.ArtistDetail(
+            Artist(CollectionGuid("artist-a"), "Artist A", coverId = null),
+        )
+        store.paged<String>("artist:artist-a:albums")
+        store.tracks("artist:artist-a:tracks")
+        store.list<String>("playlists")
+
+        store.remove(artistRoute.retainedStateKeys())
+
+        assertEquals(1, store.size)
+        assertTrue(store.contains("playlists"))
+        assertTrue(!store.contains("artist:artist-a:albums"))
+        assertTrue(!store.contains("artist:artist-a:tracks"))
     }
 
     @Test fun `queue opens on current row and falls back to first`() {
@@ -43,6 +79,9 @@ class PlayerUiStateTest {
         assertEquals("b:0", queueFocusTargetKey(listOf("a:0", "b:0", "c:0"), 0, "b:0"))
         assertEquals("d:0", queueFocusTargetKey(listOf("a:0", "d:0"), 1, "b:0"))
         assertNull(queueFocusTargetKey(emptyList(), 0, "b:0"))
+        assertNull(queueRelocationFocusTargetKey(listOf("a:0", "b:0", "c:0"), 0, "b:0"))
+        assertEquals("d:0", queueRelocationFocusTargetKey(listOf("a:0", "d:0"), 1, "b:0"))
+        assertEquals("b:0", queueRelocationFocusTargetKey(listOf("a:0", "b:0"), 1, null))
     }
 
     @Test fun `retained pagination does not request page one after returning from page two`() {
@@ -240,6 +279,25 @@ class PlayerUiStateTest {
         assertSame(
             NowPlayingResourceState.Absent,
             retainPlayerVisualResource(previous, NowPlayingResourceState.Absent),
+        )
+    }
+
+    @Test fun `player visual continuity survives route recreation and rejects another namespace`() {
+        val continuity = PlayerVisualResourceContinuity<String>()
+        val firstIdentity = nowPlayingIdentity()
+        val nextIdentity = firstIdentity.copy(mediaId = "track-b", presentationRevision = 43)
+        val oldLyrics = NowPlayingResourceState.Ready("old lyrics")
+        val newLyrics = NowPlayingResourceState.Ready("new lyrics")
+
+        assertSame(oldLyrics, continuity.resolve(firstIdentity, oldLyrics))
+        assertSame(oldLyrics, continuity.resolve(nextIdentity, NowPlayingResourceState.Loading))
+        assertSame(newLyrics, continuity.resolve(nextIdentity, newLyrics))
+        assertSame(
+            NowPlayingResourceState.Loading,
+            continuity.resolve(
+                nextIdentity.copy(namespace = "account-b", presentationRevision = 44),
+                NowPlayingResourceState.Loading,
+            ),
         )
     }
 
