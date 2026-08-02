@@ -39,7 +39,8 @@ object ServerUrlNormalizer {
         var address = (if (scheme == null) value else value.substring(scheme.range.last + 1)).trimEnd('/')
         if (address.endsWith("/api/v1", ignoreCase = true)) address = address.dropLast(7).trimEnd('/')
         if (address.endsWith("/music", ignoreCase = true)) address = address.dropLast(6).trimEnd('/')
-        if (address.endsWith(":$DEFAULT_PORT")) address = address.dropLast(DEFAULT_PORT.toString().length + 1)
+        val implicitPort = if (useHttps) HTTPS_PORT else DEFAULT_HTTP_PORT
+        if (address.endsWith(":$implicitPort")) address = address.dropLast(implicitPort.toString().length + 1)
         return EditableServerInput(address, useHttps)
     }
 
@@ -63,7 +64,17 @@ object ServerUrlNormalizer {
         val schemeHttps = parsed.scheme == "https"
         val hasExplicitPort = runCatching { URI(candidate).port >= 0 }.getOrDefault(false)
         val origin = parsed.newBuilder()
-            .apply { if (!hasExplicitPort) port(DEFAULT_PORT) }
+            .apply {
+                if (!hasExplicitPort) {
+                    port(
+                        when {
+                            schemeHttps -> HTTPS_PORT
+                            explicitScheme != null -> HTTP_PORT
+                            else -> DEFAULT_HTTP_PORT
+                        },
+                    )
+                }
+            }
             .encodedPath("/")
             .query(null)
             .fragment(null)
@@ -79,5 +90,7 @@ object ServerUrlNormalizer {
         return ServerUrlResult.Valid(NormalizedServer(origin, apiBase, schemeHttps))
     }
 
-    private const val DEFAULT_PORT = 5666
+    private const val DEFAULT_HTTP_PORT = 5666
+    private const val HTTP_PORT = 80
+    private const val HTTPS_PORT = 443
 }

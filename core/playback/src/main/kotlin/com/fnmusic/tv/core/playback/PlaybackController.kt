@@ -236,6 +236,8 @@ class PlaybackController(
         val args = Bundle().apply {
             putString(PlaybackCommands.Token, credentials.rawAuthorization)
             putString(PlaybackCommands.CacheNamespace, credentials.cacheNamespace)
+            putString(PlaybackCommands.AccessCode, credentials.accessCodeHeader)
+            putBoolean(PlaybackCommands.RelayMode, credentials.relayMode)
         }
         val configureGeneration = generation
         val future = player.sendCustomCommand(PlaybackCommands.ConfigureAuthCommand, args)

@@ -55,6 +55,10 @@ Touch keeps the same command callbacks: tapping a login field enters edit mode, 
 player reveals its controls, and tapping progress calls the existing relative `onSeek` callback
 with `targetPositionMs - currentPositionMs`.
 
+Library, navigation, detail, queue, retry, and settings commands use the package-local
+touch-compatible `Button`. It preserves the TV Material button as the focus and D-pad target while
+observing physical pointer gestures before that component consumes them.
+
 The playback layer publishes one captured identity for the whole current-song presentation:
 
 ```kotlin
@@ -203,6 +207,23 @@ NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit)
 - Center field content vertically through `BasicTextField.decorationBox` with a full-height
   `Box(contentAlignment = Alignment.CenterStart)`. Center all command labels explicitly with
   `TextAlign.Center`; padding estimates are not a vertical-centering contract.
+
+### Physical touch across authenticated pages
+
+- Every TV Material command outside the player's enlarged transport/side-action targets goes
+  through the package-local touch-compatible `Button`; do not import TV Material `Button` directly
+  into a page.
+- A stationary physical tap invokes the existing callback exactly once. Consume only the release
+  after recognizing the tap so the inner TV button cannot publish a duplicate click.
+- Movement beyond `viewConfiguration.touchSlop` cancels the tap without consuming the gesture.
+  The owning `LazyRow`, `LazyColumn`, `LazyVerticalGrid`, or scrollable settings surface must retain
+  native drag scrolling.
+- Keep command callbacks unchanged. In particular, the Home random-roam tile still owns the same
+  busy guards and `startRoam` path, and remote focus/D-pad activation remains owned by TV Material.
+- The player transport and side actions already use an outer 48dp pointer target. Their inner
+  controls use the raw TV Material button so one touch cannot trigger both compatibility layers.
+- Instrumentation must cover a real pointer tap firing once and a drag scrolling a lazy container
+  without firing the card callback.
 
 ### Current-song presentation
 

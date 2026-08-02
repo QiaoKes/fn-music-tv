@@ -1,6 +1,7 @@
 package com.fnmusic.tv.core.data.api
 
 import com.fnmusic.tv.core.data.server.NormalizedServer
+import com.fnmusic.tv.core.data.server.ConnectionAccess
 import com.fnmusic.tv.core.model.AppError
 import com.fnmusic.tv.core.model.AppException
 import java.io.IOException
@@ -24,6 +25,7 @@ class TrimMusicApi(
     private val server: NormalizedServer,
     private val client: OkHttpClient,
     private val token: () -> String?,
+    private val access: ConnectionAccess = ConnectionAccess(),
 ) {
     fun apiBase(): String = server.apiBase.toString()
     suspend fun systemConfig(): SystemConfigDto = get("sys/config", authenticated = false)
@@ -149,33 +151,48 @@ class TrimMusicApi(
         authenticated: Boolean,
         decode: (Response) -> T,
     ): T {
-        if (authenticated) builder.header("Authorization", token() ?: throw AppException(AppError.Unauthenticated))
-        val call = client.newCall(builder.build())
+        val authToken = if (authenticated) token() ?: throw AppException(AppError.Unauthenticated) else null
+        access.headers(authToken).forEach(builder::header)
         return suspendCancellableCoroutine { continuation ->
-            continuation.invokeOnCancellation { call.cancel() }
-            call.enqueue(
-                object : Callback {
-                    override fun onFailure(call: Call, e: IOException) {
-                        if (continuation.isActive) {
-                            continuation.resumeWithException(e.asRequestFailure())
+            var activeCall: Call? = null
+            fun enqueue(request: Request, redirects: Int) {
+                val call = client.newCall(request)
+                activeCall = call
+                call.enqueue(
+                    object : Callback {
+                        override fun onFailure(call: Call, e: IOException) {
+                            if (continuation.isActive) continuation.resumeWithException(e.asRequestFailure())
                         }
-                    }
 
-                    override fun onResponse(call: Call, response: Response) {
-                        val result = runCatching {
-                            response.use {
-                                classifyStatus(it)
-                                decode(it)
+                        override fun onResponse(call: Call, response: Response) {
+                            if (access.relayMode && response.isRedirect && redirects < MAX_RELAY_REDIRECTS) {
+                                val next = response.header("Location")?.let { request.url.resolve(it) }
+                                response.close()
+                                if (!continuation.isActive) return
+                                if (next == null) {
+                                    continuation.resumeWithException(AppException(AppError.NetworkUnavailable))
+                                } else {
+                                    enqueue(request.newBuilder().url(next).build(), redirects + 1)
+                                }
+                                return
                             }
+                            val result = runCatching {
+                                response.use {
+                                    classifyStatus(it)
+                                    decode(it)
+                                }
+                            }
+                            if (!continuation.isActive) return
+                            result.fold(
+                                onSuccess = continuation::resume,
+                                onFailure = { continuation.resumeWithException(it.asRequestFailure()) },
+                            )
                         }
-                        if (!continuation.isActive) return
-                        result.fold(
-                            onSuccess = continuation::resume,
-                            onFailure = { continuation.resumeWithException(it.asRequestFailure()) },
-                        )
-                    }
-                },
-            )
+                    },
+                )
+            }
+            continuation.invokeOnCancellation { activeCall?.cancel() }
+            enqueue(builder.build(), redirects = 0)
         }
     }
 
@@ -213,6 +230,8 @@ class TrimMusicApi(
     }
 
     companion object {
+        private const val MAX_RELAY_REDIRECTS = 5
+
         fun client(): OkHttpClient = OkHttpClient.Builder()
             .followRedirects(false)
             .followSslRedirects(false)

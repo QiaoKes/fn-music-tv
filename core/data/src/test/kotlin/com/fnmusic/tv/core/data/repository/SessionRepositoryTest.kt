@@ -101,8 +101,7 @@ class SessionRepositoryTest {
         val tokenStore = FakeTokenStore(REMEMBERED_TOKEN)
         val repository = repository(tokenStore)
         val restore = async(Dispatchers.IO) { repository.restore() }
-        assertTrue(server.takeRequest(5, TimeUnit.SECONDS) != null)
-        assertTrue(server.takeRequest(5, TimeUnit.SECONDS) != null)
+        repeat(3) { assertTrue(server.takeRequest(5, TimeUnit.SECONDS) != null) }
 
         restore.cancel()
         try {
@@ -124,6 +123,7 @@ class SessionRepositoryTest {
     )
 
     private fun enqueueSystemConfig() {
+        server.enqueue(MockResponse.Builder().code(204).build())
         server.enqueue(
             MockResponse.Builder()
                 .body(
