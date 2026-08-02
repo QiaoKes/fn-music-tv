@@ -45,6 +45,11 @@ MusicRepository.clearAllEvictableCaches()
 MusicRepository.cacheUsage(): CacheUsage
 enum class CacheBudget(val megabytes: Int) { Small(32), Medium(64), Default(128), Large(256) }
 
+ArtworkBitmapCache.peek(coverId: String, variant: CoverVariant): Bitmap?
+ArtworkBitmapCache.get(coverId: String, variant: CoverVariant): Bitmap?
+ArtworkBitmapCache.prefetch(coverId: String, variant: CoverVariant): Job?
+ArtworkBitmapCache.clear()
+
 createPlaybackLoadControl(): DefaultLoadControl
 createPlaybackHttpDataSourceFactory(): DefaultHttpDataSource.Factory
 deleteLegacyAudioCache(cacheDirectory: File): Boolean
@@ -130,6 +135,14 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 - Artwork uses a 24 MiB access-ordered encoded-byte memory LRU plus `cacheDir/artwork`. Its key is
   `(namespace, coverId, variant)`, files live below a hashed namespace directory, and same-key cold
   misses use the same waiter-aware single-flight and generation rules as response payloads.
+- `AppContainer` additionally owns one 40 MiB access-ordered decoded-`Bitmap` LRU keyed by the exact
+  `(coverId, CoverVariant)`. Compact, Grid, Player, and Poster are independent entries. Same-key
+  consumers join one application-scoped decode, at most three loads run concurrently, and a
+  composable cancellation does not cancel work still useful to another consumer.
+- Decoded cache clearing increments a generation, cancels known in-flight work, and rejects every
+  result captured before the clear. Clear it whenever the authenticated namespace changes or signs
+  out and alongside explicit artwork/all-cache clearing; this is what makes its non-namespaced key
+  account-safe. Decoded bytes are process-only and are excluded from disk-cache usage reporting.
 - Validate downloaded and disk-read image bytes before acceptance. Invalid disk entries are
   deleted; invalid, failed, or canceled downloads leave neither a final file nor a negative cache
   entry. A later request remains eligible to retry.
@@ -246,6 +259,9 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 | Retained response cache hit | Return serialized payload with no NAS call and update process LRU order |
 | Response cache exceeds 8 MiB | Evict least-recently-used UTF-8 payloads until within capacity |
 | Artwork memory/disk hit | Return bytes with no cover HTTP call and touch the disk entry |
+| Exact decoded bitmap hit | Return it synchronously on the first composition; do not show a placeholder frame |
+| Only another artwork variant is decoded | Treat as a miss; keep the stable placeholder and load the exact variant |
+| Decoded cache clear races an older load | Cancel the flight and reject its result by generation; memory stays empty |
 | Artwork disk budget exceeded | Evict globally least-recently-used files across all namespaces |
 | Bare host or IP | Add port `5666` and `/music/api/v1/` |
 | Explicit port, including `80` | Preserve that port |
@@ -272,6 +288,8 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   `com.fnmusic.tv` package.
 - Good: clearing namespace A during an artwork download cancels A, prevents its late file write, and
   leaves namespace B plus its files untouched.
+- Good: two Grid consumers for one cover join one decode; a Compact hit neither satisfies nor
+  visually substitutes for the Grid request.
 - Good: a 128 MiB artwork setting caps the total under `cacheDir/artwork`, not 128 MiB per account.
 - Good: `SetShuffleOrder([c, a, b], revision=12)` against canonical `[a, b, c]` succeeds and echoes
   exactly `[c, a, b]` plus revision `12` before the controller activates shuffle.
@@ -291,6 +309,8 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   final attempt; a `404` makes exactly one request and becomes `Absent`.
 - Bad: a response/artwork key without namespace, an unbounded map, a permanent negative cache entry,
   or allowing a cleared flight to write back.
+- Bad: keying decoded artwork by cover ID alone, retaining decoded entries across an account change,
+  or launching independent decode jobs from every composable.
 - Bad: `SimpleCache`, `CacheDataSource`, a Media3 `ClearCache` command, or any normal playback write
   below `cacheDir/media`.
 - Bad: accepting a shuffle list that merely has the same length, or activating shuffle before an
@@ -321,6 +341,8 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 - `ArtworkCacheTest`/`ArtworkValidationTest`: namespaced memory/disk hits, same-key single-flight,
   waiter cancellation, invalid-byte rejection, atomic temporary replacement, hit touching, global
   cross-namespace budget, legacy/temp cleanup, and clear-versus-late-write races.
+- `ArtworkBitmapCacheTest`: exact-variant isolation, same-key decode single-flight, exact Grid
+  prefetch, and decoded clear-versus-late-write rejection.
 - `AppDatabaseMigrationTest`/`LocalStoreTest`: version-1 to version-2 preservation,
   `schemaRevision=1`, account isolation, LRU eviction, physical-budget reclaim, version-2 playback
   payload storage, and essential-state-preserving clear.
@@ -416,6 +438,17 @@ cache.getOrPut("album:$guid") { api.album(guid) }
 // Correct: namespace participates in the waiter-aware, generation-checked single-flight key.
 responses.getOrFetch(ResponseCacheKey(namespace, "index", "album:$guid")) {
     api.album(guid).let(ApiDecoder.json::encodeToString)
+}
+```
+
+```kotlin
+// Wrong: every composition starts empty and Compact is reused as a blurry Grid preview.
+produceState<Bitmap?>(null, coverId) { value = decode(repository.artwork(coverId, Compact)) }
+
+// Correct: synchronously reuse only the exact variant and join one bounded app-scoped decode.
+val initial = artworkBitmapCache.peek(coverId, CoverVariant.Grid)
+produceState(initial, coverId) {
+    value = artworkBitmapCache.get(coverId, CoverVariant.Grid)
 }
 ```
 

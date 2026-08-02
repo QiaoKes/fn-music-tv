@@ -1,7 +1,6 @@
 package com.fnmusic.tv.ui
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.os.SystemClock
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -109,6 +108,7 @@ import androidx.tv.material3.Text
 import com.fnmusic.tv.AppContainer
 import com.fnmusic.tv.NowPlayingPresentation
 import com.fnmusic.tv.NowPlayingResourceState
+import com.fnmusic.tv.decodeArtwork
 import com.fnmusic.tv.core.data.repository.CurrentLyrics
 import com.fnmusic.tv.core.data.repository.SessionState
 import com.fnmusic.tv.core.model.Album
@@ -843,7 +843,7 @@ private fun BrowseMy(
                 Button(onClick = {
                     scope.launch {
                         runCatching { container.playbackController.clearSessionDurably() }
-                        container.musicRepository.clearArtwork()
+                        container.clearArtworkCaches()
                         container.musicRepository.clearLocalNamespace(includeEssential = true)
                         container.sessionRepository.logout()
                     }
@@ -1274,10 +1274,19 @@ private fun ArtistAlbumGrid(
 
 @Composable
 private fun DetailAlbumCard(album: Album, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val container = LocalAppContainer.current
+    val albumCoverId = album.coverId
     val shape = RoundedCornerShape(6.dp)
     Button(
         onClick = onClick,
-        modifier = modifier.fillMaxWidth().height(106.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .height(106.dp)
+            .onFocusChanged { state ->
+                if (state.isFocused && albumCoverId != null) {
+                    container.artworkBitmapCache.prefetch(albumCoverId, CoverVariant.Grid)
+                }
+            },
         shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
         scale = ButtonDefaults.scale(focusedScale = 1.025f),
         colors = ButtonDefaults.colors(
@@ -1293,10 +1302,9 @@ private fun DetailAlbumCard(album: Album, modifier: Modifier = Modifier, onClick
         val contentColor = LocalContentColor.current
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
             val artworkShape = RoundedCornerShape(4.dp)
-            val albumCoverId = album.coverId
             if (albumCoverId != null) {
                 RemoteArtwork(
-                    container = LocalAppContainer.current,
+                    container = container,
                     coverId = albumCoverId,
                     variant = CoverVariant.Compact,
                     modifier = Modifier.size(88.dp),
@@ -1586,7 +1594,34 @@ private fun LegacyTrackCollection(
 ) {
     Row(Modifier.fillMaxSize().padding(horizontal = 56.dp, vertical = 38.dp), horizontalArrangement = Arrangement.spacedBy(34.dp)) {
         Column(Modifier.width(330.dp)) {
-            if (coverId != null) RemoteArtwork(container, coverId, CoverVariant.Grid, Modifier.size(300.dp))
+            val artworkShape = RoundedCornerShape(8.dp)
+            if (coverId != null) {
+                RemoteArtwork(
+                    container = container,
+                    coverId = coverId,
+                    variant = CoverVariant.Grid,
+                    modifier = Modifier.size(300.dp),
+                    shape = artworkShape,
+                    contentScale = ContentScale.Crop,
+                    placeholderContent = {
+                        GeometricArtworkPlaceholder(
+                            text = title,
+                            accent = FnColors.Coral,
+                            modifier = Modifier.fillMaxSize(),
+                            shape = artworkShape,
+                            showInitial = false,
+                        )
+                    },
+                )
+            } else {
+                GeometricArtworkPlaceholder(
+                    text = title,
+                    accent = FnColors.Coral,
+                    modifier = Modifier.size(300.dp),
+                    shape = artworkShape,
+                    showInitial = false,
+                )
+            }
             Text(title, fontSize = 36.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (subtitle.isNotBlank()) Text(subtitle, color = FnColors.Muted, fontSize = 21.sp)
             Spacer(Modifier.height(18.dp))
@@ -1990,7 +2025,35 @@ private fun isTrackPlayable(track: Track): Boolean =
 private fun TrackRow(track: Track, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Button(enabled = enabled, onClick = onClick, modifier = modifier.fillMaxWidth().height(72.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            track.coverId?.let { RemoteArtwork(LocalAppContainer.current, it, CoverVariant.Compact, Modifier.size(52.dp)) }
+            val artworkShape = RoundedCornerShape(5.dp)
+            val trackCoverId = track.coverId
+            if (trackCoverId != null) {
+                RemoteArtwork(
+                    container = LocalAppContainer.current,
+                    coverId = trackCoverId,
+                    variant = CoverVariant.Compact,
+                    modifier = Modifier.size(52.dp),
+                    shape = artworkShape,
+                    contentScale = ContentScale.Crop,
+                    placeholderContent = {
+                        GeometricArtworkPlaceholder(
+                            text = track.title,
+                            accent = FnColors.Teal,
+                            modifier = Modifier.fillMaxSize(),
+                            shape = artworkShape,
+                            showInitial = false,
+                        )
+                    },
+                )
+            } else {
+                GeometricArtworkPlaceholder(
+                    text = track.title,
+                    accent = FnColors.Teal,
+                    modifier = Modifier.size(52.dp),
+                    shape = artworkShape,
+                    showInitial = false,
+                )
+            }
             Column(Modifier.weight(1f)) {
                 Text(track.title, fontSize = 22.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(track.artistName.orEmpty(), color = FnColors.Muted, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -2097,11 +2160,18 @@ private fun ArtistLockup(
     enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
+    val container = LocalAppContainer.current
     val shape = RoundedCornerShape(8.dp)
     Button(
         enabled = enabled,
         onClick = onClick,
-        modifier = modifier.size(width = 170.dp, height = 95.dp),
+        modifier = modifier
+            .size(width = 170.dp, height = 95.dp)
+            .onFocusChanged { state ->
+                if (state.isFocused && coverId != null) {
+                    container.artworkBitmapCache.prefetch(coverId, CoverVariant.Grid)
+                }
+            },
         shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
         scale = ButtonDefaults.scale(focusedScale = 1.025f),
         colors = lockupButtonColors(),
@@ -2110,7 +2180,7 @@ private fun ArtistLockup(
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
             if (coverId != null) {
                 RemoteArtwork(
-                    container = LocalAppContainer.current,
+                    container = container,
                     coverId = coverId,
                     variant = CoverVariant.Compact,
                     modifier = Modifier.size(61.dp),
@@ -2146,12 +2216,19 @@ private fun AlbumLockup(
     enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
+    val container = LocalAppContainer.current
     val shape = RoundedCornerShape(8.dp)
     val artworkShape = RoundedCornerShape(4.dp)
     Button(
         enabled = enabled,
         onClick = onClick,
-        modifier = modifier.size(width = 165.dp, height = 95.dp),
+        modifier = modifier
+            .size(width = 165.dp, height = 95.dp)
+            .onFocusChanged { state ->
+                if (state.isFocused && coverId != null) {
+                    container.artworkBitmapCache.prefetch(coverId, CoverVariant.Grid)
+                }
+            },
         shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
         scale = ButtonDefaults.scale(focusedScale = 1.025f),
         colors = lockupButtonColors(),
@@ -2160,7 +2237,7 @@ private fun AlbumLockup(
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
             if (coverId != null) {
                 RemoteArtwork(
-                    container = LocalAppContainer.current,
+                    container = container,
                     coverId = coverId,
                     variant = CoverVariant.Compact,
                     modifier = Modifier.size(73.dp),
@@ -2252,7 +2329,6 @@ private fun RemoteArtwork(
     modifier: Modifier = Modifier,
     shape: Shape = RoundedCornerShape(8.dp),
     contentScale: ContentScale = ContentScale.Fit,
-    placeholderText: String? = null,
     placeholderContent: (@Composable () -> Unit)? = null,
 ) {
     val bitmap = rememberRemoteArtworkBitmap(container, coverId, variant)
@@ -2260,9 +2336,16 @@ private fun RemoteArtwork(
         Image(bitmap.asImageBitmap(), null, modifier.clip(shape), contentScale = contentScale)
     } else {
         Box(modifier.background(FnColors.Surface, shape), contentAlignment = Alignment.Center) {
-            when {
-                placeholderContent != null -> placeholderContent()
-                placeholderText != null -> Text(placeholderText, color = FnColors.Teal, fontSize = 78.sp, fontWeight = FontWeight.SemiBold)
+            if (placeholderContent != null) {
+                placeholderContent()
+            } else {
+                GeometricArtworkPlaceholder(
+                    text = "",
+                    accent = FnColors.Teal,
+                    modifier = Modifier.fillMaxSize(),
+                    shape = shape,
+                    showInitial = false,
+                )
             }
         }
     }
@@ -2270,11 +2353,11 @@ private fun RemoteArtwork(
 
 @Composable
 private fun rememberRemoteArtworkBitmap(container: AppContainer, coverId: String?, variant: CoverVariant): Bitmap? {
-    val bitmap by produceState<Bitmap?>(null, container, coverId, variant) {
-        value = coverId?.let { id ->
-            val bytes = container.musicRepository.artwork(id, variant) ?: return@let null
-            withContext(Dispatchers.Default) { decodeArtwork(bytes, variant.width ?: 1_200) }
-        }
+    val initialBitmap = remember(container, coverId, variant) {
+        coverId?.let { container.artworkBitmapCache.peek(it, variant) }
+    }
+    val bitmap by produceState(initialBitmap, container, coverId, variant) {
+        value = coverId?.let { container.artworkBitmapCache.get(it, variant) }
     }
     return if (coverId == null) null else bitmap
 }
@@ -2468,7 +2551,6 @@ private fun ImmersivePlayer(
     val lyricsFailed = displayedLyrics is NowPlayingResourceState.RetryableFailure
     var controlsVisible by remember { mutableStateOf(true) }
     var queueVisible by remember { mutableStateOf(false) }
-    var restoreQueueFocus by remember { mutableStateOf(false) }
     var interactionEpoch by remember { mutableStateOf(0) }
     val playerFocus = remember { FocusRequester() }
     val progressFocus = remember { FocusRequester() }
@@ -2523,28 +2605,15 @@ private fun ImmersivePlayer(
     LaunchedEffect(controlsVisible, queueVisible) {
         when {
             queueVisible -> Unit
-            restoreQueueFocus -> Unit
             controlsVisible -> playFocus.requestFocus()
             else -> playerFocus.requestFocus()
-        }
-    }
-    LaunchedEffect(queueVisible, restoreQueueFocus) {
-        if (!queueVisible && restoreQueueFocus) {
-            yield()
-            queueFocus.requestFocus()
-            restoreQueueFocus = false
         }
     }
     LaunchedEffect(roaming) {
         if (!roaming && controlsVisible) playFocus.requestFocus()
     }
-    BackHandler(queueVisible) {
+    BackHandler(queueVisible || controlsVisible) {
         queueVisible = false
-        controlsVisible = true
-        interactionEpoch++
-        restoreQueueFocus = true
-    }
-    BackHandler(controlsVisible && !queueVisible) {
         controlsVisible = false
         playerFocus.requestFocus()
     }
@@ -3488,73 +3557,84 @@ internal fun PlayerControlOverlay(
     var progressFocused by remember { mutableStateOf(false) }
     val fraction = playerProgressFraction(positionMs, durationMs)
     Column(
-        modifier.fillMaxWidth().height(94.dp).background(Color(0xF20C1110))
-            .padding(start = 47.dp, top = 14.dp, end = 47.dp, bottom = 11.dp),
+        modifier.fillMaxWidth().height(94.dp)
+            .background(
+                Brush.verticalGradient(
+                    0f to Color.Transparent,
+                    0.38f to Color(0x2B090D0C),
+                    1f to Color(0xA3090D0C),
+                ),
+            )
+            .padding(start = 47.dp, top = 8.dp, end = 47.dp, bottom = 8.dp),
     ) {
-        Row(Modifier.fillMaxWidth().height(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(formatDuration(positionMs), color = FnColors.Muted, fontSize = 9.sp, modifier = Modifier.width(29.dp))
-            Canvas(
-                Modifier.weight(1f).height(14.dp)
-                    .focusProperties {
-                        up = if (statusRetryAvailable) statusRetryFocus else FocusRequester.Cancel
-                        down = playFocus
+        Canvas(
+            Modifier.fillMaxWidth().height(14.dp)
+                .focusProperties {
+                    up = if (statusRetryAvailable) statusRetryFocus else FocusRequester.Cancel
+                    down = playFocus
+                }
+                .focusRequester(progressFocus)
+                .onFocusChanged {
+                    progressFocused = it.isFocused
+                    if (it.isFocused) onInteraction()
+                }
+                .onPreviewKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    when (event.key) {
+                        Key.DirectionLeft -> {
+                            onSeek(-10_000)
+                            onInteraction()
+                            true
+                        }
+                        Key.DirectionRight -> {
+                            onSeek(10_000)
+                            onInteraction()
+                            true
+                        }
+                        Key.DirectionDown -> {
+                            onInteraction()
+                            playFocus.requestFocus()
+                            true
+                        }
+                        Key.DirectionUp -> {
+                            onInteraction()
+                            if (statusRetryAvailable) statusRetryFocus.requestFocus()
+                            true
+                        }
+                        else -> false
                     }
-                    .focusRequester(progressFocus)
-                    .onFocusChanged {
-                        progressFocused = it.isFocused
-                        if (it.isFocused) onInteraction()
-                    }
-                    .onPreviewKeyEvent { event ->
-                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                        when (event.key) {
-                            Key.DirectionLeft -> {
-                                onSeek(-10_000)
-                                onInteraction()
-                                true
-                            }
-                            Key.DirectionRight -> {
-                                onSeek(10_000)
-                                onInteraction()
-                                true
-                            }
-                            Key.DirectionDown -> {
-                                onInteraction()
-                                playFocus.requestFocus()
-                                true
-                            }
-                            Key.DirectionUp -> {
-                                onInteraction()
-                                if (statusRetryAvailable) statusRetryFocus.requestFocus()
-                                true
-                            }
-                            else -> false
+                }
+                .pointerInput(positionMs, durationMs) {
+                    if (durationMs > 0L) {
+                        detectTapGestures { offset ->
+                            val targetMs = (durationMs * (offset.x / size.width).coerceIn(0f, 1f)).toLong()
+                            onSeek(targetMs - positionMs)
+                            onInteraction()
                         }
                     }
-                    .pointerInput(positionMs, durationMs) {
-                        if (durationMs > 0L) {
-                            detectTapGestures { offset ->
-                                val targetMs = (durationMs * (offset.x / size.width).coerceIn(0f, 1f)).toLong()
-                                onSeek(targetMs - positionMs)
-                                onInteraction()
-                            }
-                        }
-                    }
-                    .focusable()
-                    .background(if (progressFocused) Color(0xFF242B29) else Color.Transparent, RoundedCornerShape(3.dp))
-                    .graphicsLayer {
-                        scaleX = if (progressFocused) 1.04f else 1f
-                        scaleY = if (progressFocused) 1.04f else 1f
-                    }
-                    .semantics { contentDescription = "播放进度 ${formatDuration(positionMs)} / ${formatDuration(durationMs)}" },
-            ) {
-                val centerY = size.height / 2f
-                val playedX = size.width * fraction
-                drawLine(Color(0xFF4A504E), androidx.compose.ui.geometry.Offset(0f, centerY), androidx.compose.ui.geometry.Offset(size.width, centerY), 2.dp.toPx(), StrokeCap.Round)
-                drawLine(FnColors.Coral, androidx.compose.ui.geometry.Offset(0f, centerY), androidx.compose.ui.geometry.Offset(playedX, centerY), 2.dp.toPx(), StrokeCap.Round)
-                if (progressFocused) drawCircle(FnColors.Coral.copy(alpha = 0.2f), 8.dp.toPx(), androidx.compose.ui.geometry.Offset(playedX, centerY))
-                drawCircle(if (progressFocused) Color.White else FnColors.Text, if (progressFocused) 5.dp.toPx() else 3.5.dp.toPx(), androidx.compose.ui.geometry.Offset(playedX, centerY))
-            }
-            Text(formatDuration(durationMs), color = FnColors.Muted, fontSize = 9.sp, modifier = Modifier.width(29.dp), maxLines = 1)
+                }
+                .focusable()
+                .background(if (progressFocused) Color.White.copy(alpha = 0.12f) else Color.Transparent, RoundedCornerShape(3.dp))
+                .graphicsLayer {
+                    scaleX = if (progressFocused) 1.02f else 1f
+                    scaleY = if (progressFocused) 1.04f else 1f
+                }
+                .semantics { contentDescription = "播放进度 ${formatDuration(positionMs)} / ${formatDuration(durationMs)}" },
+        ) {
+            val centerY = size.height / 2f
+            val playedX = size.width * fraction
+            drawLine(Color.White.copy(alpha = 0.28f), androidx.compose.ui.geometry.Offset(0f, centerY), androidx.compose.ui.geometry.Offset(size.width, centerY), 2.dp.toPx(), StrokeCap.Round)
+            drawLine(FnColors.Coral, androidx.compose.ui.geometry.Offset(0f, centerY), androidx.compose.ui.geometry.Offset(playedX, centerY), 2.dp.toPx(), StrokeCap.Round)
+            if (progressFocused) drawCircle(FnColors.Coral.copy(alpha = 0.24f), 8.dp.toPx(), androidx.compose.ui.geometry.Offset(playedX, centerY))
+            drawCircle(Color.White, if (progressFocused) 5.dp.toPx() else 3.5.dp.toPx(), androidx.compose.ui.geometry.Offset(playedX, centerY))
+        }
+        Row(
+            Modifier.fillMaxWidth().height(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Top,
+        ) {
+            Text(formatDuration(positionMs), color = Color.White.copy(alpha = 0.72f), fontSize = 9.sp, lineHeight = 10.sp)
+            Text(formatDuration(durationMs), color = Color.White.copy(alpha = 0.72f), fontSize = 9.sp, lineHeight = 10.sp, maxLines = 1)
         }
         Box(Modifier.fillMaxWidth().weight(1f)) {
             if (!roaming) {
@@ -3666,7 +3746,7 @@ private fun PlayerSideActionButton(
             .semantics { contentDescription = description },
         scale = ButtonDefaults.scale(focusedScale = 1.1f),
         colors = ButtonDefaults.colors(
-            containerColor = if (emphasized) Color(0xFF382A27) else Color(0xFF202624),
+            containerColor = if (emphasized) Color(0x66382A27) else Color.Transparent,
             contentColor = if (emphasized) Color(0xFFF0D9D1) else FnColors.Text,
             focusedContainerColor = FnColors.Coral,
             focusedContentColor = FnColors.Background,
@@ -4230,7 +4310,7 @@ private fun SettingsScreen(container: AppContainer) {
         )
         Button(onClick = {
             scope.launch {
-                container.musicRepository.clearAllEvictableCaches()
+                container.clearAllEvictableCaches()
                 container.nowPlayingPresenter.refreshCurrentPresentation()
                 refreshUsage()
             }
@@ -4261,19 +4341,4 @@ private fun formatBytes(bytes: Long): String = when {
     bytes >= 1024L * 1024L * 1024L -> "%.1f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
     bytes >= 1024L * 1024L -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
     else -> "%.1f KB".format(bytes / 1024.0)
-}
-
-private fun decodeArtwork(bytes: ByteArray, targetLongEdge: Int): android.graphics.Bitmap? {
-    if (bytes.size > 20 * 1024 * 1024) return null
-    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-    if (bounds.outWidth <= 0 || bounds.outHeight <= 0 || bounds.outWidth > 8_192 || bounds.outHeight > 8_192) return null
-    if (bounds.outWidth.toLong() * bounds.outHeight.toLong() > 16_000_000L) return null
-    var sample = 1
-    while (
-        bounds.outWidth / sample > targetLongEdge ||
-        bounds.outHeight / sample > targetLongEdge ||
-        (bounds.outWidth.toLong() / sample) * (bounds.outHeight.toLong() / sample) > 16_000_000L
-    ) sample *= 2
-    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
 }

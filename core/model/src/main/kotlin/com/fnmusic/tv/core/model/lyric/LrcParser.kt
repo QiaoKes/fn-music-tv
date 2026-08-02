@@ -1,5 +1,12 @@
 package com.fnmusic.tv.core.model.lyric
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
+
 data class LyricLine(val startMs: Long, val texts: List<String>)
 
 data class LyricTimeline(val lines: List<LyricLine>) {
@@ -44,6 +51,56 @@ object LrcParser {
                 .groupBy { it.startMs }
                 .map { (startMs, lines) -> LyricLine(startMs, lines.map { it.text }) },
         )
+    }
+
+    private data class ParsedLine(val startMs: Long, val text: String, val order: Int)
+}
+
+object LyricParser {
+    fun parse(content: String): LyricTimeline {
+        val yrc = YrcParser.parse(content)
+        return yrc.takeIf { it.lines.isNotEmpty() } ?: LrcParser.parse(content)
+    }
+}
+
+private object YrcParser {
+    private val json = Json
+    private val lineTimestamp = Regex("""^\[(\d+),(\d+)](.*)$""")
+    private val wordTimestamp = Regex("""\(\d+,\d+,\d+\)""")
+
+    fun parse(content: String): LyricTimeline {
+        val timed = buildList {
+            content.removePrefix("\uFEFF").lineSequence().forEachIndexed { order, raw ->
+                parseTimedLine(raw, order)?.let(::add)
+                    ?: parseMetadataLine(raw, order)?.let(::add)
+            }
+        }
+        return LyricTimeline(
+            timed.sortedWith(compareBy<ParsedLine> { it.startMs }.thenBy { it.order })
+                .groupBy { it.startMs }
+                .map { (startMs, lines) -> LyricLine(startMs, lines.map { it.text }) },
+        )
+    }
+
+    private fun parseTimedLine(raw: String, order: Int): ParsedLine? {
+        val match = lineTimestamp.matchEntire(raw.trim()) ?: return null
+        val startMs = match.groupValues[1].toLongOrNull() ?: return null
+        match.groupValues[2].toLongOrNull() ?: return null
+        val text = wordTimestamp.replace(match.groupValues[3], "").trim()
+        return text.takeIf(String::isNotEmpty)?.let { ParsedLine(startMs, it, order) }
+    }
+
+    private fun parseMetadataLine(raw: String, order: Int): ParsedLine? {
+        val element = runCatching { json.parseToJsonElement(raw.trim()) }.getOrNull() ?: return null
+        val value = runCatching { element.jsonObject }.getOrNull() ?: return null
+        val startMs = runCatching { value["t"]?.jsonPrimitive?.longOrNull }.getOrNull() ?: return null
+        val chunks = runCatching { value["c"]?.jsonArray }.getOrNull() ?: return null
+        val text = chunks.joinToString("") { chunk ->
+            runCatching { chunk.jsonObject["tx"]?.jsonPrimitive?.contentOrNull }
+                .getOrNull()
+                .orEmpty()
+        }.trim()
+        return text.takeIf(String::isNotEmpty)?.let { ParsedLine(startMs.coerceAtLeast(0), it, order) }
     }
 
     private data class ParsedLine(val startMs: Long, val text: String, val order: Int)

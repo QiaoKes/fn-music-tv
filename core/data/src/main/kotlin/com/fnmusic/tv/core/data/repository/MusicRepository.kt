@@ -30,7 +30,7 @@ import com.fnmusic.tv.core.model.Playlist
 import com.fnmusic.tv.core.model.RoamWindow
 import com.fnmusic.tv.core.model.SharedLibrary
 import com.fnmusic.tv.core.model.Track
-import com.fnmusic.tv.core.model.lyric.LrcParser
+import com.fnmusic.tv.core.model.lyric.LyricParser
 import com.fnmusic.tv.core.model.lyric.LyricTimeline
 import com.fnmusic.tv.core.model.playback.QueueSource
 import com.fnmusic.tv.core.model.preferences.CacheUsage
@@ -48,6 +48,15 @@ private const val MAX_ARTWORK_PIXELS = 16_000_000L
 private const val ARTWORK_VALIDATION_LONG_EDGE = 128
 
 internal data class ArtworkBounds(val width: Int, val height: Int)
+
+internal fun decodeLyrics(response: LyricListDto): Pair<LyricDocument?, LyricTimeline?> {
+    val selected = response.list.firstOrNull { it.guid == response.preferred }
+        ?: response.list.firstOrNull { it.isLRC }
+        ?: response.list.firstOrNull()
+    val document = selected?.toDomain()
+    val timeline = document?.let { LyricParser.parse(it.content) }?.takeIf { it.lines.isNotEmpty() }
+    return document to timeline
+}
 
 internal fun isValidArtworkBytes(bytes: ByteArray): Boolean = isValidArtworkBytes(
     bytes = bytes,
@@ -329,14 +338,6 @@ class MusicRepository internal constructor(
             }
         }
         return ApiDecoder.json.decodeFromString(payload)
-    }
-
-    private fun decodeLyrics(response: LyricListDto): Pair<LyricDocument?, LyricTimeline?> {
-        val selected = response.list.firstOrNull { it.guid == response.preferred }
-            ?: response.list.firstOrNull { it.isLRC }
-            ?: response.list.firstOrNull()
-        val document = selected?.toDomain()
-        return document to document?.takeIf { it.isLrc }?.let { LrcParser.parse(it.content) }
     }
 
     private suspend inline fun <reified Dto, Domain> cachedPage(
