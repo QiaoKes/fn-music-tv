@@ -235,15 +235,15 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   artifacts and must not be distributed as formal updates.
 - Media3 unstable APIs require `androidx.annotation.OptIn(UnstableApi::class)` at the implementation
   boundary so lint accepts usage without making callers opt in.
-- CI uses JDK 21 and SDK 36, runs all app/library unit tests and lint variants, builds sideload/store
-  debug and unsigned release APKs, compiles both app Android-test APKs, and builds both benchmark
-  variants. Application and verification artifacts are retained for 14 days.
-- After CI succeeds on `main`, a missing `v<VERSION_NAME>` release starts the formal signing stage.
-  It reuses the Gradle cache from the quality-gate job, restores the fixed signing identity from
-  protected repository secrets, verifies package, version, signer, and all four supported ABIs,
-  then creates the immutable tag and GitHub Release with exactly one universal sideload APK plus
-  its SHA-256 checksum. Lint ignores `OldTargetApi` because the project target is explicitly pinned
-  while that check varies with the newest platform preinstalled on the runner.
+- CI has one packaging responsibility: on `main`, restore the fixed signing identity from protected
+  repository secrets, build the signed sideload Release APK, and verify package, version, signer,
+  minimum/target SDK, and all four supported ABIs. Upload exactly one universal APK plus its SHA-256
+  checksum as a 14-day workflow artifact. Unit tests, lint, store/test APKs, and benchmark variants
+  remain explicit local gates rather than CI packaging work.
+- If `v<VERSION_NAME>` has not been published, the same packaging job creates the immutable tag and
+  GitHub Release after verification. An already-published version is rebuilt as a workflow artifact
+  without overwriting its release. Lint ignores `OldTargetApi` because the project target is pinned
+  while that check varies with the newest platform installed in the environment.
 - `baselineprofile` resolves the app's `distribution` dimension to `sideload`.
 
 ## 4. Validation & Error Matrix

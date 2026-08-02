@@ -1,35 +1,29 @@
-name: Android CI
+name: Android Package
 
 on:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: android-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: android-package-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  build:
-    name: Test, lint, and build APKs
+  package:
+    name: Build signed universal APK
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    outputs:
-      release_needed: ${{ steps.release.outputs.needed }}
-      version_code: ${{ steps.release.outputs.code }}
-      version_name: ${{ steps.release.outputs.name }}
-      version_tag: ${{ steps.release.outputs.tag }}
+    timeout-minutes: 30
 
     steps:
       - name: Check out source
         uses: actions/checkout@v6
 
-      - name: Read version and detect an unpublished release
-        id: release
+      - name: Read package version
+        id: version
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -39,88 +33,14 @@ jobs:
           [[ "$VERSION_CODE" =~ ^[1-9][0-9]*$ ]]
           [[ "$VERSION_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           tag="v$VERSION_NAME"
-          needed=false
-          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]] && \
-              ! gh release view "$tag" >/dev/null 2>&1; then
-            needed=true
+          publish=true
+          if gh release view "$tag" >/dev/null 2>&1; then
+            publish=false
           fi
-          echo "needed=$needed" >> "$GITHUB_OUTPUT"
           echo "code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
           echo "name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "21"
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: platform-tools platforms;android-36 build-tools;36.0.0
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
-
-      - name: Run quality gates and build artifacts
-        run: |
-          ./gradlew --no-daemon --stacktrace -PallowUnsignedRelease=true \
-            :core:model:test \
-            :core:data:test \
-            :core:playback:test \
-            :app:test \
-            :core:data:lintDebug \
-            :core:data:lintRelease \
-            :core:playback:lintDebug \
-            :core:playback:lintRelease \
-            :app:lintSideloadDebug \
-            :app:lintSideloadRelease \
-            :app:lintStoreDebug \
-            :app:lintStoreRelease \
-            :app:assembleSideloadDebug \
-            :app:assembleSideloadRelease \
-            :app:assembleStoreDebug \
-            :app:assembleStoreRelease \
-            :app:assembleSideloadDebugAndroidTest \
-            :app:assembleStoreDebugAndroidTest \
-            :baselineprofile:assembleBenchmarkRelease \
-            :baselineprofile:assembleNonMinifiedRelease
-
-      - name: Upload application APKs
-        uses: actions/upload-artifact@v7
-        with:
-          name: fn-music-tv-apks-${{ github.sha }}
-          path: |
-            app/build/outputs/apk/**/*.apk
-            baselineprofile/build/outputs/apk/**/*.apk
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload verification reports
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: fn-music-tv-reports-${{ github.sha }}
-          path: |
-            **/build/reports/tests/**
-            **/build/reports/lint-results*.html
-            **/build/reports/lint-results*.xml
-          if-no-files-found: ignore
-          retention-days: 14
-
-  release:
-    name: Sign and publish universal APK
-    needs: build
-    if: needs.build.outputs.release_needed == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: write
-
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v6
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
@@ -163,8 +83,8 @@ jobs:
         id: artifact
         shell: bash
         env:
-          VERSION_CODE: ${{ needs.build.outputs.version_code }}
-          VERSION_NAME: ${{ needs.build.outputs.version_name }}
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
         run: |
           set -euo pipefail
           source_apk="app/build/outputs/apk/sideload/release/fn-music-tv-$VERSION_NAME-sideload-release.apk"
@@ -186,11 +106,22 @@ jobs:
           echo "apk=$release_apk" >> "$GITHUB_OUTPUT"
           echo "checksum=$release_apk.sha256" >> "$GITHUB_OUTPUT"
 
+      - name: Upload packaged APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: fn-music-tv-${{ steps.version.outputs.name }}-universal
+          path: |
+            ${{ steps.artifact.outputs.apk }}
+            ${{ steps.artifact.outputs.checksum }}
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Create tag and GitHub Release
+        if: steps.version.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.build.outputs.version_tag }}
-          VERSION_NAME: ${{ needs.build.outputs.version_name }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
           RELEASE_APK: ${{ steps.artifact.outputs.apk }}
           RELEASE_CHECKSUM: ${{ steps.artifact.outputs.checksum }}
         run: |
