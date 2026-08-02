@@ -127,3 +127,45 @@ Updated the immersive player title, artist, audio format badge, and lyric hierar
 ### Status
 
 [OK] **Completed**
+
+
+## Session 6: Playback cache and TV controls
+
+**Date**: 2026-08-02
+**Task**: Playback cache and TV controls
+**Branch**: `codex/player-cache-playback-ux`
+
+### Summary
+
+Implemented process-lifetime metadata and artwork caching, removed persistent audio caching, rebuilt playback session and roam transitions, fixed artwork and lyrics races, and added TV queue, icon modes, focus, and Back behavior with full unit, lint, build, screenshot, and connected-device verification.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cd8da28` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 7: 真实 NAS 播放回归与恢复加固
+
+**Date**: 2026-08-02
+**Task**: 真实 NAS 播放回归与恢复加固
+**Branch**: `codex/player-cache-playback-ux`
+
+### Summary
+
+修复 FNOS HTTP/1.1 空闲连接复用与记忆会话恢复崩溃；真实 NAS 验证三曲歌单、连续播放、精确回退、快速切歌封面歌词、漫游自动下一首、图标队列模式及无持久音频缓存。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2dbc27a` | (see git log) |
+
+### Status
+
+[OK] **Completed**

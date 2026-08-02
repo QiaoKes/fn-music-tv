@@ -65,6 +65,12 @@ interface AppDao {
     @Query("UPDATE account_state SET frozenQueueJson = :queueJson, updatedAt = :updatedAt WHERE namespace = :namespace")
     suspend fun updateFrozenQueue(namespace: String, queueJson: String?, updatedAt: Long)
 
+    @Query(
+        "UPDATE account_state SET queueJson = :snapshotJson, frozenQueueJson = NULL, " +
+            "updatedAt = :updatedAt WHERE namespace = :namespace",
+    )
+    suspend fun updatePlaybackSnapshot(namespace: String, snapshotJson: String?, updatedAt: Long)
+
     @Query("UPDATE account_state SET playerStyle = :style, cacheBudget = :budget, updatedAt = :updatedAt WHERE namespace = :namespace")
     suspend fun updateSettings(namespace: String, style: String, budget: String, updatedAt: Long)
 
@@ -121,6 +127,15 @@ interface AppDao {
 
     @Query("DELETE FROM cache_index WHERE namespace = :namespace")
     suspend fun deleteIndexes(namespace: String)
+
+    @Query("DELETE FROM cache_page")
+    suspend fun deleteAllPages()
+
+    @Query("DELETE FROM cache_lyric")
+    suspend fun deleteAllLyrics()
+
+    @Query("DELETE FROM cache_index")
+    suspend fun deleteAllIndexes()
 
     @Query("DELETE FROM account_state WHERE namespace = :namespace")
     suspend fun deleteAccount(namespace: String)

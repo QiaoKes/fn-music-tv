@@ -60,4 +60,16 @@ class LocalStoreTest {
             assertEquals(2, cursor.getInt(0))
         }
     }
+
+    @Test fun `playback snapshot update atomically replaces queue and clears legacy frozen queue`() = runBlocking {
+        val namespace = "server:user"
+        store.saveQueue(namespace, "legacy-active")
+        store.saveFrozenQueue(namespace, "legacy-frozen")
+
+        store.savePlaybackSnapshot(namespace, "{\"version\":2,\"revision\":7}")
+
+        val account = store.account(namespace)
+        assertEquals("{\"version\":2,\"revision\":7}", account?.queueJson)
+        assertNull(account?.frozenQueueJson)
+    }
 }

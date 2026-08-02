@@ -2,8 +2,6 @@ package com.fnmusic.tv.core.data.repository
 
 import android.content.Context
 import android.graphics.BitmapFactory
-import android.util.LruCache
-import com.fnmusic.tv.core.data.preferences.AppPreferences
 import com.fnmusic.tv.core.data.api.AlbumDto
 import com.fnmusic.tv.core.data.api.ApiDecoder
 import com.fnmusic.tv.core.data.api.ArtistDto
@@ -13,10 +11,13 @@ import com.fnmusic.tv.core.data.api.PlaylistDto
 import com.fnmusic.tv.core.data.api.SharedLibraryDto
 import com.fnmusic.tv.core.data.api.SortedPageListDto
 import com.fnmusic.tv.core.data.api.TrackDto
+import com.fnmusic.tv.core.data.api.TrackMetadataDto
+import com.fnmusic.tv.core.data.api.isRetryableRequestFailure
 import com.fnmusic.tv.core.data.local.CachedIndexEntity
 import com.fnmusic.tv.core.data.local.CachedLyricEntity
 import com.fnmusic.tv.core.data.local.CachedPageEntity
 import com.fnmusic.tv.core.data.local.LocalStore
+import com.fnmusic.tv.core.data.preferences.AppPreferences
 import com.fnmusic.tv.core.model.Album
 import com.fnmusic.tv.core.model.AppError
 import com.fnmusic.tv.core.model.AppException
@@ -33,68 +34,162 @@ import com.fnmusic.tv.core.model.lyric.LrcParser
 import com.fnmusic.tv.core.model.lyric.LyricTimeline
 import com.fnmusic.tv.core.model.playback.QueueSource
 import com.fnmusic.tv.core.model.preferences.CacheUsage
-import java.io.File
-import java.security.MessageDigest
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 
-class MusicRepository(
+private const val MAX_ARTWORK_DOWNLOAD_BYTES = 20 * 1024 * 1024
+private const val MAX_ARTWORK_EDGE = 8_192
+private const val MAX_ARTWORK_PIXELS = 16_000_000L
+private const val ARTWORK_VALIDATION_LONG_EDGE = 128
+
+internal data class ArtworkBounds(val width: Int, val height: Int)
+
+internal fun isValidArtworkBytes(bytes: ByteArray): Boolean = isValidArtworkBytes(
+    bytes = bytes,
+    readBounds = { encoded ->
+        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(encoded, 0, encoded.size, options)
+        ArtworkBounds(options.outWidth, options.outHeight)
+    },
+    decodeSampled = { encoded, sample ->
+        BitmapFactory.decodeByteArray(
+            encoded,
+            0,
+            encoded.size,
+            BitmapFactory.Options().apply { inSampleSize = sample },
+        )?.let { bitmap ->
+            bitmap.recycle()
+            true
+        } ?: false
+    },
+)
+
+internal fun isValidArtworkBytes(
+    bytes: ByteArray,
+    readBounds: (ByteArray) -> ArtworkBounds?,
+    decodeSampled: (ByteArray, Int) -> Boolean,
+): Boolean {
+    if (bytes.isEmpty() || bytes.size > MAX_ARTWORK_DOWNLOAD_BYTES) return false
+    val bounds = runCatching { readBounds(bytes) }.getOrNull() ?: return false
+    if (
+        bounds.width !in 1..MAX_ARTWORK_EDGE ||
+        bounds.height !in 1..MAX_ARTWORK_EDGE ||
+        bounds.width.toLong() * bounds.height > MAX_ARTWORK_PIXELS
+    ) {
+        return false
+    }
+
+    var sample = 1
+    while (
+        bounds.width / sample > ARTWORK_VALIDATION_LONG_EDGE ||
+        bounds.height / sample > ARTWORK_VALIDATION_LONG_EDGE
+    ) {
+        sample *= 2
+    }
+    return runCatching { decodeSampled(bytes, sample) }.getOrDefault(false)
+}
+
+class MusicRepository internal constructor(
     context: Context,
     private val session: SessionRepository,
     private val preferences: AppPreferences,
     private val localStore: LocalStore,
+    metadataCapacityBytes: Int,
+    repositoryScope: CoroutineScope,
 ) {
-    private val memoryArtwork = object : LruCache<String, ByteArray>(24 * 1024 * 1024) {
-        override fun sizeOf(key: String, value: ByteArray): Int = value.size
+    constructor(
+        context: Context,
+        session: SessionRepository,
+        preferences: AppPreferences,
+        localStore: LocalStore,
+    ) : this(
+        context = context,
+        session = session,
+        preferences = preferences,
+        localStore = localStore,
+        metadataCapacityBytes = METADATA_CAPACITY_BYTES,
+        repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    )
+
+    private val responses = SerializedResponseCache(metadataCapacityBytes, repositoryScope)
+    private val artworkCache = ArtworkCache(
+        root = context.cacheDir.resolve("artwork"),
+        memoryCapacityBytes = ARTWORK_MEMORY_CAPACITY_BYTES,
+        diskBudgetBytes = { preferences.state.value.cacheBudget.artworkBytes },
+        isValid = ::isValidArtworkBytes,
+        scope = repositoryScope,
+    )
+
+    init {
+        repositoryScope.launch { artworkCache.initialize() }
     }
-    private val artworkDir = File(context.cacheDir, "artwork").apply { mkdirs() }
-    private val mediaDir = File(context.cacheDir, "media")
 
-    suspend fun playlists(): List<Playlist> = cachedIndex<List<PlaylistDto>, List<Playlist>>("playlists", {
-        session.authenticated { it.playlists() }
-    }) { list -> list.map { it.toDomain() } }
+    suspend fun playlists(): List<Playlist> = cachedIndex<List<PlaylistDto>, List<Playlist>>(
+        key = "playlists",
+        fetch = { session.authenticated { it.playlists() } },
+    ) { list -> list.map(PlaylistDto::toDomain) }
 
-    suspend fun playlist(guid: String): Playlist = cachedIndex<PlaylistDetailDto, Playlist>("playlist:$guid", {
-        session.authenticated { it.playlist(guid) }
-    }) { it.toDomain() }
+    suspend fun playlist(guid: String): Playlist = cachedIndex<PlaylistDetailDto, Playlist>(
+        key = "playlist:$guid",
+        fetch = { session.authenticated { it.playlist(guid) } },
+    ) { it.toDomain() }
 
-    suspend fun playlistTracks(guid: String, page: Int) = cachedPage<TrackDto, Track>("playlist:$guid", page, {
-        session.authenticated { it.playlistTracks(guid, page) }
-    }) { it.toDomain() }
+    suspend fun playlistTracks(guid: String, page: Int) = cachedPage<TrackDto, Track>(
+        sourceKey = "playlist:$guid",
+        page = page,
+        fetch = { session.authenticated { it.playlistTracks(guid, page) } },
+    ) { it.toDomain() }
 
-    suspend fun artists(page: Int) = cachedPage<ArtistDto, Artist>("artists", page, {
-        session.authenticated { it.artists(page) }
-    }) { it.toDomain() }
+    suspend fun artists(page: Int) = cachedPage<ArtistDto, Artist>(
+        sourceKey = "artists",
+        page = page,
+        fetch = { session.authenticated { it.artists(page) } },
+    ) { it.toDomain() }
 
-    suspend fun artist(guid: String): Artist = cachedIndex<ArtistDto, Artist>("artist:$guid", {
-        session.authenticated { it.artist(guid) }
-    }) { it.toDomain() }
+    suspend fun artist(guid: String): Artist = cachedIndex<ArtistDto, Artist>(
+        key = "artist:$guid",
+        fetch = { session.authenticated { it.artist(guid) } },
+    ) { it.toDomain() }
 
-    suspend fun artistTracks(guid: String, page: Int) = cachedPage<TrackDto, Track>("artist-tracks:$guid", page, {
-        session.authenticated { it.artistTracks(guid, page) }
-    }) { it.toDomain() }
+    suspend fun artistTracks(guid: String, page: Int) = cachedPage<TrackDto, Track>(
+        sourceKey = "artist-tracks:$guid",
+        page = page,
+        fetch = { session.authenticated { it.artistTracks(guid, page) } },
+    ) { it.toDomain() }
 
-    suspend fun artistAlbums(guid: String, page: Int) = cachedPage<AlbumDto, Album>("artist-albums:$guid", page, {
-        session.authenticated { it.artistAlbums(guid, page) }
-    }) { it.toDomain() }
+    suspend fun artistAlbums(guid: String, page: Int) = cachedPage<AlbumDto, Album>(
+        sourceKey = "artist-albums:$guid",
+        page = page,
+        fetch = { session.authenticated { it.artistAlbums(guid, page) } },
+    ) { it.toDomain() }
 
-    suspend fun albums(page: Int) = cachedPage<AlbumDto, Album>("albums", page, {
-        session.authenticated { it.albums(page) }
-    }) { it.toDomain() }
+    suspend fun albums(page: Int) = cachedPage<AlbumDto, Album>(
+        sourceKey = "albums",
+        page = page,
+        fetch = { session.authenticated { it.albums(page) } },
+    ) { it.toDomain() }
 
-    suspend fun album(guid: String): Album = cachedIndex<AlbumDto, Album>("album:$guid", {
-        session.authenticated { it.album(guid) }
-    }) { it.toDomain() }
+    suspend fun album(guid: String): Album = cachedIndex<AlbumDto, Album>(
+        key = "album:$guid",
+        fetch = { session.authenticated { it.album(guid) } },
+    ) { it.toDomain() }
 
-    suspend fun albumTracks(guid: String, page: Int) = cachedPage<TrackDto, Track>("album-tracks:$guid", page, {
-        session.authenticated { it.albumTracks(guid, page) }
-    }) { it.toDomain() }
+    suspend fun albumTracks(guid: String, page: Int) = cachedPage<TrackDto, Track>(
+        sourceKey = "album-tracks:$guid",
+        page = page,
+        fetch = { session.authenticated { it.albumTracks(guid, page) } },
+    ) { it.toDomain() }
 
-    suspend fun allTracks(page: Int) = cachedPage<TrackDto, Track>("all-tracks", page, {
-        session.authenticated { it.allTracks(page) }
-    }) { it.toDomain() }
+    suspend fun allTracks(page: Int) = cachedPage<TrackDto, Track>(
+        sourceKey = "all-tracks",
+        page = page,
+        fetch = { session.authenticated { it.allTracks(page) } },
+    ) { it.toDomain() }
 
     suspend fun queuePage(source: QueueSource, page: Int): Page<Track> = when (source) {
         is QueueSource.Playlist -> playlistTracks(source.guid, page)
@@ -104,19 +199,28 @@ class MusicRepository(
     }
 
     suspend fun sharedLibraries(): List<SharedLibrary> = cachedIndex<List<SharedLibraryDto>, List<SharedLibrary>>(
-        "shared-libraries",
-        { session.authenticated { it.sharedLibraries() } },
-    ) { list -> list.map { it.toDomain() } }
+        key = "shared-libraries",
+        fetch = { session.authenticated { it.sharedLibraries() } },
+    ) { list -> list.map(SharedLibraryDto::toDomain) }
+
+    suspend fun trackMetadata(trackGuid: String): Track = cachedIndex<TrackMetadataDto, Track>(
+        key = "track-metadata:$trackGuid",
+        fetch = { session.authenticated { it.metadata(trackGuid) } },
+    ) { it.toDomain() }
+
+    suspend fun currentTrackMetadata(trackGuid: String): CurrentResourceResult<Track> = currentResource {
+        withCurrentResourceRetry { trackMetadata(trackGuid) }
+    }
 
     suspend fun prepare(track: Track): PlaybackTrack {
         if (track.accessStatus != null && track.accessStatus != 0) throw AppException(AppError.UnavailableTrack)
-        val refreshed = session.authenticated { it.metadata(track.guid.value).toDomain() }
+        val refreshed = trackMetadata(track.guid.value)
         if (refreshed.isCue) throw AppException(AppError.TranscodeUnavailable)
         val api = session.requireApi()
         return PlaybackTrack(
             refreshed,
             api.streamUrl(refreshed.guid.value).toString(),
-            refreshed.coverId?.let { api.coverUrl(it, 800).toString() },
+            refreshed.coverId?.let { api.coverUrl(it, CoverVariant.Player.width).toString() },
         )
     }
 
@@ -124,110 +228,116 @@ class MusicRepository(
         val api = session.requireApi()
         return tracks.asSequence()
             .filter { it.accessStatus == null || it.accessStatus == 0 }
-            .filterNot { it.isCue }
+            .filterNot(Track::isCue)
             .take(250)
             .map { track ->
                 PlaybackTrack(
                     track,
                     api.streamUrl(track.guid.value).toString(),
-                    track.coverId?.let { api.coverUrl(it, 800).toString() },
+                    track.coverId?.let { api.coverUrl(it, CoverVariant.Player.width).toString() },
                 )
             }
             .toList()
     }
 
-    suspend fun lyrics(trackGuid: String): Pair<LyricDocument?, LyricTimeline?> {
-        val namespace = session.cacheNamespace()
-        val cached = localStore.lyric(namespace, trackGuid)
-        val response = try {
-            session.authenticated { it.lyrics(trackGuid) }.also { result ->
-                runCatching {
-                    localStore.saveLyric(CachedLyricEntity(namespace, trackGuid, ApiDecoder.json.encodeToString(result), now()))
-                }
-            }
-        } catch (cause: AppException) {
-            if (cause.error != AppError.NetworkUnavailable || cached == null) throw cause
-            runCatching { ApiDecoder.json.decodeFromString<LyricListDto>(cached.payload) }.getOrElse { throw cause }
-        }
-        val selected = response.list.firstOrNull { it.guid == response.preferred }
-            ?: response.list.firstOrNull { it.isLRC }
-            ?: response.list.firstOrNull()
-        val document = selected?.toDomain()
-        return document to document?.takeIf { it.isLrc }?.let { LrcParser.parse(it.content) }
+    suspend fun lyrics(trackGuid: String): Pair<LyricDocument?, LyricTimeline?> =
+        decodeLyrics(lyricResponse(trackGuid))
+
+    suspend fun currentLyrics(trackGuid: String): CurrentResourceResult<CurrentLyrics> = currentResource {
+        val (document, timeline) = withCurrentResourceRetry { lyrics(trackGuid) }
+        document?.takeIf { it.content.isNotBlank() }?.let { CurrentLyrics(it, timeline) }
     }
 
     suspend fun startRoam(): RoamWindow? = session.authenticated { it.roamStart(session.deviceId) }?.let {
         RoamWindow(null, it.current.toDomain(), it.next?.toDomain())
     }
 
-    suspend fun nextRoam(roamId: String): RoamWindow = session.authenticated { it.roamNext(session.deviceId, roamId).toDomain() }
-    suspend fun previousRoam(roamId: String): RoamWindow = session.authenticated { it.roamPrevious(session.deviceId, roamId).toDomain() }
+    suspend fun nextRoam(roamId: String): RoamWindow =
+        session.authenticated { it.roamNext(session.deviceId, roamId).toDomain() }
 
-    suspend fun artwork(coverId: String, variant: CoverVariant): ByteArray? {
-        val signedIn = session.state.value as? SessionState.SignedIn ?: return null
-        val key = "${signedIn.server.guid.value}-${signedIn.user.guid.value}-$coverId-${variant.name}"
-        memoryArtwork.get(key)?.takeIf(::isValidArtwork)?.let { return it }
-        val file = File(artworkDir, key.sha256())
-        val bytes = withContext(Dispatchers.IO) {
-            file.takeIf(File::isFile)?.readBytes()?.takeIf(::isValidArtwork) ?: runCatching {
-                var downloaded = session.authenticated { it.cover(coverId, variant.width) }
-                if (!isValidArtwork(downloaded) && variant == CoverVariant.Poster) {
-                    downloaded = session.authenticated { it.cover(coverId, CoverVariant.Player.width) }
-                }
-                if (!isValidArtwork(downloaded)) return@runCatching null
-                downloaded.also {
-                    file.writeBytes(downloaded)
-                    pruneArtwork(preferences.state.value.cacheBudget.artworkBytes)
-                }
-            }.getOrNull()
-        } ?: return null
-        memoryArtwork.put(key, bytes)
-        file.setLastModified(System.currentTimeMillis())
-        return bytes
+    suspend fun previousRoam(roamId: String): RoamWindow =
+        session.authenticated { it.roamPrevious(session.deviceId, roamId).toDomain() }
+
+    suspend fun artwork(coverId: String, variant: CoverVariant): ByteArray? = try {
+        loadArtwork(coverId, variant)
+    } catch (cause: CancellationException) {
+        throw cause
+    } catch (_: AppException) {
+        null
     }
 
-    suspend fun clearArtwork() = withContext(Dispatchers.IO) {
-        memoryArtwork.evictAll()
-        artworkDir.listFiles()?.forEach { it.delete() }
+    suspend fun currentArtwork(
+        coverId: String,
+        variant: CoverVariant,
+    ): CurrentResourceResult<ByteArray> = currentResource {
+        withCurrentResourceRetry { loadArtwork(coverId, variant) }
+    }
+
+    suspend fun invalidateNamespace(namespace: String, includeEssential: Boolean = false) {
+        responses.invalidateNamespace(namespace)
+        artworkCache.clearNamespace(namespace)
+        localStore.clearNamespace(namespace, includeEssential)
     }
 
     suspend fun clearLocalNamespace(includeEssential: Boolean) {
-        runCatching { localStore.clearNamespace(session.cacheNamespace(), includeEssential) }
+        val namespace = runCatching(session::cacheNamespace).getOrNull() ?: return
+        invalidateNamespace(namespace, includeEssential)
     }
 
-    suspend fun cacheUsage(): CacheUsage = withContext(Dispatchers.IO) {
-        CacheUsage(mediaDir.sizeRecursively(), artworkDir.sizeRecursively(), localStore.physicalBytes())
+    suspend fun clearArtwork() = artworkCache.clearAll()
+
+    suspend fun clearAllEvictableCaches() {
+        responses.invalidateAll()
+        artworkCache.clearAll()
+        localStore.clearAllEvictable()
     }
 
-    suspend fun applyArtworkBudget() = withContext(Dispatchers.IO) {
-        pruneArtwork(preferences.state.value.cacheBudget.artworkBytes)
+    suspend fun cacheUsage(): CacheUsage = CacheUsage(
+        artworkBytes = artworkCache.usageBytes(),
+        indexBytes = localStore.physicalBytes(),
+    )
+
+    suspend fun applyArtworkBudget() = artworkCache.applyBudget()
+
+    private suspend fun loadArtwork(coverId: String, variant: CoverVariant): ByteArray? {
+        val namespace = session.cacheNamespace()
+        return artworkCache.get(namespace, coverId, variant) {
+            session.authenticated { it.cover(coverId, variant.width) }
+        }
     }
 
-    private fun pruneArtwork(limitBytes: Long) {
-        var retained = 0L
-        artworkDir.listFiles().orEmpty()
-            .filter(File::isFile)
-            .sortedByDescending(File::lastModified)
-            .forEach { file ->
-                val size = file.length()
-                if (retained + size <= limitBytes) retained += size else file.delete()
+    private suspend fun lyricResponse(trackGuid: String): LyricListDto {
+        val namespace = session.cacheNamespace()
+        val key = ResponseCacheKey(namespace, "lyric", trackGuid)
+        val payload = responses.getOrFetch(
+            key = key,
+            persist = { encoded ->
+                bestEffort {
+                    localStore.saveLyric(CachedLyricEntity(namespace, trackGuid, encoded, now()))
+                }
+            },
+        ) {
+            try {
+                session.authenticated { it.lyrics(trackGuid) }.let(ApiDecoder.json::encodeToString)
+            } catch (cause: CancellationException) {
+                throw cause
+            } catch (cause: AppException) {
+                if (cause.error != AppError.NetworkUnavailable) throw cause
+                val cached = fallback { localStore.lyric(namespace, trackGuid) } ?: throw cause
+                validatePayload<LyricListDto>(cached.payload) ?: throw cause
+                cached.payload
             }
+        }
+        return ApiDecoder.json.decodeFromString(payload)
     }
 
-    private fun File.sizeRecursively(): Long = if (!exists()) 0L else walkTopDown().filter(File::isFile).sumOf(File::length)
-
-    private fun isValidArtwork(bytes: ByteArray): Boolean {
-        if (bytes.isEmpty() || bytes.size > MAX_ARTWORK_DOWNLOAD_BYTES) return false
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-        return bounds.outWidth in 1..MAX_ARTWORK_EDGE &&
-            bounds.outHeight in 1..MAX_ARTWORK_EDGE &&
-            bounds.outWidth.toLong() * bounds.outHeight <= MAX_ARTWORK_PIXELS
+    private fun decodeLyrics(response: LyricListDto): Pair<LyricDocument?, LyricTimeline?> {
+        val selected = response.list.firstOrNull { it.guid == response.preferred }
+            ?: response.list.firstOrNull { it.isLRC }
+            ?: response.list.firstOrNull()
+        val document = selected?.toDomain()
+        return document to document?.takeIf { it.isLrc }?.let { LrcParser.parse(it.content) }
     }
-
-    private fun String.sha256(): String = MessageDigest.getInstance("SHA-256")
-        .digest(toByteArray())
-        .joinToString("") { "%02x".format(it) }
 
     private suspend inline fun <reified Dto, Domain> cachedPage(
         sourceKey: String,
@@ -236,28 +346,38 @@ class MusicRepository(
         noinline transform: (Dto) -> Domain,
     ): Page<Domain> {
         val namespace = session.cacheNamespace()
-        val cached = localStore.page(namespace, sourceKey, page)
-        val response = try {
-            fetch().also { result ->
-                runCatching {
+        val key = ResponseCacheKey(namespace, "page", sourceKey, page)
+        val payload = responses.getOrFetch(
+            key = key,
+            persist = { encoded ->
+                bestEffort {
+                    val response = ApiDecoder.json.decodeFromString<SortedPageListDto<Dto>>(encoded)
                     localStore.savePage(
                         CachedPageEntity(
-                            namespace,
-                            sourceKey,
-                            page,
-                            ApiDecoder.json.encodeToString(result),
-                            result.total,
-                            result.sort,
-                            now(),
+                            namespace = namespace,
+                            sourceKey = sourceKey,
+                            page = page,
+                            payload = encoded,
+                            total = response.total,
+                            sort = response.sort,
+                            accessedAt = now(),
                         ),
                     )
                 }
+            },
+        ) {
+            try {
+                fetch().let(ApiDecoder.json::encodeToString)
+            } catch (cause: CancellationException) {
+                throw cause
+            } catch (cause: AppException) {
+                if (cause.error != AppError.NetworkUnavailable) throw cause
+                val cached = fallback { localStore.page(namespace, sourceKey, page) } ?: throw cause
+                validatePayload<SortedPageListDto<Dto>>(cached.payload) ?: throw cause
+                cached.payload
             }
-        } catch (cause: AppException) {
-            if (cause.error != AppError.NetworkUnavailable || cached == null) throw cause
-            runCatching { ApiDecoder.json.decodeFromString<SortedPageListDto<Dto>>(cached.payload) }.getOrElse { throw cause }
         }
-        return response.toPage(page, transform)
+        return ApiDecoder.json.decodeFromString<SortedPageListDto<Dto>>(payload).toPage(page, transform)
     }
 
     private suspend inline fun <reified Dto, Domain> cachedIndex(
@@ -266,30 +386,74 @@ class MusicRepository(
         transform: (Dto) -> Domain,
     ): Domain {
         val namespace = session.cacheNamespace()
-        val cached = localStore.index(namespace, key)
-        val response = try {
-            fetch().also { result ->
-                runCatching {
-                    localStore.saveIndex(CachedIndexEntity(namespace, key, ApiDecoder.json.encodeToString(result), now()))
+        val cacheKey = ResponseCacheKey(namespace, "index", key)
+        val payload = responses.getOrFetch(
+            key = cacheKey,
+            persist = { encoded ->
+                bestEffort {
+                    localStore.saveIndex(CachedIndexEntity(namespace, key, encoded, now()))
                 }
+            },
+        ) {
+            try {
+                fetch().let(ApiDecoder.json::encodeToString)
+            } catch (cause: CancellationException) {
+                throw cause
+            } catch (cause: AppException) {
+                if (cause.error != AppError.NetworkUnavailable) throw cause
+                val cached = fallback { localStore.index(namespace, key) } ?: throw cause
+                validatePayload<Dto>(cached.payload) ?: throw cause
+                cached.payload
             }
-        } catch (cause: AppException) {
-            if (cause.error != AppError.NetworkUnavailable || cached == null) throw cause
-            runCatching { ApiDecoder.json.decodeFromString<Dto>(cached.payload) }.getOrElse { throw cause }
         }
-        return transform(response)
+        return transform(ApiDecoder.json.decodeFromString(payload))
+    }
+
+    private suspend fun <T> currentResource(block: suspend () -> T?): CurrentResourceResult<T> = try {
+        block()?.let { CurrentResourceResult.Ready(it) } ?: CurrentResourceResult.Absent
+    } catch (cause: CancellationException) {
+        throw cause
+    } catch (cause: AppException) {
+        when (cause.error) {
+            AppError.NotFound, AppError.Empty -> CurrentResourceResult.Absent
+            else -> CurrentResourceResult.Failure(cause.error, cause.isRetryableRequestFailure)
+        }
+    }
+
+    private suspend fun bestEffort(block: suspend () -> Unit) {
+        try {
+            block()
+        } catch (cause: CancellationException) {
+            throw cause
+        } catch (_: Exception) {
+            // Room remains a fallback tier; a disk write failure must not fail a valid network response.
+        }
+    }
+
+    private suspend fun <T> fallback(block: suspend () -> T): T? = try {
+        block()
+    } catch (cause: CancellationException) {
+        throw cause
+    } catch (_: Exception) {
+        null
+    }
+
+    private inline fun <reified T> validatePayload(payload: String): T? = try {
+        ApiDecoder.json.decodeFromString(payload)
+    } catch (_: Exception) {
+        null
     }
 
     private fun now(): Long = System.currentTimeMillis()
 
-    private fun <Dto, Domain> com.fnmusic.tv.core.data.api.SortedPageListDto<Dto>.toPage(
+    private fun <Dto, Domain> SortedPageListDto<Dto>.toPage(
         page: Int,
         transform: (Dto) -> Domain,
-    ) = Page(list.map(transform), page, 50, total, sort)
+    ) = Page(list.map(transform), page, PAGE_SIZE, total, sort)
 
     private companion object {
-        const val MAX_ARTWORK_DOWNLOAD_BYTES = 20 * 1024 * 1024
-        const val MAX_ARTWORK_EDGE = 8_192
-        const val MAX_ARTWORK_PIXELS = 16_000_000L
+        const val METADATA_CAPACITY_BYTES = 8 * 1024 * 1024
+        const val ARTWORK_MEMORY_CAPACITY_BYTES = 24 * 1024 * 1024
+        const val PAGE_SIZE = 50
     }
 }

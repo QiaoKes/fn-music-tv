@@ -1,11 +1,107 @@
 package com.fnmusic.tv.ui
 
+import com.fnmusic.tv.NowPlayingPresentation
+import com.fnmusic.tv.NowPlayingResourceState
+import com.fnmusic.tv.core.model.AppError
+import com.fnmusic.tv.core.model.Page
+import com.fnmusic.tv.core.model.PlayerStyle
+import com.fnmusic.tv.core.model.Track
+import com.fnmusic.tv.core.model.TrackGuid
+import com.fnmusic.tv.core.model.playback.NowPlayingIdentity
+import com.fnmusic.tv.core.model.playback.PlayMode
+import com.fnmusic.tv.core.model.playback.PlaybackQueueItem
+import com.fnmusic.tv.core.model.playback.QueuePageItem
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PlayerUiStateTest {
+    @Test fun `home back confirmation requires a second press within two seconds`() {
+        assertTrue(isHomeBackConfirmed(previousBackAt = 1_000, currentBackAt = 3_000))
+        assertTrue(!isHomeBackConfirmed(previousBackAt = 1_000, currentBackAt = 3_001))
+        assertTrue(!isHomeBackConfirmed(previousBackAt = 0, currentBackAt = 1_000))
+        assertTrue(!isHomeBackConfirmed(previousBackAt = 2_000, currentBackAt = 1_999))
+    }
+
+    @Test fun `queue opens on current row and falls back to first`() {
+        val queue = listOf(
+            PlaybackQueueItem("a", "A", "Artist", 0, isCurrent = false),
+            PlaybackQueueItem("b", "B", "Artist", 1, isCurrent = true),
+            PlaybackQueueItem("c", "C", "Artist", 2, isCurrent = false),
+        )
+
+        assertEquals(1, initialQueueFocusIndex(queue))
+        assertEquals(0, initialQueueFocusIndex(queue.map { it.copy(isCurrent = false) }))
+        assertEquals(0, initialQueueFocusIndex(emptyList()))
+    }
+
+    @Test fun `dynamic queue focus preserves a retained row then follows the new current row`() {
+        assertEquals("b:0", queueFocusTargetKey(listOf("a:0", "b:0", "c:0"), 0, "b:0"))
+        assertEquals("d:0", queueFocusTargetKey(listOf("a:0", "d:0"), 1, "b:0"))
+        assertNull(queueFocusTargetKey(emptyList(), 0, "b:0"))
+    }
+
+    @Test fun `retained pagination does not request page one after returning from page two`() {
+        val first = retainLoadedPage(
+            current = RetainedPageSnapshot<String>(),
+            loaded = Page(listOf("a", "b"), page = 1, pageSize = 2, total = 4, sort = "name"),
+            key = { it },
+        )
+        val second = retainLoadedPage(
+            current = first,
+            loaded = Page(listOf("c", "d"), page = 2, pageSize = 2, total = 4, sort = "name"),
+            key = { it },
+        )
+
+        assertEquals(listOf("a", "b", "c", "d"), second.entries)
+        assertEquals(2, second.page)
+        assertTrue(!second.hasNext)
+        assertTrue(second.initialLoadCompleted)
+        assertTrue(!shouldLoadInitialPage(second))
+    }
+
+    @Test fun `track pagination retains pages tracks and continuation metadata`() {
+        val pageOne = Page(
+            items = listOf(queueTrack("a"), queueTrack("b")),
+            page = 1,
+            pageSize = 2,
+            total = 3,
+            sort = "title:asc",
+        )
+        val pageTwo = Page(
+            items = listOf(queueTrack("c")),
+            page = 2,
+            pageSize = 2,
+            total = 3,
+            sort = "title:asc",
+        )
+
+        val retained = retainTrackCollectionPage(
+            retainTrackCollectionPage(RetainedTrackCollectionSnapshot(), pageOne, targetPage = 1),
+            pageTwo,
+            targetPage = 2,
+        )
+
+        assertEquals(listOf("a", "b", "c"), retained.tracks.map { it.guid.value })
+        assertEquals(listOf(1, 2), retained.loadedPages.map(Page<Track>::page))
+        assertEquals(2, retained.page)
+        assertTrue(!retained.hasNext)
+        assertEquals(3, retained.expectedTotal)
+        assertEquals("title:asc", retained.expectedSort)
+        assertNull(retained.error)
+        assertTrue(retained.initialLoadCompleted)
+    }
+
+    @Test fun `play mode labels cover the controller cycle`() {
+        assertEquals(
+            listOf("列表循环", "随机播放", "单曲循环", "顺序播放"),
+            PlayMode.entries.map(::playModeLabel),
+        )
+    }
+
     @Test fun `lyric window keeps active line near the second slot`() {
         assertEquals(3..6, playerLyricWindow(lineCount = 10, activeIndex = 4))
     }
@@ -82,4 +178,183 @@ class PlayerUiStateTest {
         assertTrue(surface.blue > surface.green)
         assertTrue(surface.green > surface.red)
     }
+
+    @Test fun `current presentation projects resources only for the complete identity`() {
+        val expected = nowPlayingIdentity()
+        val bytes = byteArrayOf(1, 2, 3)
+        val readyArtwork = NowPlayingResourceState.Ready(bytes)
+        val exact = NowPlayingPresentation(
+            identity = expected,
+            playerStyle = PlayerStyle.Cover,
+            artwork = readyArtwork,
+            lyrics = NowPlayingResourceState.Absent,
+        )
+
+        val projected = projectPlayerPresentation(expected, exact)
+
+        assertEquals(PlayerStyle.Cover, projected.playerStyle)
+        assertSame(bytes, (projected.artwork as NowPlayingResourceState.Ready).value)
+        assertTrue(projected.metadata is NowPlayingResourceState.Loading)
+        assertTrue(projected.lyrics is NowPlayingResourceState.Absent)
+    }
+
+    @Test fun `every current presentation identity mismatch projects all resources as loading`() {
+        val expected = nowPlayingIdentity()
+        val ready = NowPlayingPresentation(
+            identity = expected,
+            playerStyle = PlayerStyle.Poster,
+            artwork = NowPlayingResourceState.Ready(byteArrayOf(7)),
+            lyrics = NowPlayingResourceState.Absent,
+        )
+        val mismatches = listOf(
+            expected.copy(namespace = "other-account"),
+            expected.copy(mediaId = "other-track"),
+            expected.copy(presentationRevision = expected.presentationRevision + 1),
+            expected.copy(title = "Other title"),
+            expected.copy(artist = "Other artist"),
+            expected.copy(audioFormat = "AAC"),
+            expected.copy(coverId = null),
+        )
+
+        mismatches.forEach { mismatchedIdentity ->
+            val projected = projectPlayerPresentation(expected, ready.copy(identity = mismatchedIdentity))
+
+            assertNull(projected.playerStyle)
+            assertTrue(projected.metadata is NowPlayingResourceState.Loading)
+            assertTrue(projected.artwork is NowPlayingResourceState.Loading)
+            assertTrue(projected.lyrics is NowPlayingResourceState.Loading)
+            assertTrue(!projected.canRetry)
+        }
+    }
+
+    @Test fun `current presentation exposes one retryable resource failure`() {
+        val identity = nowPlayingIdentity()
+        val projected = projectPlayerPresentation(
+            identity,
+            NowPlayingPresentation(
+                identity = identity,
+                playerStyle = PlayerStyle.Cover,
+                artwork = NowPlayingResourceState.RetryableFailure(AppError.NetworkUnavailable),
+            ),
+        )
+
+        assertEquals(AppError.NetworkUnavailable, projected.retryableFailure)
+        assertTrue(projected.canRetry)
+    }
+
+    @Test fun `artwork key includes namespace media revision and player style`() {
+        val identity = nowPlayingIdentity()
+        val base = playerArtworkKey(identity, PlayerStyle.Cover)
+
+        assertNotEquals(base, playerArtworkKey(identity.copy(namespace = "other-account"), PlayerStyle.Cover))
+        assertNotEquals(base, playerArtworkKey(identity.copy(mediaId = "other-track"), PlayerStyle.Cover))
+        assertNotEquals(base, playerArtworkKey(identity.copy(presentationRevision = 43), PlayerStyle.Cover))
+        assertNotEquals(base, playerArtworkKey(identity, PlayerStyle.Poster))
+    }
+
+    @Test fun `player status prioritizes roam queue and presentation retry in that order`() {
+        val presentation = playerStatus(
+            roamError = null,
+            canRetryRoam = false,
+            queueError = null,
+            canRetryQueue = false,
+            presentationError = AppError.NetworkUnavailable,
+            canRetryPresentation = true,
+            playbackError = "transport",
+        )
+        val queue = playerStatus(
+            roamError = null,
+            canRetryRoam = false,
+            queueError = "queue",
+            canRetryQueue = true,
+            presentationError = AppError.NetworkUnavailable,
+            canRetryPresentation = true,
+            playbackError = null,
+        )
+        val roam = playerStatus(
+            roamError = AppError.NetworkUnavailable,
+            canRetryRoam = true,
+            queueError = "queue",
+            canRetryQueue = true,
+            presentationError = AppError.NetworkUnavailable,
+            canRetryPresentation = true,
+            playbackError = null,
+        )
+
+        assertEquals(PlayerStatusRetry.Presentation, presentation?.retry)
+        assertEquals(PlayerStatusRetry.Queue, queue?.retry)
+        assertEquals(PlayerStatusRetry.Roam, roam?.retry)
+    }
+
+    @Test fun `raw page queue segments retain exact positions with two unplayable rows per page`() {
+        val pages = listOf(
+            Page(
+                items = listOf(
+                    queueTrack("p0"),
+                    queueTrack("blocked-1", accessStatus = 1),
+                    queueTrack("p2"),
+                    queueTrack("cue-1", isCue = true),
+                    queueTrack("p4"),
+                ),
+                page = 1,
+                pageSize = 5,
+                total = 10,
+                sort = "title:asc",
+            ),
+            Page(
+                items = listOf(
+                    queueTrack("blocked-2", accessStatus = 1),
+                    queueTrack("p6"),
+                    queueTrack("cue-2", isCue = true),
+                    queueTrack("p8"),
+                    queueTrack("p9"),
+                ),
+                page = 2,
+                pageSize = 5,
+                total = 10,
+                sort = "title:asc",
+            ),
+        )
+
+        val window = requireNotNull(exactTrackQueueWindow(pages, selectedIndex = 8))
+
+        assertEquals(listOf(5, 5), window.segments.map { it.rawRowCount })
+        assertEquals(listOf(0, 5), window.segments.map { it.sourceStartIndex })
+        assertEquals(
+            listOf(
+                QueuePageItem("p0", 0),
+                QueuePageItem("p2", 2),
+                QueuePageItem("p4", 4),
+                QueuePageItem("p6", 6),
+                QueuePageItem("p8", 8),
+                QueuePageItem("p9", 9),
+            ),
+            window.segments.flatMap { it.playableItems },
+        )
+    }
+
+    private fun nowPlayingIdentity() = NowPlayingIdentity(
+        namespace = "account-a",
+        mediaId = "track-a",
+        presentationRevision = 42,
+        title = "Title",
+        artist = "Artist",
+        audioFormat = "FLAC",
+        coverId = "cover-a",
+    )
+
+    private fun queueTrack(
+        id: String,
+        isCue: Boolean = false,
+        accessStatus: Int? = null,
+    ) = Track(
+        guid = TrackGuid(id),
+        title = id,
+        artistName = "Artist",
+        albumName = null,
+        coverId = null,
+        durationMs = 1_000,
+        isCue = isCue,
+        accessStatus = accessStatus,
+    )
 }
