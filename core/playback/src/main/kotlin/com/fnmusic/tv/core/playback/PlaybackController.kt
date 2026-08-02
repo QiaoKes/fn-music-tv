@@ -8,12 +8,9 @@ import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
-import androidx.media3.common.Timeline
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionResult
 import androidx.media3.session.SessionToken
-import com.fnmusic.tv.core.data.local.LocalStore
-import com.fnmusic.tv.core.data.repository.MusicRepository
 import com.fnmusic.tv.core.model.AppError
 import com.fnmusic.tv.core.model.AppException
 import com.fnmusic.tv.core.model.PlaybackCredentials
@@ -37,7 +34,6 @@ import java.util.Random
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -50,89 +46,23 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-data class PlaybackUiState(
-    val connected: Boolean = false,
-    val hasMedia: Boolean = false,
-    val isPlaying: Boolean = false,
-    val playbackState: Int = Player.STATE_IDLE,
-    val title: String = "",
-    val artist: String = "",
-    val audioFormat: String = "",
-    val mediaId: String = "",
-    val coverId: String? = null,
-    val artworkUrl: String? = null,
-    val positionMs: Long = 0,
-    val durationMs: Long = 0,
-    val currentIndex: Int = 0,
-    val itemCount: Int = 0,
-    val loadedPlayableCount: Int = 0,
-    val queueKind: QueueKind = QueueKind.Normal,
-    val queueItems: List<PlaybackQueueItem> = emptyList(),
-    val playMode: PlayMode = PlayMode.ListRepeat,
-    val canPrevious: Boolean = false,
-    val canNext: Boolean = false,
-    val presentationRevision: Long = 0,
-    val nowPlayingIdentity: NowPlayingIdentity? = null,
-    val roamBusy: Boolean = false,
-    val roamError: AppError? = null,
-    val canRetryRoam: Boolean = false,
-    val error: String? = null,
-    val queueError: String? = null,
-    val canRetryQueue: Boolean = false,
-)
-
-internal data class CapturedNowPlayingFields(
-    val mediaId: String,
-    val title: String,
-    val artist: String,
-    val audioFormat: String,
-    val coverId: String?,
-    val artworkUrl: String?,
-)
-
-internal fun captureNowPlayingFields(item: MediaItem?): CapturedNowPlayingFields? {
-    item ?: return null
-    val metadata = item.mediaMetadata
-    return CapturedNowPlayingFields(
-        mediaId = item.mediaId,
-        title = metadata.title?.toString().orEmpty(),
-        artist = metadata.artist?.toString().orEmpty(),
-        audioFormat = metadata.extras?.getString(AUDIO_FORMAT_KEY).orEmpty(),
-        coverId = metadata.extras?.getString(COVER_ID_KEY),
-        artworkUrl = metadata.artworkUri?.toString(),
-    )
-}
-
-data class PlaybackSnapshotCommitState(
-    val namespace: String? = null,
-    val requestedRevision: Long = 0L,
-    val committedRevision: Long = 0L,
-    val failure: String? = null,
-) {
-    val pending: Boolean get() = requestedRevision > committedRevision && failure == null
-}
-
-class PlaybackTransition internal constructor(
-    val revision: Long,
-    private val completion: Deferred<Unit>,
-) {
-    suspend fun awaitCommitted() = completion.await()
-}
-
 class PlaybackController(
     private val context: Context,
-    private val localStore: LocalStore,
-    private val musicRepository: MusicRepository,
+    private val sessionStore: PlaybackSessionStore,
+    private val contentSource: PlaybackContentSource,
 ) {
     private val _state = MutableStateFlow(PlaybackUiState())
     val state: StateFlow<PlaybackUiState> = _state.asStateFlow()
-    private val _snapshotCommitState = MutableStateFlow(PlaybackSnapshotCommitState())
-    val snapshotCommitState: StateFlow<PlaybackSnapshotCommitState> = _snapshotCommitState.asStateFlow()
+    private val _progress = MutableStateFlow(PlaybackProgressState())
+    val progress: StateFlow<PlaybackProgressState> = _progress.asStateFlow()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val snapshotWriter = PlaybackSnapshotWriter(scope, localStore::savePlaybackSnapshot)
+    private val snapshotCommitTracker = PlaybackSnapshotCommitTracker(scope)
+    val snapshotCommitState: StateFlow<PlaybackSnapshotCommitState> = snapshotCommitTracker.state
+    private val snapshotWriter = PlaybackSnapshotWriter(
+        scope = scope,
+        writeSnapshot = sessionStore::save,
+    )
     private val snapshotPersistence = PlaybackSnapshotPersistence(scope, snapshotWriter)
-    private val transitionLock = Any()
-    private var latestTransition: PlaybackTransition? = null
     private var controller: MediaController? = null
     private var ticker: Job? = null
     private var queuePageJob: Job? = null
@@ -158,12 +88,15 @@ class PlaybackController(
     private var currentRoamId: String? = null
     private var roamError: AppError? = null
     private var failedRoamDirection: RoamDirection? = null
+    private val queueProjector = PlaybackQueueProjector(MAX_QUEUE_ITEMS)
+    private var forceNextPresentationProjection = false
     private val autoAdvanceGate = RoamAutoAdvanceGate()
 
     private val listener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            forceNextPresentationProjection = forceNextPresentationProjection ||
+                shouldForcePresentationProjection(mediaItem != null, reason)
             controller?.let { player ->
-                project(player, forcePresentation = mediaItem != null)
                 if (reason != Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) {
                     autoAdvanceGate.reset()
                     structuralSnapshot(player)
@@ -171,17 +104,8 @@ class PlaybackController(
             }
         }
 
-        override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
-            controller?.let { project(it) }
-        }
-
-        override fun onTimelineChanged(timeline: Timeline, reason: Int) {
-            controller?.let { project(it) }
-        }
-
         override fun onPlaybackStateChanged(playbackState: Int) {
             val player = controller ?: return
-            project(player)
             if (playbackState == Player.STATE_ENDED && queueKind == QueueKind.Roam) {
                 if (autoAdvanceGate.tryConsume(generation, player.currentMediaItem?.mediaId)) {
                     advanceRoam(RoamDirection.Next)
@@ -190,7 +114,17 @@ class PlaybackController(
         }
 
         override fun onEvents(player: Player, events: Player.Events) {
-            project(player)
+            val forcePresentation = forceNextPresentationProjection
+            forceNextPresentationProjection = false
+            project(
+                player = player,
+                forcePresentation = forcePresentation,
+                rebuildQueue = shouldRebuildPlaybackQueue(
+                    timelineChanged = events.contains(Player.EVENT_TIMELINE_CHANGED),
+                    mediaItemTransition = events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION),
+                    mediaMetadataChanged = events.contains(Player.EVENT_MEDIA_METADATA_CHANGED),
+                ),
+            )
         }
     }
 
@@ -229,7 +163,7 @@ class PlaybackController(
             if (binding == PlaybackNamespaceBinding.Rebind) resetActiveSessionForRebind(controller)
             restored = false
             currentNamespace = credentials.cacheNamespace
-            _snapshotCommitState.value = PlaybackSnapshotCommitState(namespace = credentials.cacheNamespace)
+            snapshotCommitTracker.reset(credentials.cacheNamespace)
             PlaybackTransportBridge.setOwnership(PlaybackTransportOwnership.Restoring)
         }
         val player = controller ?: return
@@ -253,7 +187,7 @@ class PlaybackController(
                     return@addListener
                 }
                 scope.launch {
-                    val account = localStore.account(credentials.cacheNamespace)
+                    val account = sessionStore.read(credentials.cacheNamespace)
                     if (
                         generation != configureGeneration ||
                         currentNamespace != credentials.cacheNamespace ||
@@ -349,7 +283,7 @@ class PlaybackController(
             var installedGeneration: Long? = null
             var installedRoamId: String? = null
             try {
-                val initial = musicRepository.startRoam() ?: throw AppException(AppError.Empty)
+                val initial = contentSource.startRoam() ?: throw AppException(AppError.Empty)
                 val resolved = resolveRoam(initial, RoamDirection.Next, expectedGeneration, currentCursor = null)
                 if (generation != expectedGeneration) throw CancellationException("Playback session changed")
                 rollbackSnapshot = if (player.mediaItemCount > 0) {
@@ -699,12 +633,14 @@ class PlaybackController(
             val acknowledgement = snapshotPersistence.submitStructural(
                 PlaybackSnapshotWriteRequest(value, clearRevision, null),
             )
-            trackTransition(value, clearRevision, acknowledgement) {
-                localStore.clearNamespace(value, includeEssential = true)
+            snapshotCommitTracker.track(value, clearRevision, acknowledgement) {
+                sessionStore.clear(value)
             }
         }
         PlaybackTransportBridge.setOwnership(PlaybackTransportOwnership.Restoring)
+        queueProjector.clear()
         _state.value = PlaybackUiState(connected = controller != null)
+        _progress.value = PlaybackProgressState()
         return transition
     }
 
@@ -741,10 +677,16 @@ class PlaybackController(
         controller?.release()
         controller = null
         PlaybackTransportBridge.unregister()
+        queueProjector.clear()
         _state.value = PlaybackUiState()
+        _progress.value = PlaybackProgressState()
     }
 
-    private fun project(player: Player, forcePresentation: Boolean = false) {
+    private fun project(
+        player: Player,
+        forcePresentation: Boolean = false,
+        rebuildQueue: Boolean = true,
+    ) {
         queueWindow = queueWindow?.copy(currentIndex = player.currentMediaItemIndex.coerceAtLeast(0))
         val currentItem = player.currentMediaItem
         val captured = captureNowPlayingFields(currentItem)
@@ -776,16 +718,7 @@ class PlaybackController(
             null
         }
         val currentIndex = player.currentMediaItemIndex.coerceAtLeast(0)
-        val queueItems = List(player.mediaItemCount.coerceAtMost(MAX_QUEUE_ITEMS)) { index ->
-            val item = player.getMediaItemAt(index)
-            PlaybackQueueItem(
-                mediaId = item.mediaId,
-                title = item.mediaMetadata.title?.toString().orEmpty(),
-                artist = item.mediaMetadata.artist?.toString().orEmpty(),
-                queueIndex = index,
-                isCurrent = index == currentIndex,
-            )
-        }
+        val queueItems = queueProjector.project(player, currentIndex, rebuildQueue)
         _state.value = PlaybackUiState(
             connected = true,
             hasMedia = player.mediaItemCount > 0,
@@ -812,21 +745,20 @@ class PlaybackController(
             roamBusy = roamJob?.isActive == true || _state.value.roamBusy,
             roamError = roamError,
             canRetryRoam = failedRoamDirection != null,
-            error = player.playerError?.errorCodeName,
+            error = player.playerError?.let { failure ->
+                PlaybackFailure(failure.errorCode, failure.errorCodeName)
+            },
             queueError = queueError,
             canRetryQueue = failedDirection != null && queueWindow?.invalidated == false,
         )
+        updateProgress(player)
         maybeLoadQueueEdge(player)
     }
 
     private fun updateProgress(player: Player) {
-        _state.value = _state.value.copy(
-            connected = true,
-            isPlaying = player.isPlaying,
-            playbackState = player.playbackState,
+        _progress.value = PlaybackProgressState(
             positionMs = player.currentPosition.coerceAtLeast(0),
             durationMs = player.duration.coerceAtLeast(0),
-            error = player.playerError?.errorCodeName,
         )
     }
 
@@ -851,11 +783,11 @@ class PlaybackController(
         val pageNumber = if (direction == QueueDirection.Next) loading.lastPage + 1 else loading.firstPage - 1
         val expectedGeneration = generation
         queuePageJob = scope.launch {
-            var result = runCatching { musicRepository.queuePage(source, pageNumber) }
+            var result = runCatching { contentSource.queuePage(source, pageNumber) }
             QUEUE_RETRY_DELAYS.forEach { retryDelay ->
                 if (result.isFailure && generation == expectedGeneration) {
                     delay(retryDelay)
-                    result = runCatching { musicRepository.queuePage(source, pageNumber) }
+                    result = runCatching { contentSource.queuePage(source, pageNumber) }
                 }
             }
             if (generation != expectedGeneration || queueKind != QueueKind.Normal) return@launch
@@ -876,7 +808,7 @@ class PlaybackController(
     private suspend fun applyQueuePage(direction: QueueDirection, page: com.fnmusic.tv.core.model.Page<Track>) {
         val player = controller ?: return
         val state = queueWindow ?: return
-        val prepared = musicRepository.prepareQueue(page.items)
+        val prepared = contentSource.prepareQueue(page.items)
         val preparedIds = prepared.map { it.track.guid.value }.toHashSet()
         val segment = QueuePageSegment(
             page = page.page,
@@ -938,8 +870,8 @@ class PlaybackController(
             var installedRoamId: String? = null
             try {
                 val first = when (direction) {
-                    RoamDirection.Next -> musicRepository.nextRoam(roamId)
-                    RoamDirection.Previous -> musicRepository.previousRoam(roamId)
+                    RoamDirection.Next -> contentSource.nextRoam(roamId)
+                    RoamDirection.Previous -> contentSource.previousRoam(roamId)
                 }
                 val resolved = resolveRoam(first, direction, expectedGeneration, currentCursor = roamId)
                 if (generation != expectedGeneration || queueKind != QueueKind.Roam || currentRoamId != roamId) return@launch
@@ -995,11 +927,11 @@ class PlaybackController(
         ensureCurrent = {
             if (generation != expectedGeneration) throw CancellationException("Playback session changed")
         },
-        prepare = { window -> musicRepository.prepare(window.current.track) },
+        prepare = { window -> contentSource.prepare(window.current.track) },
         move = { requestedDirection, roamId ->
             when (requestedDirection) {
-                RoamDirection.Next -> musicRepository.nextRoam(roamId)
-                RoamDirection.Previous -> musicRepository.previousRoam(roamId)
+                RoamDirection.Next -> contentSource.nextRoam(roamId)
+                RoamDirection.Previous -> contentSource.previousRoam(roamId)
             }
         },
     )
@@ -1074,7 +1006,9 @@ class PlaybackController(
         roamError = null
         failedRoamDirection = null
         lastPresentationKey = null
+        queueProjector.clear()
         _state.value = PlaybackUiState(connected = player != null)
+        _progress.value = PlaybackProgressState()
     }
 
     private fun beginStructuralTransition(cancelRoam: Boolean = true) {
@@ -1170,7 +1104,8 @@ class PlaybackController(
             PlaybackSnapshotWriteRequest(
                 namespace = namespace,
                 revision = revision,
-                payload = PlaybackSnapshotCodec.encode(captureSnapshot(player, revision)),
+                payload = null,
+                snapshot = captureSnapshot(player, revision),
             ),
         )
     }
@@ -1185,56 +1120,13 @@ class PlaybackController(
         val request = PlaybackSnapshotWriteRequest(
             namespace = namespace,
             revision = revision,
-            payload = PlaybackSnapshotCodec.encode(
-                captureSnapshot(player, revision, playIntentOverride = playIntentOverride),
-            ),
+            payload = null,
+            snapshot = captureSnapshot(player, revision, playIntentOverride = playIntentOverride),
         )
-        return trackTransition(namespace, revision, snapshotPersistence.submitStructural(request))
+        return snapshotCommitTracker.track(namespace, revision, snapshotPersistence.submitStructural(request))
     }
 
-    suspend fun flushPlaybackSnapshot() {
-        while (true) {
-            val transition = synchronized(transitionLock) { latestTransition } ?: return
-            transition.awaitCommitted()
-            if (synchronized(transitionLock) { latestTransition === transition }) return
-        }
-    }
-
-    private fun trackTransition(
-        namespace: String,
-        revision: Long,
-        acknowledgement: Deferred<PlaybackSnapshotWriteResult>,
-        afterCommit: suspend () -> Unit = {},
-    ): PlaybackTransition {
-        val previous = _snapshotCommitState.value.takeIf { it.namespace == namespace }
-        _snapshotCommitState.value = PlaybackSnapshotCommitState(
-            namespace = namespace,
-            requestedRevision = revision,
-            committedRevision = previous?.committedRevision ?: 0L,
-        )
-        val completion = scope.async(start = CoroutineStart.UNDISPATCHED) {
-            try {
-                acknowledgement.await()
-                afterCommit()
-                val current = _snapshotCommitState.value
-                if (current.namespace == namespace && current.requestedRevision <= revision) {
-                    _snapshotCommitState.value = current.copy(
-                        committedRevision = maxOf(current.committedRevision, revision),
-                        failure = null,
-                    )
-                }
-            } catch (failure: Throwable) {
-                val current = _snapshotCommitState.value
-                if (current.namespace == namespace && current.requestedRevision <= revision) {
-                    _snapshotCommitState.value = current.copy(failure = failure.message ?: failure.javaClass.simpleName)
-                }
-                throw failure
-            }
-        }
-        return PlaybackTransition(revision, completion).also { transition ->
-            synchronized(transitionLock) { latestTransition = transition }
-        }
-    }
+    suspend fun flushPlaybackSnapshot() = snapshotCommitTracker.flush()
 
     private fun captureSnapshot(
         player: Player,

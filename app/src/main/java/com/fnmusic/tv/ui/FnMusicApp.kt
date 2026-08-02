@@ -24,9 +24,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -75,21 +72,18 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.foundation.verticalScroll
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
-import com.fnmusic.tv.AppContainer
+import com.fnmusic.tv.AppUiDependencies
 import com.fnmusic.tv.core.data.repository.SessionState
 import com.fnmusic.tv.core.data.server.ConnectionResolver
 import com.fnmusic.tv.core.data.server.ServerUrlNormalizer
 import com.fnmusic.tv.core.data.server.ServerUrlResult
 import com.fnmusic.tv.core.model.AppError
 import com.fnmusic.tv.core.model.AppException
-import com.fnmusic.tv.core.model.Playlist
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private enum class Route { Home, My, Player }
-
 @Composable
-fun FnMusicApp(container: AppContainer, onExitApplication: () -> Unit) {
+internal fun FnMusicApp(container: AppUiDependencies, onExitApplication: () -> Unit) {
     val session by container.sessionRepository.state.collectAsStateWithLifecycle()
     val playback by container.playbackController.state.collectAsStateWithLifecycle()
     FnMusicTheme {
@@ -667,158 +661,6 @@ private fun LoginActionButton(
         contentAlignment = Alignment.Center,
     ) {
         content()
-    }
-}
-
-@Composable
-private fun TopBar(nowPlaying: Boolean, selected: Route, onHome: () -> Unit, onMy: () -> Unit, onPlayer: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().height(82.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (nowPlaying) {
-            Button(onClick = onPlayer, modifier = Modifier.width(340.dp).height(64.dp)) { Text("正在播放", fontSize = 22.sp) }
-        } else {
-            Text("回声台", fontSize = 28.sp, fontWeight = FontWeight.Bold)
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Button(onClick = onHome, enabled = selected != Route.Home) { Text("首页", fontSize = 22.sp) }
-            Button(onClick = onMy, enabled = selected != Route.My) { Text("我的", fontSize = 22.sp) }
-        }
-    }
-}
-
-@Composable
-private fun HomeScreen(nowPlaying: Boolean, loadPlaylists: suspend () -> List<Playlist>, onMy: () -> Unit, onPlayer: () -> Unit) {
-    var playlists by remember { mutableStateOf<List<Playlist>>(emptyList()) }
-    var error by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        runCatching { loadPlaylists() }.onSuccess { playlists = it }.onFailure { error = true }
-    }
-    Column(Modifier.fillMaxSize().padding(horizontal = 64.dp, vertical = 40.dp)) {
-        TopBar(nowPlaying, Route.Home, {}, onMy, onPlayer)
-        Spacer(Modifier.height(42.dp))
-        Text("听点什么", fontSize = 42.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(24.dp))
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-            item { MediaCard("随机漫游", "从曲库里遇见下一首", FnColors.Teal, enabled = false) { } }
-            items(playlists, key = { it.guid.value }) { playlist ->
-                MediaCard(playlist.name, "歌单", FnColors.Coral, enabled = false) { }
-            }
-            item {
-                MediaCard(
-                    "全部歌单",
-                    if (error) "暂时无法载入" else "浏览完整列表",
-                    FnColors.Muted,
-                    enabled = false,
-                ) { }
-            }
-        }
-    }
-}
-
-@Composable
-private fun MediaCard(title: String, subtitle: String, accent: Color, enabled: Boolean, onClick: () -> Unit) {
-    Button(enabled = enabled, onClick = onClick, modifier = Modifier.size(width = 300.dp, height = 220.dp)) {
-        Column(Modifier.fillMaxWidth()) {
-            Box(Modifier.width(54.dp).height(7.dp).background(accent))
-            Spacer(Modifier.height(22.dp))
-            Text(title, fontSize = 27.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.height(8.dp))
-            Text(subtitle, color = FnColors.Muted, fontSize = 19.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-    }
-}
-
-@Composable
-private fun MyScreen(
-    username: String,
-    serverName: String,
-    nowPlaying: Boolean,
-    onHome: () -> Unit,
-    onLogout: suspend () -> Unit,
-    onPlayer: () -> Unit,
-) {
-    val scope = rememberCoroutineScope()
-    var signingOut by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().padding(horizontal = 64.dp, vertical = 40.dp)) {
-        TopBar(nowPlaying, Route.My, onHome, {}, onPlayer)
-        Row(
-            Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 18.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column {
-                Text("我的音乐", fontSize = 40.sp, fontWeight = FontWeight.Bold)
-                Text("$username · $serverName", color = FnColors.Muted, fontSize = 20.sp)
-            }
-            Button(
-                enabled = !signingOut,
-                onClick = {
-                    signingOut = true
-                    scope.launch { runCatching { onLogout() } }
-                },
-            ) { Text("切换账号", fontSize = 20.sp) }
-        }
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(20.dp)) {
-            item { LibraryBand("歌手", listOf("常听歌手", "全部歌手")) }
-            item { LibraryBand("专辑", listOf("最近专辑", "全部专辑")) }
-            item { LibraryBand("音乐库", listOf("全部歌曲", "共享音乐库")) }
-        }
-    }
-}
-
-@Composable
-private fun LibraryBand(title: String, entries: List<String>) {
-    Column {
-        Text(title, fontSize = 25.sp, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(10.dp))
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            items(entries) { entry ->
-                Button(enabled = false, onClick = {}, modifier = Modifier.size(width = 250.dp, height = 92.dp)) {
-                    Text(entry, fontSize = 22.sp)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PlayerScreen(
-    title: String,
-    artist: String,
-    isPlaying: Boolean,
-    onPrevious: () -> Unit,
-    onPlayPause: () -> Unit,
-    onNext: () -> Unit,
-) {
-    Row(
-        Modifier.fillMaxSize().padding(horizontal = 72.dp, vertical = 58.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(64.dp),
-    ) {
-        Box(
-            Modifier.size(470.dp).background(FnColors.Surface, RoundedCornerShape(8.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(title.take(1).uppercase(), fontSize = 116.sp, color = FnColors.Teal)
-        }
-        Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 48.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.height(8.dp))
-            Text(artist.ifBlank { "飞牛音乐" }, fontSize = 28.sp, color = FnColors.Muted)
-            Spacer(Modifier.height(52.dp))
-            Text("纯音乐或暂无歌词", fontSize = 34.sp, color = FnColors.Muted)
-            Spacer(Modifier.height(62.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                Button(onClick = onPrevious, modifier = Modifier.semantics { contentDescription = "上一首" }) { Text("上一首") }
-                Button(onClick = onPlayPause, modifier = Modifier.semantics { contentDescription = if (isPlaying) "暂停" else "播放" }) {
-                    Text(if (isPlaying) "暂停" else "播放")
-                }
-                Button(onClick = onNext, modifier = Modifier.semantics { contentDescription = "下一首" }) { Text("下一首") }
-            }
-        }
     }
 }
 

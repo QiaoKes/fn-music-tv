@@ -2,6 +2,8 @@ package com.fnmusic.tv.core.playback
 
 import java.io.IOException
 import java.util.Collections
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -9,6 +11,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -19,6 +22,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.fnmusic.tv.core.model.playback.PlayMode
+import com.fnmusic.tv.core.model.playback.QueueKind
 
 class PlaybackSnapshotWriterTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -222,6 +227,42 @@ class PlaybackSnapshotWriterTest {
         assertEquals(listOf("queue-replaced", "roam-exited"), writes)
     }
 
+    @Test
+    fun `captured snapshots are encoded on the configured background dispatcher`() = runBlocking {
+        val encodingExecutor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "snapshot-encoder")
+        }
+        val encodingDispatcher = encodingExecutor.asCoroutineDispatcher()
+        val encodedThread = AtomicReference<String>()
+        val persisted = CompletableDeferred<String?>()
+        val writer = PlaybackSnapshotWriter(
+            scope = scope,
+            encodingDispatcher = encodingDispatcher,
+            encodeSnapshot = { snapshot ->
+                encodedThread.set(Thread.currentThread().name)
+                "snapshot-${snapshot.revision}"
+            },
+        ) { _, payload -> persisted.complete(payload) }
+
+        try {
+            val result = writer.writeStructural(
+                PlaybackSnapshotWriteRequest(
+                    namespace = "server:user",
+                    revision = 12,
+                    payload = null,
+                    snapshot = snapshot(revision = 12),
+                ),
+            )
+
+            assertEquals(PlaybackSnapshotWriteResult.Committed, result)
+            assertEquals("snapshot-12", persisted.await())
+            assertTrue(encodedThread.get().startsWith("snapshot-encoder"))
+        } finally {
+            writer.cancel()
+            encodingDispatcher.close()
+        }
+    }
+
     private suspend fun awaitWrites(writes: List<*>, expected: Int) {
         withTimeout(5_000) {
             while (writes.size < expected) {
@@ -235,4 +276,21 @@ class PlaybackSnapshotWriterTest {
         payload: String,
         namespace: String = "server:user",
     ) = PlaybackSnapshotWriteRequest(namespace, revision, payload)
+
+    private fun snapshot(revision: Long) = PlaybackSnapshot(
+        generation = 1,
+        revision = revision,
+        items = emptyList(),
+        index = 0,
+        positionMs = 0,
+        source = null,
+        window = null,
+        kind = QueueKind.Normal,
+        mode = PlayMode.ListRepeat,
+        shuffleOrder = emptyList(),
+        roamWindow = null,
+        currentRoamId = null,
+        frozen = null,
+        playIntent = PlaybackPlayIntent.Pause,
+    )
 }
