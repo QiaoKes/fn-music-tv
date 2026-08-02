@@ -9,6 +9,55 @@ sealed interface PlaybackSource {
 
 enum class HlsReason { CueTrack, DecoderFallback }
 
+const val MAX_ACTIVE_QUEUE_ITEMS = 250
+const val DEFAULT_QUEUE_PAGE_SIZE = 50
+
+enum class PlayMode {
+    ListRepeat,
+    Shuffle,
+    SingleRepeat,
+    Sequence,
+}
+
+val DEFAULT_PLAY_MODE: PlayMode = PlayMode.ListRepeat
+
+enum class RepeatBehavior { Off, One, All }
+
+data class PlayModeMapping(
+    val repeatBehavior: RepeatBehavior,
+    val shuffleEnabled: Boolean,
+)
+
+val PlayMode.mapping: PlayModeMapping
+    get() = when (this) {
+        PlayMode.ListRepeat -> PlayModeMapping(RepeatBehavior.All, shuffleEnabled = false)
+        PlayMode.Shuffle -> PlayModeMapping(RepeatBehavior.All, shuffleEnabled = true)
+        PlayMode.SingleRepeat -> PlayModeMapping(RepeatBehavior.One, shuffleEnabled = false)
+        PlayMode.Sequence -> PlayModeMapping(RepeatBehavior.Off, shuffleEnabled = false)
+    }
+
+fun PlayMode.next(): PlayMode = PlayMode.entries[(ordinal + 1) % PlayMode.entries.size]
+
+enum class QueueKind { Normal, Roam }
+
+data class PlaybackQueueItem(
+    val mediaId: String,
+    val title: String,
+    val artist: String,
+    val queueIndex: Int,
+    val isCurrent: Boolean,
+)
+
+data class NowPlayingIdentity(
+    val namespace: String,
+    val mediaId: String,
+    val presentationRevision: Long,
+    val title: String,
+    val artist: String,
+    val audioFormat: String,
+    val coverId: String?,
+)
+
 sealed interface QueueSource {
     val sort: String
 
@@ -37,8 +86,8 @@ data class BoundedQueueWindow<T>(val items: List<T>, val selectedIndex: Int, val
 fun <T> boundedQueueWindow(
     items: List<T>,
     selectedIndex: Int,
-    maxSize: Int = 250,
-    pageSize: Int = 50,
+    maxSize: Int = MAX_ACTIVE_QUEUE_ITEMS,
+    pageSize: Int = DEFAULT_QUEUE_PAGE_SIZE,
 ): BoundedQueueWindow<T> {
     require(maxSize > 0)
     require(pageSize > 0)
@@ -50,6 +99,45 @@ fun <T> boundedQueueWindow(
         .coerceAtMost((maximumStart / pageSize) * pageSize)
     val window = items.subList(start, (start + maxSize).coerceAtMost(items.size))
     return BoundedQueueWindow(window, selected - start, start)
+}
+
+data class QueuePageItem(
+    val mediaId: String,
+    val sourceAbsoluteIndex: Int,
+) {
+    init {
+        require(mediaId.isNotBlank())
+        require(sourceAbsoluteIndex >= 0)
+    }
+}
+
+data class QueuePageSegment(
+    val page: Int,
+    val rawRowCount: Int,
+    val playableItems: List<QueuePageItem>,
+    val sort: String,
+    val knownTotal: Int?,
+    val pageSize: Int = DEFAULT_QUEUE_PAGE_SIZE,
+    val sourceStartIndex: Int = (page - 1) * pageSize,
+) {
+    init {
+        require(page > 0)
+        require(pageSize > 0)
+        require(rawRowCount in 0..pageSize)
+        require(sourceStartIndex >= 0)
+        require(knownTotal == null || knownTotal >= 0)
+        require(sourceStartIndex.toLong() + rawRowCount <= Int.MAX_VALUE)
+        require(playableItems.map(QueuePageItem::mediaId).distinct().size == playableItems.size)
+        require(playableItems.zipWithNext().all { (left, right) ->
+            left.sourceAbsoluteIndex < right.sourceAbsoluteIndex
+        })
+        require(playableItems.all { item ->
+            item.sourceAbsoluteIndex >= sourceStartIndex && item.sourceAbsoluteIndex < sourceEndExclusive
+        })
+    }
+
+    val sourceEndExclusive: Int get() = sourceStartIndex + rawRowCount
+    val mediaIds: List<String> get() = playableItems.map(QueuePageItem::mediaId)
 }
 
 data class SlidingQueueState(
@@ -65,7 +153,33 @@ data class SlidingQueueState(
     val invalidated: Boolean = false,
     val reachedStart: Boolean = firstPage <= 1,
     val reachedEnd: Boolean = knownTotal != null && windowStart + guids.size >= knownTotal,
-)
+    val segments: List<QueuePageSegment> = legacyQueueSegments(
+        guids = guids,
+        windowStart = windowStart,
+        firstPage = firstPage,
+        lastPage = lastPage,
+        knownTotal = knownTotal,
+        sort = sort,
+    ),
+) {
+    val activeItems: List<QueuePageItem> get() = segments.flatMap(QueuePageSegment::playableItems)
+
+    companion object {
+        fun fromSegments(
+            segments: List<QueuePageSegment>,
+            currentIndex: Int,
+            loading: Boolean = false,
+            failureCount: Int = 0,
+            invalidated: Boolean = false,
+        ): SlidingQueueState = stateFromSegments(
+            segments = segments,
+            currentIndex = currentIndex,
+            loading = loading,
+            failureCount = failureCount,
+            invalidated = invalidated,
+        )
+    }
+}
 
 data class SlidingQueueUpdate(val state: SlidingQueueState, val removeFromStart: Int = 0, val removeFromEnd: Int = 0)
 
@@ -82,24 +196,35 @@ object SlidingQueueReducer {
         guids: List<String>,
         total: Int,
         sort: String,
-        maxSize: Int = 250,
+        maxSize: Int = MAX_ACTIVE_QUEUE_ITEMS,
+    ): SlidingQueueUpdate = append(
+        state = state,
+        segment = legacyIncomingSegment(page, guids, total, sort),
+        maxSize = maxSize,
+    )
+
+    fun append(
+        state: SlidingQueueState,
+        segment: QueuePageSegment,
+        maxSize: Int = MAX_ACTIVE_QUEUE_ITEMS,
     ): SlidingQueueUpdate {
-        if (!state.loading || page != state.lastPage + 1) return SlidingQueueUpdate(state)
-        if (drifted(state, guids, total, sort)) return SlidingQueueUpdate(invalidate(state))
-        val combined = state.guids + guids
-        val remove = (combined.size - maxSize).coerceAtLeast(0)
+        require(maxSize > 0)
+        if (!state.loading || segment.page != state.lastPage + 1) return SlidingQueueUpdate(state)
+        if (drifted(state, segment)) return SlidingQueueUpdate(invalidate(state))
+
+        val (retainedSegments, incomingSegment) = reconcileKnownTotal(state, segment)
+        val combined = retainedSegments + incomingSegment
+        val trimmed = trimStart(combined, state.currentIndex, maxSize)
+            ?: return SlidingQueueUpdate(invalidate(state))
         return SlidingQueueUpdate(
-            state.copy(
-                guids = combined.drop(remove),
-                currentIndex = (state.currentIndex - remove).coerceAtLeast(0),
-                windowStart = state.windowStart + remove,
-                lastPage = page,
-                knownTotal = total,
+            state = stateFromSegments(
+                segments = trimmed.segments,
+                currentIndex = state.currentIndex - trimmed.removedItemCount,
                 loading = false,
                 failureCount = 0,
-                reachedEnd = page * 50 >= total || guids.isEmpty(),
+                invalidated = false,
             ),
-            removeFromStart = remove,
+            removeFromStart = trimmed.removedItemCount,
         )
     }
 
@@ -109,31 +234,210 @@ object SlidingQueueReducer {
         guids: List<String>,
         total: Int,
         sort: String,
-        maxSize: Int = 250,
+        maxSize: Int = MAX_ACTIVE_QUEUE_ITEMS,
+    ): SlidingQueueUpdate = prepend(
+        state = state,
+        segment = legacyIncomingSegment(page, guids, total, sort),
+        maxSize = maxSize,
+    )
+
+    fun prepend(
+        state: SlidingQueueState,
+        segment: QueuePageSegment,
+        maxSize: Int = MAX_ACTIVE_QUEUE_ITEMS,
     ): SlidingQueueUpdate {
-        if (!state.loading || page != state.firstPage - 1) return SlidingQueueUpdate(state)
-        if (drifted(state, guids, total, sort)) return SlidingQueueUpdate(invalidate(state))
-        val combined = guids + state.guids
-        val remove = (combined.size - maxSize).coerceAtLeast(0)
+        require(maxSize > 0)
+        if (!state.loading || segment.page != state.firstPage - 1) return SlidingQueueUpdate(state)
+        if (drifted(state, segment)) return SlidingQueueUpdate(invalidate(state))
+
+        val (retainedSegments, incomingSegment) = reconcileKnownTotal(state, segment)
+        val combined = listOf(incomingSegment) + retainedSegments
+        val currentIndex = state.currentIndex + segment.playableItems.size
+        val trimmed = trimEnd(combined, currentIndex, maxSize)
+            ?: return SlidingQueueUpdate(invalidate(state))
         return SlidingQueueUpdate(
-            state.copy(
-                guids = combined.dropLast(remove),
-                currentIndex = state.currentIndex + guids.size,
-                windowStart = (state.windowStart - guids.size).coerceAtLeast(0),
-                firstPage = page,
-                knownTotal = total,
+            state = stateFromSegments(
+                segments = trimmed.segments,
+                currentIndex = currentIndex,
                 loading = false,
                 failureCount = 0,
-                reachedStart = page <= 1,
+                invalidated = false,
             ),
-            removeFromEnd = remove,
+            removeFromEnd = trimmed.removedItemCount,
         )
     }
 
-    private fun drifted(state: SlidingQueueState, incoming: List<String>, total: Int, sort: String): Boolean =
-        (state.knownTotal != null && state.knownTotal != total) || state.sort != sort || incoming.any { it in state.guids }
+    private fun drifted(state: SlidingQueueState, incoming: QueuePageSegment): Boolean {
+        if (!state.isSegmentCoherent()) return true
+        if (state.knownTotal != null && incoming.knownTotal != null && incoming.knownTotal != state.knownTotal) return true
+        if (state.sort != incoming.sort) return true
+        val overlapsRetainedRange = when (incoming.page) {
+            state.lastPage + 1 -> incoming.sourceStartIndex < state.segments.last().sourceEndExclusive
+            state.firstPage - 1 -> incoming.sourceEndExclusive > state.segments.first().sourceStartIndex
+            else -> true
+        }
+        if (overlapsRetainedRange) return true
+        val knownIds = state.guids.toHashSet()
+        if (incoming.playableItems.any { !knownIds.add(it.mediaId) }) return true
+        val occupiedSourceIndices = state.activeItems.mapTo(hashSetOf(), QueuePageItem::sourceAbsoluteIndex)
+        return incoming.playableItems.any { !occupiedSourceIndices.add(it.sourceAbsoluteIndex) }
+    }
 
     private fun invalidate(state: SlidingQueueState) = state.copy(loading = false, invalidated = true)
+
+    private fun reconcileKnownTotal(
+        state: SlidingQueueState,
+        incoming: QueuePageSegment,
+    ): Pair<List<QueuePageSegment>, QueuePageSegment> {
+        val knownTotal = state.knownTotal ?: incoming.knownTotal
+        val retained = state.segments.map { segment ->
+            if (segment.knownTotal == knownTotal) segment else segment.copy(knownTotal = knownTotal)
+        }
+        val normalizedIncoming = if (incoming.knownTotal == knownTotal) {
+            incoming
+        } else {
+            incoming.copy(knownTotal = knownTotal)
+        }
+        return retained to normalizedIncoming
+    }
+
+    private fun trimStart(
+        segments: List<QueuePageSegment>,
+        currentIndex: Int,
+        maxSize: Int,
+    ): TrimmedSegments? {
+        val retained = segments.toMutableList()
+        var activeCount = retained.sumOf { it.playableItems.size }
+        var removed = 0
+        while (activeCount > maxSize && retained.size > 1) {
+            val first = retained.first()
+            if (currentIndex < removed + first.playableItems.size) return null
+            retained.removeAt(0)
+            removed += first.playableItems.size
+            activeCount -= first.playableItems.size
+        }
+        return retained.takeIf { activeCount <= maxSize }?.let { TrimmedSegments(it, removed) }
+    }
+
+    private fun trimEnd(
+        segments: List<QueuePageSegment>,
+        currentIndex: Int,
+        maxSize: Int,
+    ): TrimmedSegments? {
+        val retained = segments.toMutableList()
+        var activeCount = retained.sumOf { it.playableItems.size }
+        var removed = 0
+        while (activeCount > maxSize && retained.size > 1) {
+            val last = retained.last()
+            val lastStart = activeCount - last.playableItems.size
+            if (currentIndex >= lastStart) return null
+            retained.removeAt(retained.lastIndex)
+            removed += last.playableItems.size
+            activeCount -= last.playableItems.size
+        }
+        return retained.takeIf { activeCount <= maxSize }?.let { TrimmedSegments(it, removed) }
+    }
+
+    private data class TrimmedSegments(
+        val segments: List<QueuePageSegment>,
+        val removedItemCount: Int,
+    )
+}
+
+private fun SlidingQueueState.isSegmentCoherent(): Boolean =
+    segments.isNotEmpty() &&
+        segments.hasValidTopology() &&
+        segments.flatMap(QueuePageSegment::mediaIds) == guids &&
+        guids.distinct().size == guids.size &&
+        segments.all { it.sort == sort && it.knownTotal == knownTotal }
+
+private fun List<QueuePageSegment>.hasValidTopology(): Boolean =
+    zipWithNext().all { (left, right) ->
+        right.page == left.page + 1 && left.sourceEndExclusive <= right.sourceStartIndex
+    }
+
+private fun stateFromSegments(
+    segments: List<QueuePageSegment>,
+    currentIndex: Int,
+    loading: Boolean,
+    failureCount: Int,
+    invalidated: Boolean,
+): SlidingQueueState {
+    require(segments.isNotEmpty())
+    require(segments.hasValidTopology())
+    val first = segments.first()
+    val last = segments.last()
+    require(segments.all { it.sort == first.sort && it.knownTotal == first.knownTotal })
+    val guids = segments.flatMap(QueuePageSegment::mediaIds)
+    require(guids.distinct().size == guids.size)
+    val selected = if (guids.isEmpty()) 0 else currentIndex.coerceIn(guids.indices)
+    return SlidingQueueState(
+        guids = guids,
+        currentIndex = selected,
+        windowStart = first.sourceStartIndex,
+        firstPage = first.page,
+        lastPage = last.page,
+        knownTotal = first.knownTotal,
+        sort = first.sort,
+        loading = loading,
+        failureCount = failureCount,
+        invalidated = invalidated,
+        reachedStart = first.page == 1 && first.sourceStartIndex == 0,
+        reachedEnd = last.knownTotal?.let { last.sourceEndExclusive >= it } == true,
+        segments = segments,
+    )
+}
+
+private fun legacyIncomingSegment(
+    page: Int,
+    guids: List<String>,
+    total: Int,
+    sort: String,
+): QueuePageSegment {
+    val start = (page - 1) * DEFAULT_QUEUE_PAGE_SIZE
+    val rawCount = minOf(DEFAULT_QUEUE_PAGE_SIZE, (total - start).coerceAtLeast(0))
+        .coerceAtLeast(guids.size)
+    return QueuePageSegment(
+        page = page,
+        rawRowCount = rawCount,
+        playableItems = guids.mapIndexed { index, guid -> QueuePageItem(guid, start + index) },
+        sort = sort,
+        knownTotal = total,
+    )
+}
+
+private fun legacyQueueSegments(
+    guids: List<String>,
+    windowStart: Int,
+    firstPage: Int,
+    lastPage: Int,
+    knownTotal: Int?,
+    sort: String,
+): List<QueuePageSegment> {
+    require(firstPage > 0)
+    require(lastPage >= firstPage)
+    var offset = 0
+    return (firstPage..lastPage).map { page ->
+        val sourceStart = windowStart + (page - firstPage) * DEFAULT_QUEUE_PAGE_SIZE
+        val rawCount = knownTotal
+            ?.let { minOf(DEFAULT_QUEUE_PAGE_SIZE, (it - sourceStart).coerceAtLeast(0)) }
+            ?: DEFAULT_QUEUE_PAGE_SIZE
+        val itemCount = minOf(rawCount, guids.size - offset)
+        val items = guids.subList(offset, offset + itemCount).mapIndexed { index, guid ->
+            QueuePageItem(guid, sourceStart + index)
+        }
+        offset += itemCount
+        QueuePageSegment(
+            page = page,
+            rawRowCount = rawCount,
+            playableItems = items,
+            sort = sort,
+            knownTotal = knownTotal,
+            sourceStartIndex = sourceStart,
+        )
+    }.also {
+        require(offset == guids.size) { "Queue items exceed the declared page range" }
+    }
 }
 
 sealed interface QueueAction {

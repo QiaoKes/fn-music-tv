@@ -2,6 +2,8 @@ package com.fnmusic.tv.ui
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.SystemClock
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
@@ -35,9 +37,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -76,6 +81,7 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -83,7 +89,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.get
-import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
@@ -91,6 +96,9 @@ import androidx.tv.material3.Border
 import androidx.tv.material3.LocalContentColor
 import androidx.tv.material3.Text
 import com.fnmusic.tv.AppContainer
+import com.fnmusic.tv.NowPlayingPresentation
+import com.fnmusic.tv.NowPlayingResourceState
+import com.fnmusic.tv.core.data.repository.CurrentLyrics
 import com.fnmusic.tv.core.data.repository.SessionState
 import com.fnmusic.tv.core.model.Album
 import com.fnmusic.tv.core.model.AppError
@@ -98,21 +106,28 @@ import com.fnmusic.tv.core.model.AppException
 import com.fnmusic.tv.core.model.Artist
 import com.fnmusic.tv.core.model.CoverVariant
 import com.fnmusic.tv.core.model.Page
-import com.fnmusic.tv.core.model.PlaybackTrack
+import com.fnmusic.tv.core.model.PlayerStyle
 import com.fnmusic.tv.core.model.Playlist
-import com.fnmusic.tv.core.model.RoamWindow
 import com.fnmusic.tv.core.model.SharedLibrary
 import com.fnmusic.tv.core.model.Track
-import com.fnmusic.tv.core.model.lyric.LyricTimeline
 import com.fnmusic.tv.core.model.playback.QueueSource
+import com.fnmusic.tv.core.model.playback.QueueKind
+import com.fnmusic.tv.core.model.playback.PlayMode
+import com.fnmusic.tv.core.model.playback.PlaybackQueueItem
+import com.fnmusic.tv.core.model.playback.NowPlayingIdentity
+import com.fnmusic.tv.core.model.playback.MAX_ACTIVE_QUEUE_ITEMS
+import com.fnmusic.tv.core.model.playback.QueuePageItem
+import com.fnmusic.tv.core.model.playback.QueuePageSegment
 import com.fnmusic.tv.core.model.playback.boundedQueueWindow
 import com.fnmusic.tv.core.model.preferences.CacheBudget
 import com.fnmusic.tv.core.model.preferences.CacheUsage
 import com.fnmusic.tv.core.playback.PlaybackUiState
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.withContext
 
 private sealed interface LibraryRoute {
@@ -125,34 +140,150 @@ private sealed interface LibraryRoute {
     data object AllTracks : LibraryRoute
     data class ArtistDetail(val artist: Artist) : LibraryRoute
     data class AlbumDetail(val album: Album) : LibraryRoute
-    data class Player(val track: Track?, val roam: Boolean = false) : LibraryRoute
+    data class Player(val track: Track?) : LibraryRoute
     data object Settings : LibraryRoute
 }
 
 private val LocalAppContainer = staticCompositionLocalOf<AppContainer> { error("Missing AppContainer") }
+
+internal data class RetainedPageSnapshot<T>(
+    val entries: List<T> = emptyList(),
+    val page: Int = 0,
+    val hasNext: Boolean = false,
+    val error: AppError? = null,
+    val initialLoadCompleted: Boolean = false,
+)
+
+internal fun <T> retainLoadedPage(
+    current: RetainedPageSnapshot<T>,
+    loaded: Page<T>,
+    key: (T) -> String,
+): RetainedPageSnapshot<T> = current.copy(
+    entries = (current.entries + loaded.items).distinctBy(key),
+    page = loaded.page,
+    hasNext = loaded.hasNext,
+    error = null,
+    initialLoadCompleted = current.initialLoadCompleted || loaded.page == 1,
+)
+
+internal fun shouldLoadInitialPage(snapshot: RetainedPageSnapshot<*>): Boolean =
+    !snapshot.initialLoadCompleted
+
+internal data class RetainedTrackCollectionSnapshot(
+    val tracks: List<Track> = emptyList(),
+    val loadedPages: List<Page<Track>> = emptyList(),
+    val page: Int = 0,
+    val hasNext: Boolean = false,
+    val error: AppError? = null,
+    val expectedTotal: Int? = null,
+    val expectedSort: String? = null,
+    val initialLoadCompleted: Boolean = false,
+)
+
+internal fun retainTrackCollectionPage(
+    current: RetainedTrackCollectionSnapshot,
+    loaded: Page<Track>,
+    targetPage: Int,
+): RetainedTrackCollectionSnapshot {
+    val existing = current.tracks.asSequence().map { it.guid.value }.toHashSet()
+    val firstPage = current.loadedPages.firstOrNull()
+    val drifted = loaded.page != targetPage || loaded.items.size > loaded.pageSize || targetPage > 1 && (
+        current.expectedTotal != loaded.total ||
+            current.expectedSort != loaded.sort ||
+            firstPage?.pageSize != loaded.pageSize ||
+            loaded.items.any { it.guid.value in existing }
+        )
+    if (drifted) {
+        return current.copy(
+            hasNext = false,
+            error = AppError.CollectionChanged,
+            initialLoadCompleted = current.initialLoadCompleted || targetPage == 1,
+        )
+    }
+    return current.copy(
+        tracks = current.tracks + loaded.items,
+        loadedPages = current.loadedPages + loaded,
+        page = targetPage,
+        hasNext = loaded.hasNext,
+        error = null,
+        expectedTotal = loaded.total,
+        expectedSort = loaded.sort,
+        initialLoadCompleted = current.initialLoadCompleted || targetPage == 1,
+    )
+}
+
+private class RetainedPagedGridState<T> {
+    var snapshot by mutableStateOf(RetainedPageSnapshot<T>())
+    var loading by mutableStateOf(false)
+}
+
+private class RetainedTrackCollectionState {
+    var snapshot by mutableStateOf(RetainedTrackCollectionSnapshot())
+    var loading by mutableStateOf(false)
+}
+
+private class LibraryRetainedStateStore(val scope: CoroutineScope) {
+    private val pagedStates = mutableMapOf<String, RetainedPagedGridState<*>>()
+    private val trackStates = mutableMapOf<String, RetainedTrackCollectionState>()
+
+    @Suppress("UNCHECKED_CAST")
+    fun <T> paged(key: String): RetainedPagedGridState<T> =
+        pagedStates.getOrPut(key) { RetainedPagedGridState<T>() } as RetainedPagedGridState<T>
+
+    fun tracks(key: String): RetainedTrackCollectionState =
+        trackStates.getOrPut(key) { RetainedTrackCollectionState() }
+}
+
+private val LocalLibraryRetainedState = staticCompositionLocalOf<LibraryRetainedStateStore> {
+    error("Missing library retained state")
+}
 
 @Composable
 internal fun AuthenticatedApp(
     container: AppContainer,
     session: SessionState.SignedIn,
     playback: PlaybackUiState,
+    onMoveToBackground: () -> Unit,
 ) {
     var stack by remember(session.user.guid) { mutableStateOf(listOf<LibraryRoute>(LibraryRoute.Home)) }
-    var roamWindow by remember { mutableStateOf<RoamWindow?>(null) }
+    var lastHomeBackAt by remember(session.user.guid) { mutableStateOf(0L) }
     val route = stack.last()
+    val context = LocalContext.current
     val stateHolder = rememberSaveableStateHolder()
+    val retainedScope = rememberCoroutineScope()
+    val retainedState = remember(session.user.guid, retainedScope) {
+        LibraryRetainedStateStore(retainedScope)
+    }
     val open: (LibraryRoute) -> Unit = { stack = stack + it }
     val root: (LibraryRoute) -> Unit = { stack = listOf(it) }
-    BackHandler(stack.size > 1) { stack = stack.dropLast(1) }
+    LaunchedEffect(route.storageKey()) { lastHomeBackAt = 0L }
+    BackHandler {
+        when {
+            stack.size > 1 -> stack = stack.dropLast(1)
+            route == LibraryRoute.My -> root(LibraryRoute.Home)
+            route == LibraryRoute.Home -> {
+                val now = SystemClock.elapsedRealtime()
+                if (isHomeBackConfirmed(lastHomeBackAt, now)) {
+                    lastHomeBackAt = 0L
+                    onMoveToBackground()
+                } else {
+                    lastHomeBackAt = now
+                    Toast.makeText(context, "再按一次返回桌面", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
     LaunchedEffect(playback.error) {
-        if (playback.error?.contains("BAD_HTTP_STATUS") == true && !container.sessionRepository.verifyCurrentSession()) {
-            container.playbackController.clearSession()
-            container.musicRepository.clearArtwork()
+        if (playback.error?.contains("BAD_HTTP_STATUS") == true) {
+            container.sessionRepository.verifyCurrentSession()
         }
     }
 
     stateHolder.SaveableStateProvider(route.storageKey()) {
-        CompositionLocalProvider(LocalAppContainer provides container) {
+        CompositionLocalProvider(
+            LocalAppContainer provides container,
+            LocalLibraryRetainedState provides retainedState,
+        ) {
             when (route) {
         LibraryRoute.Home -> BrowseHome(
             container,
@@ -160,14 +291,7 @@ internal fun AuthenticatedApp(
             onMy = { root(LibraryRoute.My) },
             onPlaylist = { open(LibraryRoute.PlaylistDetail(it)) },
             onAll = { open(LibraryRoute.AllPlaylists) },
-            onPlayer = { open(LibraryRoute.Player(null, roamWindow != null)) },
-            activeRoam = roamWindow,
-            onResumeRoam = { open(LibraryRoute.Player(it.current.track, true)) },
-            onRoam = { window, prepared ->
-                roamWindow = window
-                container.playbackController.enterRoam(prepared)
-                open(LibraryRoute.Player(window.current.track, true))
-            },
+            onPlayer = { open(LibraryRoute.Player(null)) },
         )
         LibraryRoute.My -> BrowseMy(
             container,
@@ -180,11 +304,12 @@ internal fun AuthenticatedApp(
             onArtist = { open(LibraryRoute.ArtistDetail(it)) },
             onAlbum = { open(LibraryRoute.AlbumDetail(it)) },
             onSettings = { open(LibraryRoute.Settings) },
-            onPlayer = { open(LibraryRoute.Player(null, roamWindow != null)) },
+            onPlayer = { open(LibraryRoute.Player(null)) },
         )
         LibraryRoute.AllPlaylists -> AllPlaylists(container, onOpen = { open(LibraryRoute.PlaylistDetail(it)) })
         is LibraryRoute.PlaylistDetail -> TrackCollection(
             container = container,
+            stateKey = "playlist:${route.playlist.guid.value}:tracks",
             title = route.playlist.name,
             coverId = route.playlist.coverId,
             loader = { container.musicRepository.playlistTracks(route.playlist.guid.value, it) },
@@ -195,6 +320,7 @@ internal fun AuthenticatedApp(
         LibraryRoute.Albums -> AlbumGrid(container, onOpen = { open(LibraryRoute.AlbumDetail(it)) })
         LibraryRoute.AllTracks -> TrackCollection(
             container = container,
+            stateKey = "all-tracks",
             title = "全部歌曲",
             coverId = null,
             loader = container.musicRepository::allTracks,
@@ -206,6 +332,7 @@ internal fun AuthenticatedApp(
         }
         is LibraryRoute.AlbumDetail -> TrackCollection(
             container = container,
+            stateKey = "album:${route.album.guid.value}:tracks",
             title = route.album.name,
             subtitle = route.album.artistName.orEmpty(),
             coverId = route.album.coverId,
@@ -216,16 +343,13 @@ internal fun AuthenticatedApp(
         is LibraryRoute.Player -> ImmersivePlayer(
             container,
             playback,
-            route.track,
-            route.roam,
-            roamWindow,
-            onRoamChanged = { roamWindow = it },
             onExitRoam = {
-                roamWindow = null
-                stack = if (container.playbackController.exitRoam()) {
-                    stack.dropLast(1) + LibraryRoute.Player(null, false)
-                } else {
-                    listOf(LibraryRoute.Home)
+                retainedScope.launch {
+                    stack = if (container.playbackController.exitRoamDurably()) {
+                        stack.dropLast(1) + LibraryRoute.Player(null)
+                    } else {
+                        listOf(LibraryRoute.Home)
+                    }
                 }
             },
         )
@@ -256,6 +380,7 @@ private fun LibraryTopBar(
     onHome: () -> Unit,
     onMy: () -> Unit,
     onPlayer: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Row(
         Modifier.fillMaxWidth().height(76.dp),
@@ -263,7 +388,7 @@ private fun LibraryTopBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (playback.hasMedia) {
-            NowPlayingPill(playback, onPlayer)
+            NowPlayingPill(playback, onPlayer, modifier)
         } else {
             Text("飞牛音乐 TV", fontSize = 28.sp, fontWeight = FontWeight.Bold)
         }
@@ -275,14 +400,16 @@ private fun LibraryTopBar(
 }
 
 @Composable
-private fun NowPlayingPill(playback: PlaybackUiState, onClick: () -> Unit) {
+private fun NowPlayingPill(
+    playback: PlaybackUiState,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val shape = RoundedCornerShape(19.dp)
-    val coverId = remember(playback.artworkUrl) {
-        playback.artworkUrl?.let { runCatching { it.toUri().getQueryParameter("coverId") }.getOrNull() }
-    }
+    val coverId = playback.coverId
     Button(
         onClick = onClick,
-        modifier = Modifier.size(width = 186.dp, height = 37.dp),
+        modifier = modifier.size(width = 186.dp, height = 37.dp),
         shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
         scale = ButtonDefaults.scale(focusedScale = 1.04f),
         colors = ButtonDefaults.colors(
@@ -381,50 +508,118 @@ private fun BrowseHome(
     onPlaylist: (Playlist) -> Unit,
     onAll: () -> Unit,
     onPlayer: () -> Unit,
-    activeRoam: RoamWindow?,
-    onResumeRoam: (RoamWindow) -> Unit,
-    onRoam: (RoamWindow, PlaybackTrack) -> Unit,
 ) {
     var playlists by remember { mutableStateOf<List<Playlist>>(emptyList()) }
+    var playlistsLoaded by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<AppError?>(null) }
-    var roaming by remember { mutableStateOf(false) }
+    var focusedKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var initialFocusRequested by remember { mutableStateOf(false) }
+    val contentFocus = remember { FocusRequester() }
+    val rowState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
         runCatching { container.musicRepository.playlists() }
             .onSuccess { playlists = it }
             .onFailure { error = (it as? AppException)?.error ?: AppError.Unknown() }
+        playlistsLoaded = true
+    }
+    LaunchedEffect(playlistsLoaded, playback.roamBusy, playback.hasMedia, focusedKey) {
+        if (initialFocusRequested) return@LaunchedEffect
+        val restoringNowPlaying = playback.hasMedia && focusedKey == "now-playing"
+        if (!playlistsLoaded && !restoringNowPlaying) return@LaunchedEffect
+        val availableKeys = buildList {
+            if (playlistsLoaded) {
+                if (!playback.roamBusy) add("roam")
+                addAll(playlists.take(12).map { "playlist:${it.guid.value}" })
+                add("all-playlists")
+            }
+            if (playback.hasMedia) add("now-playing")
+        }
+        focusedKey = focusedKey?.takeIf(availableKeys::contains) ?: availableKeys.firstOrNull()
+        yield()
+        if (focusedKey != null) {
+            runCatching { contentFocus.requestFocus() }
+            initialFocusRequested = true
+        }
     }
     Column(Modifier.fillMaxSize().padding(horizontal = 64.dp, vertical = 38.dp)) {
-        LibraryTopBar(playback, true, {}, onMy, onPlayer)
+        LibraryTopBar(
+            playback,
+            true,
+            {},
+            onMy,
+            onPlayer = {
+                focusedKey = "now-playing"
+                onPlayer()
+            },
+            modifier = Modifier
+                .then(if (focusedKey == "now-playing") Modifier.focusRequester(contentFocus) else Modifier)
+                .onFocusChanged { if (it.isFocused) focusedKey = "now-playing" },
+        )
         Spacer(Modifier.height(38.dp))
         Text("听点什么", fontSize = 42.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(22.dp))
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+        LazyRow(state = rowState, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
             item {
-                PlaylistTile("随机漫游", if (roaming) "正在准备" else "从曲库里遇见下一首", null, FnColors.Teal, enabled = !roaming) {
-                    if (activeRoam != null) {
-                        onResumeRoam(activeRoam)
+                PlaylistTile(
+                    "随机漫游",
+                    if (playback.roamBusy) "正在准备" else "从曲库里遇见下一首",
+                    null,
+                    FnColors.Teal,
+                    enabled = !playback.roamBusy,
+                    modifier = Modifier
+                        .then(if (focusedKey == "roam") Modifier.focusRequester(contentFocus) else Modifier)
+                        .onFocusChanged { if (it.isFocused) focusedKey = "roam" },
+                ) {
+                    if (playback.queueKind == QueueKind.Roam) {
+                        onPlayer()
                         return@PlaylistTile
                     }
-                    roaming = true
                     scope.launch {
-                        runCatching {
-                            val window = container.musicRepository.startRoam() ?: throw AppException(AppError.Empty)
-                            window to container.musicRepository.prepare(window.current.track)
-                        }.onSuccess { (window, prepared) -> onRoam(window, prepared) }
-                            .onFailure { error = (it as? AppException)?.error ?: AppError.Unknown() }
-                        roaming = false
+                        if (container.playbackController.startRoam()) {
+                            error = null
+                            onPlayer()
+                        } else {
+                            error = container.playbackController.state.value.roamError ?: AppError.Unknown()
+                        }
                     }
                 }
             }
             items(playlists.take(12), key = { it.guid.value }) { playlist ->
-                PlaylistTile(playlist.name, "歌单", playlist.coverId, FnColors.Coral) { onPlaylist(playlist) }
+                val key = "playlist:${playlist.guid.value}"
+                PlaylistTile(
+                    playlist.name,
+                    "歌单",
+                    playlist.coverId,
+                    FnColors.Coral,
+                    modifier = Modifier
+                        .then(if (focusedKey == key) Modifier.focusRequester(contentFocus) else Modifier)
+                        .onFocusChanged { if (it.isFocused) focusedKey = key },
+                ) { onPlaylist(playlist) }
             }
-            item { PlaylistTile("全部歌单", "浏览完整列表", null, FnColors.Muted, onClick = onAll) }
+            item {
+                PlaylistTile(
+                    "全部歌单",
+                    "浏览完整列表",
+                    null,
+                    FnColors.Muted,
+                    modifier = Modifier
+                        .then(if (focusedKey == "all-playlists") Modifier.focusRequester(contentFocus) else Modifier)
+                        .onFocusChanged { if (it.isFocused) focusedKey = "all-playlists" },
+                    onClick = onAll,
+                )
+            }
         }
         error?.let { InlineError(it) }
     }
 }
+
+internal fun isHomeBackConfirmed(
+    previousBackAt: Long,
+    currentBackAt: Long,
+    windowMs: Long = 2_000L,
+): Boolean = previousBackAt > 0L && currentBackAt >= previousBackAt &&
+    currentBackAt - previousBackAt <= windowMs
 
 @Composable
 private fun BrowseMy(
@@ -443,14 +638,67 @@ private fun BrowseMy(
     var artists by remember { mutableStateOf<List<Artist>>(emptyList()) }
     var albums by remember { mutableStateOf<List<Album>>(emptyList()) }
     var libraries by remember { mutableStateOf<List<SharedLibrary>>(emptyList()) }
-    val scope = rememberCoroutineScope()
+    var artistsLoaded by remember { mutableStateOf(false) }
+    var albumsLoaded by remember { mutableStateOf(false) }
+    var librariesLoaded by remember { mutableStateOf(false) }
+    var focusedKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var initialFocusRequested by remember { mutableStateOf(false) }
+    val contentFocus = remember { FocusRequester() }
+    val listState = rememberLazyListState()
+    val scope = LocalLibraryRetainedState.current.scope
     LaunchedEffect(Unit) {
-        launch { runCatching { container.musicRepository.artists(1).items }.onSuccess { artists = it } }
-        launch { runCatching { container.musicRepository.albums(1).items }.onSuccess { albums = it } }
-        launch { runCatching { container.musicRepository.sharedLibraries() }.onSuccess { libraries = it } }
+        launch {
+            runCatching { container.musicRepository.artists(1).items }.onSuccess { artists = it }
+            artistsLoaded = true
+        }
+        launch {
+            runCatching { container.musicRepository.albums(1).items }.onSuccess { albums = it }
+            albumsLoaded = true
+        }
+        launch {
+            runCatching { container.musicRepository.sharedLibraries() }.onSuccess { libraries = it }
+            librariesLoaded = true
+        }
+    }
+    LaunchedEffect(artistsLoaded, albumsLoaded, librariesLoaded, playback.hasMedia, focusedKey) {
+        if (initialFocusRequested) return@LaunchedEffect
+        val allContentLoaded = artistsLoaded && albumsLoaded && librariesLoaded
+        val restoringChrome = focusedKey == "settings" || playback.hasMedia && focusedKey == "now-playing"
+        if (!allContentLoaded && !restoringChrome) return@LaunchedEffect
+        val availableKeys = buildList {
+            if (allContentLoaded) {
+                addAll(artists.take(8).map { "artist:${it.guid.value}" })
+                add("all-artists")
+                addAll(albums.take(8).map { "album:${it.guid.value}" })
+                add("all-albums")
+                add("all-tracks")
+                addAll(libraries.filter { it.accessStatus == 0 }.map { "library:${it.name}" })
+                add("all-libraries")
+            }
+            if (playback.hasMedia) add("now-playing")
+            add("settings")
+        }
+        focusedKey = focusedKey?.takeIf(availableKeys::contains) ?: availableKeys.firstOrNull()
+        yield()
+        if (focusedKey != null) {
+            runCatching { contentFocus.requestFocus() }
+            initialFocusRequested = true
+        }
     }
     Column(Modifier.fillMaxSize().padding(horizontal = 64.dp, vertical = 38.dp)) {
-        LibraryTopBar(playback, false, onHome, {}, onPlayer)
+        LibraryTopBar(
+            playback,
+            false,
+            onHome,
+            {},
+            onPlayer = {
+                focusedKey = "now-playing"
+                onPlayer()
+            },
+            modifier = Modifier
+                .then(if (focusedKey == "now-playing") Modifier.focusRequester(contentFocus) else Modifier)
+                .onFocusChanged { if (it.isFocused) focusedKey = "now-playing" },
+        )
         Row(
             Modifier.fillMaxWidth().padding(vertical = 16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -461,10 +709,18 @@ private fun BrowseMy(
                 Text("${session.user.username} · ${session.server.name}", color = FnColors.Muted, fontSize = 19.sp)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = onSettings) { Text("设置") }
+                Button(
+                    onClick = {
+                        focusedKey = "settings"
+                        onSettings()
+                    },
+                    modifier = Modifier
+                        .then(if (focusedKey == "settings") Modifier.focusRequester(contentFocus) else Modifier)
+                        .onFocusChanged { if (it.isFocused) focusedKey = "settings" },
+                ) { Text("设置") }
                 Button(onClick = {
-                    container.playbackController.clearSession()
                     scope.launch {
+                        runCatching { container.playbackController.clearSessionDurably() }
                         container.musicRepository.clearArtwork()
                         container.musicRepository.clearLocalNamespace(includeEssential = true)
                         container.sessionRepository.logout()
@@ -472,39 +728,49 @@ private fun BrowseMy(
                 }) { Text("切换账号") }
             }
         }
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(18.dp)) {
             item {
                 MediaBand(
                     "歌手",
                     artists.take(8).map {
-                        BandEntry(it.name, "${it.trackCount ?: 0} 首歌曲", it.coverId, BandKind.Artist) { onArtist(it) }
+                        BandEntry(it.name, "${it.trackCount ?: 0} 首歌曲", it.coverId, BandKind.Artist, "artist:${it.guid.value}") { onArtist(it) }
                     },
-                    BandEntry("全部歌手", "浏览完整列表", null, BandKind.Artist, onArtists),
+                    BandEntry("全部歌手", "浏览完整列表", null, BandKind.Artist, "all-artists", onArtists),
+                    focusedKey,
+                    contentFocus,
+                    onFocused = { focusedKey = it },
                 )
             }
             item {
                 MediaBand(
                     "专辑",
                     albums.take(8).map {
-                        BandEntry(it.name, it.artistName.orEmpty(), it.coverId, BandKind.Album) { onAlbum(it) }
+                        BandEntry(it.name, it.artistName.orEmpty(), it.coverId, BandKind.Album, "album:${it.guid.value}") { onAlbum(it) }
                     },
-                    BandEntry("全部专辑", "浏览完整列表", null, BandKind.Album, onAlbums),
+                    BandEntry("全部专辑", "浏览完整列表", null, BandKind.Album, "all-albums", onAlbums),
+                    focusedKey,
+                    contentFocus,
+                    onFocused = { focusedKey = it },
                 )
             }
             item {
-                val libraryEntries = listOf(BandEntry("全部歌曲", "完整曲库", null, BandKind.Library, onAllTracks)) + libraries.map {
+                val libraryEntries = listOf(BandEntry("全部歌曲", "完整曲库", null, BandKind.Library, "all-tracks", onAllTracks)) + libraries.map {
                     BandEntry(
                         it.name,
                         if (it.accessStatus == 0) "可访问" else "暂不可用",
                         null,
                         BandKind.Library,
+                        "library:${it.name}",
                         if (it.accessStatus == 0) onAllTracks else null,
                     )
                 }
                 MediaBand(
                     "音乐库",
                     libraryEntries,
-                    BandEntry("全部音乐库", "浏览完整列表", null, BandKind.Library, onAllTracks),
+                    BandEntry("全部音乐库", "浏览完整列表", null, BandKind.Library, "all-libraries", onAllTracks),
+                    focusedKey,
+                    contentFocus,
+                    onFocused = { focusedKey = it },
                 )
             }
         }
@@ -518,29 +784,64 @@ private data class BandEntry(
     val subtitle: String,
     val coverId: String?,
     val kind: BandKind,
+    val focusKey: String,
     val action: (() -> Unit)?,
 )
 
 @Composable
-private fun MediaBand(title: String, entries: List<BandEntry>, terminalEntry: BandEntry) {
+private fun MediaBand(
+    title: String,
+    entries: List<BandEntry>,
+    terminalEntry: BandEntry,
+    focusedKey: String?,
+    focusRequester: FocusRequester,
+    onFocused: (String) -> Unit,
+) {
     Column {
         Text(title, fontSize = 25.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
         LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             items(entries) { entry ->
-                BandLockup(entry)
+                BandLockup(
+                    entry,
+                    Modifier.then(if (focusedKey == entry.focusKey) Modifier.focusRequester(focusRequester) else Modifier)
+                        .onFocusChanged { if (it.isFocused) onFocused(entry.focusKey) },
+                )
             }
-            item { BandLockup(terminalEntry) }
+            item {
+                BandLockup(
+                    terminalEntry,
+                    Modifier.then(if (focusedKey == terminalEntry.focusKey) Modifier.focusRequester(focusRequester) else Modifier)
+                        .onFocusChanged { if (it.isFocused) onFocused(terminalEntry.focusKey) },
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun BandLockup(entry: BandEntry) {
+private fun BandLockup(entry: BandEntry, modifier: Modifier = Modifier) {
     when (entry.kind) {
-        BandKind.Artist -> ArtistLockup(entry.title, entry.subtitle, entry.coverId, entry.action != null) { entry.action?.invoke() }
-        BandKind.Album -> AlbumLockup(entry.title, entry.subtitle, entry.coverId, entry.action != null) { entry.action?.invoke() }
-        BandKind.Library -> LibraryLockup(entry.title, entry.subtitle, entry.action != null) { entry.action?.invoke() }
+        BandKind.Artist -> ArtistLockup(
+            entry.title,
+            entry.subtitle,
+            entry.coverId,
+            modifier = modifier,
+            enabled = entry.action != null,
+        ) { entry.action?.invoke() }
+        BandKind.Album -> AlbumLockup(
+            entry.title,
+            entry.subtitle,
+            entry.coverId,
+            modifier = modifier,
+            enabled = entry.action != null,
+        ) { entry.action?.invoke() }
+        BandKind.Library -> LibraryLockup(
+            entry.title,
+            entry.subtitle,
+            modifier = modifier,
+            enabled = entry.action != null,
+        ) { entry.action?.invoke() }
     }
 }
 
@@ -548,93 +849,204 @@ private fun BandLockup(entry: BandEntry) {
 private fun AllPlaylists(container: AppContainer, onOpen: (Playlist) -> Unit) {
     var playlists by remember { mutableStateOf<List<Playlist>>(emptyList()) }
     LaunchedEffect(Unit) { runCatching { container.musicRepository.playlists() }.onSuccess { playlists = it } }
-    GridPage("全部歌单", playlists, { it.guid.value }) { playlist ->
-        PlaylistTile(playlist.name, "歌单", playlist.coverId, FnColors.Coral) { onOpen(playlist) }
+    GridPage("全部歌单", playlists, { it.guid.value }) { playlist, modifier ->
+        PlaylistTile(playlist.name, "歌单", playlist.coverId, FnColors.Coral, modifier = modifier) { onOpen(playlist) }
     }
 }
 
 @Composable
 private fun ArtistGrid(container: AppContainer, onOpen: (Artist) -> Unit) {
-    PagedGrid("全部歌手", loader = container.musicRepository::artists, key = { it.guid.value }) { artist ->
-        ArtistLockup(artist.name, "${artist.trackCount ?: 0} 首歌曲", artist.coverId) { onOpen(artist) }
+    PagedGrid("artists", "全部歌手", loader = container.musicRepository::artists, key = { it.guid.value }) { artist, modifier ->
+        ArtistLockup(artist.name, "${artist.trackCount ?: 0} 首歌曲", artist.coverId, modifier = modifier) { onOpen(artist) }
     }
 }
 
 @Composable
 private fun AlbumGrid(container: AppContainer, onOpen: (Album) -> Unit) {
-    PagedGrid("全部专辑", loader = container.musicRepository::albums, key = { it.guid.value }) { album ->
-        AlbumLockup(album.name, album.artistName.orEmpty(), album.coverId) { onOpen(album) }
+    PagedGrid("albums", "全部专辑", loader = container.musicRepository::albums, key = { it.guid.value }) { album, modifier ->
+        AlbumLockup(album.name, album.artistName.orEmpty(), album.coverId, modifier = modifier) { onOpen(album) }
     }
 }
 
 @Composable
 private fun <T> PagedGrid(
+    stateKey: String,
     title: String,
     loader: suspend (Int) -> Page<T>,
     key: (T) -> String,
-    item: @Composable (T) -> Unit,
+    item: @Composable (T, Modifier) -> Unit,
 ) {
-    var entries by remember { mutableStateOf<List<T>>(emptyList()) }
-    var page by remember { mutableStateOf(1) }
-    var hasNext by remember { mutableStateOf(false) }
-    var loading by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+    val retainedStore = LocalLibraryRetainedState.current
+    val retained = retainedStore.paged<T>("grid:$stateKey")
+    val snapshot = retained.snapshot
+    val entries = snapshot.entries
+    val page = snapshot.page
+    val hasNext = snapshot.hasNext
+    val loading = retained.loading
+    var focusedKey by rememberSaveable(stateKey) { mutableStateOf<String?>(null) }
+    var initialFocusRequested by remember(stateKey) { mutableStateOf(false) }
+    val contentFocus = remember(stateKey) { FocusRequester() }
+    val gridState = rememberLazyGridState()
     fun load(target: Int) {
-        if (loading) return
-        loading = true
-        scope.launch {
-            runCatching { loader(target) }.onSuccess {
-                entries = (entries + it.items).distinctBy(key)
-                page = target
-                hasNext = it.hasNext
-            }
-            loading = false
+        if (retained.loading) return
+        retained.loading = true
+        retainedStore.scope.launch {
+            runCatching { loader(target) }
+                .onSuccess { retained.snapshot = retainLoadedPage(retained.snapshot, it, key) }
+                .onFailure {
+                    retained.snapshot = retained.snapshot.copy(
+                        error = (it as? AppException)?.error ?: AppError.Unknown(),
+                        initialLoadCompleted = retained.snapshot.initialLoadCompleted || target == 1,
+                    )
+                }
+            retained.loading = false
         }
     }
-    LaunchedEffect(Unit) { load(1) }
+    LaunchedEffect(stateKey) {
+        if (shouldLoadInitialPage(retained.snapshot)) {
+            load(1)
+        }
+    }
+    LaunchedEffect(snapshot.initialLoadCompleted, entries, focusedKey) {
+        if (!snapshot.initialLoadCompleted || entries.isEmpty() || initialFocusRequested) return@LaunchedEffect
+        val keys = entries.map(key)
+        focusedKey = focusedKey?.takeIf(keys::contains) ?: keys.first()
+        yield()
+        runCatching { contentFocus.requestFocus() }
+        initialFocusRequested = true
+    }
     Column(Modifier.fillMaxSize().padding(64.dp, 44.dp)) {
         Text(title, fontSize = 40.sp, fontWeight = FontWeight.Bold)
+        snapshot.error?.let { InlineError(it) }
         Spacer(Modifier.height(20.dp))
-        LazyVerticalGrid(columns = GridCells.Fixed(4), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            items(entries, key = key) { item(it) }
+        LazyVerticalGrid(state = gridState, columns = GridCells.Fixed(4), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            items(entries, key = key) { entry ->
+                val entryKey = key(entry)
+                item(
+                    entry,
+                    Modifier.then(if (focusedKey == entryKey) Modifier.focusRequester(contentFocus) else Modifier)
+                        .onFocusChanged { if (it.isFocused) focusedKey = entryKey },
+                )
+            }
+            if (entries.isEmpty() && snapshot.error != null) {
+                item { LoadMoreBlock(1, loading) { load(1) } }
+            }
             if (hasNext) item { LoadMoreBlock(page + 1, loading) { load(page + 1) } }
         }
     }
 }
 
 @Composable
-private fun <T> GridPage(title: String, entries: List<T>, key: (T) -> String, item: @Composable (T) -> Unit) {
+private fun <T> GridPage(
+    title: String,
+    entries: List<T>,
+    key: (T) -> String,
+    item: @Composable (T, Modifier) -> Unit,
+) {
+    var focusedKey by rememberSaveable(title) { mutableStateOf<String?>(null) }
+    var initialFocusRequested by remember(title) { mutableStateOf(false) }
+    val contentFocus = remember(title) { FocusRequester() }
+    val gridState = rememberLazyGridState()
+    LaunchedEffect(entries, focusedKey) {
+        if (entries.isEmpty() || initialFocusRequested) return@LaunchedEffect
+        val keys = entries.map(key)
+        focusedKey = focusedKey?.takeIf(keys::contains) ?: keys.first()
+        yield()
+        runCatching { contentFocus.requestFocus() }
+        initialFocusRequested = true
+    }
     Column(Modifier.fillMaxSize().padding(64.dp, 44.dp)) {
         Text(title, fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(20.dp))
-        LazyVerticalGrid(columns = GridCells.Fixed(4), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            items(entries, key = key) { item(it) }
+        LazyVerticalGrid(state = gridState, columns = GridCells.Fixed(4), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            items(entries, key = key) { entry ->
+                val entryKey = key(entry)
+                item(
+                    entry,
+                    Modifier.then(if (focusedKey == entryKey) Modifier.focusRequester(contentFocus) else Modifier)
+                        .onFocusChanged { if (it.isFocused) focusedKey = entryKey },
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun ArtistDetail(container: AppContainer, artist: Artist, onAlbum: (Album) -> Unit, onPlayer: (Track) -> Unit) {
-    var albums by remember { mutableStateOf<List<Album>>(emptyList()) }
-    LaunchedEffect(artist.guid) { runCatching { container.musicRepository.artistAlbums(artist.guid.value, 1).items }.onSuccess { albums = it } }
+    val stateKey = "artist:${artist.guid.value}"
+    val retainedStore = LocalLibraryRetainedState.current
+    val albumState = retainedStore.paged<Album>("$stateKey:albums")
+    val albumSnapshot = albumState.snapshot
+    val albums = albumSnapshot.entries.take(8)
+    var focusedSectionKey by rememberSaveable(stateKey) { mutableStateOf<String?>(null) }
+    var initialAlbumFocusRequested by remember(stateKey) { mutableStateOf(false) }
+    val albumFocus = remember(stateKey) { FocusRequester() }
+    val albumRowState = rememberLazyListState()
+    fun loadAlbums() {
+        if (albumState.loading || !shouldLoadInitialPage(albumState.snapshot)) return
+        albumState.loading = true
+        retainedStore.scope.launch {
+            runCatching { container.musicRepository.artistAlbums(artist.guid.value, 1) }
+                .onSuccess {
+                    albumState.snapshot = retainLoadedPage(albumState.snapshot, it) { album -> album.guid.value }
+                }
+                .onFailure {
+                    albumState.snapshot = albumState.snapshot.copy(
+                        error = (it as? AppException)?.error ?: AppError.Unknown(),
+                        initialLoadCompleted = true,
+                    )
+                }
+            albumState.loading = false
+        }
+    }
+    LaunchedEffect(stateKey) { loadAlbums() }
+    LaunchedEffect(albumSnapshot.initialLoadCompleted, albums, focusedSectionKey) {
+        if (
+            !albumSnapshot.initialLoadCompleted || albums.isEmpty() ||
+            focusedSectionKey == "tracks" || initialAlbumFocusRequested
+        ) {
+            return@LaunchedEffect
+        }
+        val keys = albums.map { "album:${it.guid.value}" }
+        focusedSectionKey = focusedSectionKey?.takeIf(keys::contains) ?: keys.first()
+        yield()
+        runCatching { albumFocus.requestFocus() }
+        initialAlbumFocusRequested = true
+    }
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.padding(horizontal = 64.dp, vertical = 32.dp)) {
             Text(artist.name, fontSize = 40.sp, fontWeight = FontWeight.Bold)
+            albumSnapshot.error?.let { InlineError(it) }
             if (albums.isNotEmpty()) {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(albums.take(8)) { album ->
-                        AlbumLockup(album.name, album.artistName.orEmpty(), album.coverId) { onAlbum(album) }
+                LazyRow(state = albumRowState, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    items(albums, key = { it.guid.value }) { album ->
+                        val focusKey = "album:${album.guid.value}"
+                        AlbumLockup(
+                            album.name,
+                            album.artistName.orEmpty(),
+                            album.coverId,
+                            modifier = Modifier
+                                .then(if (focusedSectionKey == focusKey) Modifier.focusRequester(albumFocus) else Modifier)
+                                .onFocusChanged { if (it.isFocused) focusedSectionKey = focusKey },
+                        ) {
+                            focusedSectionKey = focusKey
+                            onAlbum(album)
+                        }
                     }
                 }
             }
         }
         Box(Modifier.weight(1f)) {
             TrackCollection(
-                container,
-                "歌曲",
+                container = container,
+                stateKey = "$stateKey:tracks",
+                title = "歌曲",
                 loader = { container.musicRepository.artistTracks(artist.guid.value, it) },
                 queueSource = { sort -> QueueSource.Artist(artist.guid.value, sort) },
                 onPlayer = onPlayer,
+                initialFocusEnabled = albumSnapshot.initialLoadCompleted &&
+                    (albums.isEmpty() || focusedSectionKey == "tracks"),
+                onFocusOwnerChanged = { focusedSectionKey = "tracks" },
             )
         }
     }
@@ -643,71 +1055,121 @@ private fun ArtistDetail(container: AppContainer, artist: Artist, onAlbum: (Albu
 @Composable
 private fun TrackCollection(
     container: AppContainer,
+    stateKey: String,
     title: String,
     subtitle: String = "",
     coverId: String? = null,
     loader: suspend (Int) -> Page<Track>,
     queueSource: (String) -> QueueSource,
     onPlayer: (Track) -> Unit,
+    initialFocusEnabled: Boolean = true,
+    onFocusOwnerChanged: () -> Unit = {},
 ) {
-    var tracks by remember(title) { mutableStateOf<List<Track>>(emptyList()) }
-    var page by remember(title) { mutableStateOf(1) }
-    var hasNext by remember(title) { mutableStateOf(false) }
-    var loading by remember(title) { mutableStateOf(false) }
-    var error by remember(title) { mutableStateOf<AppError?>(null) }
-    var expectedTotal by remember(title) { mutableStateOf<Int?>(null) }
-    var expectedSort by remember(title) { mutableStateOf<String?>(null) }
-    var focusedGuid by rememberSaveable(title) { mutableStateOf<String?>(null) }
-    val restoredFocus = remember(title) { FocusRequester() }
-    val scope = rememberCoroutineScope()
+    val retainedStore = LocalLibraryRetainedState.current
+    val retained = retainedStore.tracks(stateKey)
+    val snapshot = retained.snapshot
+    val tracks = snapshot.tracks
+    val loadedPages = snapshot.loadedPages
+    val page = snapshot.page
+    val hasNext = snapshot.hasNext
+    val loading = retained.loading
+    val error = snapshot.error
+    val expectedTotal = snapshot.expectedTotal
+    val expectedSort = snapshot.expectedSort
+    var focusedKey by rememberSaveable(stateKey) { mutableStateOf<String?>(null) }
+    var initialFocusRequested by remember(stateKey) { mutableStateOf(false) }
+    val restoredFocus = remember(stateKey) { FocusRequester() }
+    val listState = rememberLazyListState()
+    val actionScope = rememberCoroutineScope()
+    fun setError(value: AppError?) {
+        retained.snapshot = retained.snapshot.copy(error = value)
+    }
     fun load(target: Int) {
-        if (loading) return
-        loading = true
-        scope.launch {
-            runCatching { loader(target) }.onSuccess {
-                val existing = tracks.asSequence().map { track -> track.guid.value }.toHashSet()
-                val drifted = target > 1 && (
-                    expectedTotal != it.total || expectedSort != it.sort || it.items.any { track -> track.guid.value in existing }
-                )
-                if (drifted) {
-                    error = AppError.CollectionChanged
-                    hasNext = false
-                    return@onSuccess
+        if (retained.loading) return
+        retained.loading = true
+        retainedStore.scope.launch {
+            runCatching { loader(target) }
+                .onSuccess {
+                    retained.snapshot = retainTrackCollectionPage(retained.snapshot, it, target)
                 }
-                tracks = tracks + it.items
-                page = target
-                hasNext = it.hasNext
-                expectedTotal = it.total
-                expectedSort = it.sort
-                error = null
-            }.onFailure { error = (it as? AppException)?.error ?: AppError.Unknown() }
-            loading = false
+                .onFailure {
+                    retained.snapshot = retained.snapshot.copy(
+                        error = (it as? AppException)?.error ?: AppError.Unknown(),
+                        initialLoadCompleted = retained.snapshot.initialLoadCompleted || target == 1,
+                    )
+                }
+            retained.loading = false
         }
     }
-    fun play(items: List<Track>, index: Int) {
-        val target = items.getOrNull(index) ?: return
-        val window = boundedQueueWindow(items, index)
-        val queue = container.musicRepository.prepareQueue(window.items)
-        val queueIndex = queue.indexOfFirst { it.track.guid == target.guid }.coerceAtLeast(0)
-        if (queue.isEmpty()) {
-            error = AppError.TranscodeUnavailable
+    fun play(index: Int) {
+        val target = tracks.getOrNull(index)?.takeIf(::isTrackPlayable) ?: return
+        val window = exactTrackQueueWindow(loadedPages, index) ?: run {
+            setError(AppError.CollectionChanged)
             return
         }
-        val sort = expectedSort ?: return
-        container.playbackController.playQueue(
-            tracks = queue,
-            startIndex = queueIndex,
-            source = queueSource(sort),
-            windowStart = window.startIndex,
-            firstPage = window.startIndex / 50 + 1,
-            lastPage = (window.startIndex + window.items.lastIndex) / 50 + 1,
-            knownTotal = expectedTotal,
-        )
-        onPlayer(target)
+        val queue = container.musicRepository.prepareQueue(window.items)
+        val queueIds = queue.map { it.track.guid.value }
+        val segmentIds = window.segments.flatMap(QueuePageSegment::mediaIds)
+        val queueIndex = queue.indexOfFirst { it.track.guid == target.guid }
+        if (queueIds != segmentIds || queueIndex < 0) {
+            setError(AppError.TranscodeUnavailable)
+            return
+        }
+        if (queue.isEmpty()) {
+            setError(AppError.TranscodeUnavailable)
+            return
+        }
+        val sort = expectedSort ?: run {
+            setError(AppError.CollectionChanged)
+            return
+        }
+        actionScope.launch {
+            val transition = runCatching {
+                container.playbackController.playQueue(
+                    tracks = queue,
+                    startIndex = queueIndex,
+                    source = queueSource(sort),
+                    windowStart = window.segments.first().sourceStartIndex,
+                    firstPage = window.segments.first().page,
+                    lastPage = window.segments.last().page,
+                    knownTotal = expectedTotal,
+                    segments = window.segments,
+                )
+            }.getOrElse {
+                setError(AppError.Unknown(it.message))
+                return@launch
+            }
+            if (transition == null) {
+                setError(AppError.TranscodeUnavailable)
+                return@launch
+            }
+            runCatching { transition.awaitCommitted() }
+                .onSuccess {
+                    setError(null)
+                    onPlayer(target)
+                }
+                .onFailure { setError(AppError.Unknown(it.message)) }
+        }
     }
-    LaunchedEffect(title) { load(1) }
-    LaunchedEffect(tracks.size) {
-        if (focusedGuid != null) runCatching { restoredFocus.requestFocus() }
+    LaunchedEffect(stateKey) {
+        if (!retained.snapshot.initialLoadCompleted) {
+            load(1)
+        }
+    }
+    val playableTracks = tracks.filter(::isTrackPlayable)
+    val playAllEnabled = playableTracks.isNotEmpty()
+    LaunchedEffect(loading, tracks, focusedKey, initialFocusEnabled) {
+        if (!initialFocusEnabled || loading || tracks.isEmpty() || initialFocusRequested) return@LaunchedEffect
+        val availableKeys = buildList {
+            if (playAllEnabled) add("play-all")
+            addAll(playableTracks.map { it.guid.value })
+        }
+        focusedKey = focusedKey?.takeIf(availableKeys::contains) ?: availableKeys.firstOrNull()
+        yield()
+        if (focusedKey != null) {
+            runCatching { restoredFocus.requestFocus() }
+            initialFocusRequested = true
+        }
     }
     Row(Modifier.fillMaxSize().padding(horizontal = 56.dp, vertical = 38.dp), horizontalArrangement = Arrangement.spacedBy(34.dp)) {
         Column(Modifier.width(330.dp)) {
@@ -715,26 +1177,38 @@ private fun TrackCollection(
             Text(title, fontSize = 36.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (subtitle.isNotBlank()) Text(subtitle, color = FnColors.Muted, fontSize = 21.sp)
             Spacer(Modifier.height(18.dp))
-            Button(enabled = tracks.any { !it.isCue && (it.accessStatus == null || it.accessStatus == 0) }, onClick = { play(tracks, 0) }) {
+            Button(
+                enabled = playAllEnabled,
+                onClick = { play(tracks.indexOfFirst(::isTrackPlayable)) },
+                modifier = Modifier
+                    .then(if (focusedKey == "play-all") Modifier.focusRequester(restoredFocus) else Modifier)
+                    .onFocusChanged {
+                        if (it.isFocused) {
+                            focusedKey = "play-all"
+                            onFocusOwnerChanged()
+                        }
+                    },
+            ) {
                 Text("播放全部")
             }
             error?.let { InlineError(it) }
         }
-        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(tracks, key = { it.guid.value }) { track ->
                 val index = tracks.indexOf(track)
-                val restoreModifier = if (focusedGuid == track.guid.value) Modifier.focusRequester(restoredFocus) else Modifier
+                val restoreModifier = if (focusedKey == track.guid.value) Modifier.focusRequester(restoredFocus) else Modifier
                 TrackRow(
                     track,
-                    enabled = !track.isCue && (track.accessStatus == null || track.accessStatus == 0),
+                    enabled = isTrackPlayable(track),
                     modifier = restoreModifier.onFocusChanged { state ->
                         if (state.isFocused) {
-                            focusedGuid = track.guid.value
+                            focusedKey = track.guid.value
+                            onFocusOwnerChanged()
                             if (hasNext && index >= tracks.size - 15) load(page + 1)
                         }
                     },
                 ) {
-                    play(tracks, tracks.indexOf(track))
+                    play(tracks.indexOf(track))
                 }
             }
             if (hasNext) item {
@@ -745,6 +1219,77 @@ private fun TrackCollection(
         }
     }
 }
+
+internal data class ExactTrackQueueWindow(
+    val items: List<Track>,
+    val segments: List<QueuePageSegment>,
+)
+
+internal fun exactTrackQueueWindow(
+    pages: List<Page<Track>>,
+    selectedIndex: Int,
+    maxSize: Int = MAX_ACTIVE_QUEUE_ITEMS,
+): ExactTrackQueueWindow? {
+    val first = pages.firstOrNull() ?: return null
+    if (first.pageSize <= 0 || maxSize < first.pageSize) return null
+    val rawWindowSize = maxSize / first.pageSize * first.pageSize
+    if (pages.withIndex().any { (index, page) ->
+            page.page != first.page + index ||
+                page.pageSize != first.pageSize ||
+                page.total != first.total ||
+                page.sort != first.sort ||
+                page.items.size > page.pageSize
+        }
+    ) return null
+
+    val allItems = pages.flatMap(Page<Track>::items)
+    val selected = allItems.getOrNull(selectedIndex)?.takeIf(::isTrackPlayable) ?: return null
+    val bounded = boundedQueueWindow(
+        items = allItems,
+        selectedIndex = selectedIndex,
+        maxSize = rawWindowSize,
+        pageSize = first.pageSize,
+    )
+    val windowStart = bounded.startIndex
+    val windowEnd = windowStart + bounded.items.size
+    var loadedOffset = 0
+    val retainedPages = buildList {
+        pages.forEach { page ->
+            val pageStart = loadedOffset
+            val pageEnd = pageStart + page.items.size
+            loadedOffset = pageEnd
+            if (pageEnd <= windowStart || pageStart >= windowEnd) return@forEach
+            if (pageStart < windowStart || pageEnd > windowEnd) return null
+            add(page)
+        }
+    }
+    if (retainedPages.flatMap(Page<Track>::items) != bounded.items) return null
+    val playableIds = bounded.items.filter(::isTrackPlayable).map { it.guid.value }
+    if (playableIds.distinct().size != playableIds.size) return null
+
+    val segments = retainedPages.map { page ->
+        val sourceStartIndex = (page.page - 1) * page.pageSize
+        QueuePageSegment(
+            page = page.page,
+            rawRowCount = page.items.size,
+            playableItems = page.items.mapIndexedNotNull { index, track ->
+                track.takeIf(::isTrackPlayable)?.let {
+                    QueuePageItem(it.guid.value, sourceStartIndex + index)
+                }
+            },
+            sort = page.sort,
+            knownTotal = page.total,
+            pageSize = page.pageSize,
+            sourceStartIndex = sourceStartIndex,
+        )
+    }
+    if (segments.flatMap(QueuePageSegment::mediaIds) != playableIds) return null
+    if (selected.guid.value !in playableIds) return null
+    return ExactTrackQueueWindow(items = bounded.items, segments = segments)
+}
+
+private fun isTrackPlayable(track: Track): Boolean =
+    !track.isCue && (track.accessStatus == null || track.accessStatus == 0)
 
 @Composable
 private fun TrackRow(track: Track, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
@@ -766,6 +1311,7 @@ private fun PlaylistTile(
     subtitle: String,
     coverId: String?,
     accent: Color,
+    modifier: Modifier = Modifier,
     enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
@@ -773,7 +1319,7 @@ private fun PlaylistTile(
     Button(
         enabled = enabled,
         onClick = onClick,
-        modifier = Modifier.size(width = 193.dp, height = 142.dp),
+        modifier = modifier.size(width = 193.dp, height = 142.dp),
         shape = ButtonDefaults.shape(
             shape = cardShape,
             focusedShape = cardShape,
@@ -837,6 +1383,7 @@ private fun ArtistLockup(
     title: String,
     subtitle: String,
     coverId: String?,
+    modifier: Modifier = Modifier,
     enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
@@ -844,7 +1391,7 @@ private fun ArtistLockup(
     Button(
         enabled = enabled,
         onClick = onClick,
-        modifier = Modifier.size(width = 170.dp, height = 95.dp),
+        modifier = modifier.size(width = 170.dp, height = 95.dp),
         shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
         scale = ButtonDefaults.scale(focusedScale = 1.025f),
         colors = lockupButtonColors(),
@@ -885,6 +1432,7 @@ private fun AlbumLockup(
     title: String,
     subtitle: String,
     coverId: String?,
+    modifier: Modifier = Modifier,
     enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
@@ -893,7 +1441,7 @@ private fun AlbumLockup(
     Button(
         enabled = enabled,
         onClick = onClick,
-        modifier = Modifier.size(width = 165.dp, height = 95.dp),
+        modifier = modifier.size(width = 165.dp, height = 95.dp),
         shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
         scale = ButtonDefaults.scale(focusedScale = 1.025f),
         colors = lockupButtonColors(),
@@ -922,13 +1470,19 @@ private fun AlbumLockup(
 }
 
 @Composable
-private fun LibraryLockup(title: String, subtitle: String, enabled: Boolean = true, onClick: () -> Unit) {
+private fun LibraryLockup(
+    title: String,
+    subtitle: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
     val shape = RoundedCornerShape(8.dp)
     val artworkShape = RoundedCornerShape(6.dp)
     Button(
         enabled = enabled,
         onClick = onClick,
-        modifier = Modifier.size(width = 170.dp, height = 95.dp),
+        modifier = modifier.size(width = 170.dp, height = 95.dp),
         shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
         scale = ButtonDefaults.scale(focusedScale = 1.025f),
         colors = lockupButtonColors(),
@@ -1015,83 +1569,207 @@ private fun rememberRemoteArtworkBitmap(container: AppContainer, coverId: String
     return if (coverId == null) null else bitmap
 }
 
+internal data class PlayerPresentationProjection(
+    val playerStyle: PlayerStyle?,
+    val metadata: NowPlayingResourceState<Track>,
+    val artwork: NowPlayingResourceState<ByteArray>,
+    val lyrics: NowPlayingResourceState<CurrentLyrics>,
+) {
+    val retryableFailure: AppError?
+        get() = sequenceOf(metadata, artwork, lyrics)
+            .filterIsInstance<NowPlayingResourceState.RetryableFailure>()
+            .firstOrNull()
+            ?.error
+
+    val canRetry: Boolean get() = retryableFailure != null
+}
+
+internal fun projectPlayerPresentation(
+    expectedIdentity: NowPlayingIdentity?,
+    presentation: NowPlayingPresentation?,
+): PlayerPresentationProjection {
+    val current = presentation?.takeIf { expectedIdentity != null && it.identity == expectedIdentity }
+    return if (current == null) {
+        PlayerPresentationProjection(
+            playerStyle = null,
+            metadata = NowPlayingResourceState.Loading,
+            artwork = NowPlayingResourceState.Loading,
+            lyrics = NowPlayingResourceState.Loading,
+        )
+    } else {
+        PlayerPresentationProjection(
+            playerStyle = current.playerStyle,
+            metadata = current.metadata,
+            artwork = current.artwork,
+            lyrics = current.lyrics,
+        )
+    }
+}
+
+internal data class PlayerArtworkKey(
+    val namespace: String,
+    val mediaId: String,
+    val presentationRevision: Long,
+    val playerStyle: PlayerStyle,
+)
+
+internal fun playerArtworkKey(identity: NowPlayingIdentity, playerStyle: PlayerStyle): PlayerArtworkKey =
+    PlayerArtworkKey(
+        namespace = identity.namespace,
+        mediaId = identity.mediaId,
+        presentationRevision = identity.presentationRevision,
+        playerStyle = playerStyle,
+    )
+
+private data class PlayerArtworkDecodeRequest(
+    val key: PlayerArtworkKey,
+    val bytes: ByteArray,
+    val targetLongEdge: Int,
+)
+
+private data class DecodedPlayerArtwork(
+    val key: PlayerArtworkKey,
+    val sourceBytes: ByteArray,
+    val bitmap: Bitmap?,
+)
+
+@Composable
+private fun rememberCurrentArtworkBitmap(
+    identity: NowPlayingIdentity?,
+    playerStyle: PlayerStyle,
+    presentation: PlayerPresentationProjection,
+): Bitmap? {
+    val readyArtwork = when (val artwork = presentation.artwork) {
+        is NowPlayingResourceState.Ready -> artwork.value
+        else -> null
+    }
+    val request = remember(identity, playerStyle, presentation.playerStyle, readyArtwork) {
+        if (identity == null || presentation.playerStyle != playerStyle || readyArtwork == null) {
+            null
+        } else {
+            val variant = if (playerStyle == PlayerStyle.Poster) CoverVariant.Poster else CoverVariant.Player
+            PlayerArtworkDecodeRequest(
+                key = playerArtworkKey(identity, playerStyle),
+                bytes = readyArtwork,
+                targetLongEdge = variant.width ?: 1_200,
+            )
+        }
+    }
+    val decoded by produceState<DecodedPlayerArtwork?>(null, request?.key, request?.bytes) {
+        value = null
+        val currentRequest = request ?: return@produceState
+        val bitmap = withContext(Dispatchers.Default) {
+            decodeArtwork(currentRequest.bytes, currentRequest.targetLongEdge)
+        }
+        value = DecodedPlayerArtwork(currentRequest.key, currentRequest.bytes, bitmap)
+    }
+    return decoded?.takeIf { result ->
+        request != null && result.key == request.key && result.sourceBytes === request.bytes
+    }?.bitmap
+}
+
 @Composable
 private fun ImmersivePlayer(
     container: AppContainer,
     playback: PlaybackUiState,
-    track: Track?,
-    roaming: Boolean,
-    roamWindow: RoamWindow?,
-    onRoamChanged: (RoamWindow) -> Unit,
     onExitRoam: () -> Unit,
 ) {
     val preferences by container.appPreferences.state.collectAsStateWithLifecycle()
-    var timeline by remember(playback.mediaId) { mutableStateOf<LyricTimeline?>(null) }
-    var staticLyric by remember(playback.mediaId) { mutableStateOf<String?>(null) }
-    var lyricsLoading by remember(playback.mediaId) { mutableStateOf(playback.mediaId.isNotBlank()) }
-    var lyricsFailed by remember(playback.mediaId) { mutableStateOf(false) }
-    var roamBusy by remember { mutableStateOf(false) }
+    val nowPlayingPresentation by container.nowPlayingPresenter.state.collectAsStateWithLifecycle()
+    val presentation = projectPlayerPresentation(playback.nowPlayingIdentity, nowPlayingPresentation)
+    val metadata = when (val state = presentation.metadata) {
+        is NowPlayingResourceState.Ready -> state.value
+        else -> null
+    }
+    val currentLyrics = when (val state = presentation.lyrics) {
+        is NowPlayingResourceState.Ready -> state.value
+        else -> null
+    }
+    val timeline = currentLyrics?.timeline
+    val staticLyric = currentLyrics?.document?.takeUnless { it.isLrc }?.content
+    val lyricsLoading = presentation.lyrics is NowPlayingResourceState.Loading
+    val lyricsFailed = presentation.lyrics is NowPlayingResourceState.RetryableFailure
     var controlsVisible by remember { mutableStateOf(true) }
+    var queueVisible by remember { mutableStateOf(false) }
+    var restoreQueueFocus by remember { mutableStateOf(false) }
     var interactionEpoch by remember { mutableStateOf(0) }
     val playerFocus = remember { FocusRequester() }
     val progressFocus = remember { FocusRequester() }
     val previousFocus = remember { FocusRequester() }
     val playFocus = remember { FocusRequester() }
     val nextFocus = remember { FocusRequester() }
+    val modeFocus = remember { FocusRequester() }
+    val queueFocus = remember { FocusRequester() }
     val exitRoamFocus = remember { FocusRequester() }
-    val scope = rememberCoroutineScope()
+    val statusRetryFocus = remember { FocusRequester() }
+    val context = LocalContext.current
+    val roaming = playback.queueKind == QueueKind.Roam
     fun revealControls() {
         controlsVisible = true
         interactionEpoch++
     }
-    LaunchedEffect(playback.mediaId) {
-        if (playback.mediaId.isNotBlank()) {
-            lyricsLoading = true
-            lyricsFailed = false
-            runCatching { container.musicRepository.lyrics(playback.mediaId) }
-                .onSuccess { (document, parsed) ->
-                    timeline = parsed
-                    staticLyric = document?.takeUnless { it.isLrc }?.content
-                }
-                .onFailure { lyricsFailed = true }
-            lyricsLoading = false
-        }
-    }
     val active = timeline?.activeIndex(playback.positionMs) ?: -1
     val lyricLines = timeline?.lines.orEmpty()
-    val playbackCoverId = remember(playback.artworkUrl) {
-        playback.artworkUrl?.let { runCatching { it.toUri().getQueryParameter("coverId") }.getOrNull() }
-    }
-    val playerCoverId = playbackCoverId ?: track?.takeIf { it.guid.value == playback.mediaId }?.coverId
-    val title = playback.title.ifBlank { track?.title ?: "尚未选择歌曲" }
-    val artist = playback.artist.ifBlank { track?.artistName.orEmpty() }
-    val audioFormat = playback.audioFormat.ifBlank { track?.audioFormat.orEmpty() }
-    val poster = preferences.playerStyle == com.fnmusic.tv.core.model.PlayerStyle.Poster
-    val artworkBitmap = rememberRemoteArtworkBitmap(
-        container,
-        playerCoverId,
-        if (poster) CoverVariant.Poster else CoverVariant.Player,
+    val title = metadata?.title?.takeUnless(String::isBlank)
+        ?: playback.title.takeUnless(String::isBlank)
+        ?: "尚未选择歌曲"
+    val artist = metadata?.artistName?.takeUnless(String::isBlank)
+        ?: playback.artist
+    val audioFormat = metadata?.audioFormat?.takeUnless(String::isBlank)
+        ?: playback.audioFormat
+    val poster = preferences.playerStyle == PlayerStyle.Poster
+    val artworkBitmap = rememberCurrentArtworkBitmap(
+        identity = playback.nowPlayingIdentity,
+        playerStyle = preferences.playerStyle,
+        presentation = presentation,
     )
     val ambienceColor = remember(artworkBitmap, title, artist) {
         val samples = artworkBitmap?.let(::sampleArtworkPixels) ?: IntArray(0)
         dominantArtworkColor(samples, "$title|$artist")
     }
     val posterPanelColor = remember(ambienceColor) { posterSurfaceColor(ambienceColor) }
-    val previousEnabled = if (roaming) roamWindow?.previous != null else playback.currentIndex > 0
-    val nextEnabled = if (roaming) roamWindow?.next != null else playback.currentIndex + 1 < playback.itemCount
-    LaunchedEffect(interactionEpoch, controlsVisible) {
-        if (controlsVisible) {
+    val previousEnabled = playback.canPrevious && !playback.roamBusy
+    val nextEnabled = playback.canNext && !playback.roamBusy
+    val statusRetryAvailable = playerStatus(
+        roamError = playback.roamError,
+        canRetryRoam = playback.canRetryRoam,
+        queueError = playback.queueError,
+        canRetryQueue = playback.canRetryQueue,
+        presentationError = presentation.retryableFailure,
+        canRetryPresentation = presentation.canRetry,
+        playbackError = playback.error,
+    )?.retry != null
+    LaunchedEffect(interactionEpoch, controlsVisible, queueVisible) {
+        if (controlsVisible && !queueVisible) {
             delay(5_000)
             controlsVisible = false
         }
     }
-    LaunchedEffect(controlsVisible) {
-        if (controlsVisible) playFocus.requestFocus() else playerFocus.requestFocus()
+    LaunchedEffect(controlsVisible, queueVisible) {
+        when {
+            queueVisible -> Unit
+            restoreQueueFocus -> Unit
+            controlsVisible -> playFocus.requestFocus()
+            else -> playerFocus.requestFocus()
+        }
+    }
+    LaunchedEffect(queueVisible, restoreQueueFocus) {
+        if (!queueVisible && restoreQueueFocus) {
+            yield()
+            queueFocus.requestFocus()
+            restoreQueueFocus = false
+        }
     }
     LaunchedEffect(roaming) {
         if (!roaming && controlsVisible) playFocus.requestFocus()
     }
-    BackHandler(controlsVisible) {
+    BackHandler(queueVisible) {
+        queueVisible = false
+        controlsVisible = true
+        interactionEpoch++
+        restoreQueueFocus = true
+    }
+    BackHandler(controlsVisible && !queueVisible) {
         controlsVisible = false
         playerFocus.requestFocus()
     }
@@ -1139,8 +1817,17 @@ private fun ImmersivePlayer(
             queueError = playback.queueError,
             canRetryQueue = playback.canRetryQueue,
             onRetryQueue = container.playbackController::retryQueuePage,
+            roamError = playback.roamError,
+            canRetryRoam = playback.canRetryRoam,
+            onRetryRoam = container.playbackController::retryRoam,
+            presentationError = presentation.retryableFailure,
+            canRetryPresentation = presentation.canRetry,
+            onRetryPresentation = { container.nowPlayingPresenter.retryCurrentPresentation() },
+            statusRetryFocus = statusRetryFocus,
+            statusRetryReturnFocus = progressFocus,
+            onStatusInteraction = ::revealControls,
         )
-        if (controlsVisible) {
+        if (controlsVisible && !queueVisible) {
             PlayerControlOverlay(
                 positionMs = playback.positionMs,
                 durationMs = playback.durationMs,
@@ -1152,32 +1839,18 @@ private fun ImmersivePlayer(
                 previousFocus = previousFocus,
                 playFocus = playFocus,
                 nextFocus = nextFocus,
+                modeFocus = modeFocus,
+                queueFocus = queueFocus,
                 exitRoamFocus = exitRoamFocus,
+                statusRetryFocus = statusRetryFocus,
+                statusRetryAvailable = statusRetryAvailable,
+                playMode = playback.playMode,
+                queueCount = playback.loadedPlayableCount,
                 onInteraction = ::revealControls,
                 onSeek = container.playbackController::seekBy,
                 onPrevious = {
                     revealControls()
-                    if (!roaming) {
-                        container.playbackController.previous()
-                    } else {
-                        roamWindow?.current?.roamId?.let { id ->
-                            if (!roamBusy) {
-                                roamBusy = true
-                                scope.launch {
-                                    try {
-                                        runCatching { container.musicRepository.previousRoam(id) }.onSuccess { window ->
-                                            runCatching { container.musicRepository.prepare(window.current.track) }.onSuccess {
-                                                container.playbackController.replaceRoamTrack(it)
-                                                onRoamChanged(window)
-                                            }
-                                        }
-                                    } finally {
-                                        roamBusy = false
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    container.playbackController.previous()
                 },
                 onPlayPause = {
                     revealControls()
@@ -1185,30 +1858,29 @@ private fun ImmersivePlayer(
                 },
                 onNext = {
                     revealControls()
-                    if (!roaming) {
-                        container.playbackController.next()
+                    container.playbackController.next()
+                },
+                onCyclePlayMode = { container.playbackController.cyclePlayMode() },
+                onOpenQueue = {
+                    if (playback.queueItems.isEmpty()) {
+                        Toast.makeText(context, "当前播放列表为空", Toast.LENGTH_SHORT).show()
                     } else {
-                        roamWindow?.current?.roamId?.let { id ->
-                            if (!roamBusy) {
-                                roamBusy = true
-                                scope.launch {
-                                    try {
-                                        runCatching { container.musicRepository.nextRoam(id) }.onSuccess { window ->
-                                            runCatching { container.musicRepository.prepare(window.current.track) }.onSuccess {
-                                                container.playbackController.replaceRoamTrack(it)
-                                                onRoamChanged(window)
-                                            }
-                                        }
-                                    } finally {
-                                        roamBusy = false
-                                    }
-                                }
-                            }
-                        }
+                        queueVisible = true
                     }
                 },
                 onExitRoam = onExitRoam,
                 modifier = Modifier.align(Alignment.BottomCenter),
+            )
+        }
+        if (queueVisible) {
+            PlaybackQueueOverlay(
+                items = playback.queueItems,
+                loadedCount = playback.loadedPlayableCount,
+                queueError = playback.queueError,
+                canRetry = playback.canRetryQueue,
+                onRetry = container.playbackController::retryQueuePage,
+                onSelect = container.playbackController::selectQueueItem,
+                onInteraction = ::revealControls,
             )
         }
     }
@@ -1294,6 +1966,15 @@ private fun PlayerMainContent(
     queueError: String?,
     canRetryQueue: Boolean,
     onRetryQueue: () -> Unit,
+    roamError: AppError?,
+    canRetryRoam: Boolean,
+    onRetryRoam: () -> Unit,
+    presentationError: AppError?,
+    canRetryPresentation: Boolean,
+    onRetryPresentation: () -> Unit,
+    statusRetryFocus: FocusRequester,
+    statusRetryReturnFocus: FocusRequester,
+    onStatusInteraction: () -> Unit,
 ) {
     val placeholder = title.take(1).ifBlank { "音" }
     if (poster) {
@@ -1338,6 +2019,15 @@ private fun PlayerMainContent(
                 queueError = queueError,
                 canRetryQueue = canRetryQueue,
                 onRetryQueue = onRetryQueue,
+                roamError = roamError,
+                canRetryRoam = canRetryRoam,
+                onRetryRoam = onRetryRoam,
+                presentationError = presentationError,
+                canRetryPresentation = canRetryPresentation,
+                onRetryPresentation = onRetryPresentation,
+                statusRetryFocus = statusRetryFocus,
+                statusRetryReturnFocus = statusRetryReturnFocus,
+                onStatusInteraction = onStatusInteraction,
                 poster = true,
                 modifier = Modifier.fillMaxWidth(0.46f).fillMaxHeight().align(Alignment.CenterEnd)
                     .padding(start = 10.dp, end = 40.dp, top = 64.dp, bottom = 132.dp),
@@ -1365,12 +2055,57 @@ private fun PlayerMainContent(
                 queueError = queueError,
                 canRetryQueue = canRetryQueue,
                 onRetryQueue = onRetryQueue,
+                roamError = roamError,
+                canRetryRoam = canRetryRoam,
+                onRetryRoam = onRetryRoam,
+                presentationError = presentationError,
+                canRetryPresentation = canRetryPresentation,
+                onRetryPresentation = onRetryPresentation,
+                statusRetryFocus = statusRetryFocus,
+                statusRetryReturnFocus = statusRetryReturnFocus,
+                onStatusInteraction = onStatusInteraction,
                 poster = false,
                 modifier = Modifier.weight(0.51f).fillMaxHeight()
                     .padding(start = 26.dp, end = 44.dp, top = 30.dp, bottom = 132.dp),
             )
         }
     }
+}
+
+internal enum class PlayerStatusRetry {
+    Roam,
+    Queue,
+    Presentation,
+}
+
+internal data class PlayerStatus(
+    val message: String,
+    val retry: PlayerStatusRetry?,
+)
+
+internal fun playerStatus(
+    roamError: AppError?,
+    canRetryRoam: Boolean,
+    queueError: String?,
+    canRetryQueue: Boolean,
+    presentationError: AppError?,
+    canRetryPresentation: Boolean,
+    playbackError: String?,
+): PlayerStatus? = when {
+    roamError != null -> PlayerStatus(
+        message = appErrorMessage(roamError),
+        retry = PlayerStatusRetry.Roam.takeIf { canRetryRoam },
+    )
+    queueError != null -> PlayerStatus(
+        message = queueError,
+        retry = PlayerStatusRetry.Queue.takeIf { canRetryQueue },
+    )
+    presentationError != null -> PlayerStatus(
+        message = "当前歌曲资源：${appErrorMessage(presentationError)}",
+        retry = PlayerStatusRetry.Presentation.takeIf { canRetryPresentation },
+    )
+    playbackError != null -> PlayerStatus(message = "播放失败：$playbackError", retry = null)
+    else -> null
 }
 
 @Composable
@@ -1387,6 +2122,15 @@ private fun PlayerDetails(
     queueError: String?,
     canRetryQueue: Boolean,
     onRetryQueue: () -> Unit,
+    roamError: AppError?,
+    canRetryRoam: Boolean,
+    onRetryRoam: () -> Unit,
+    presentationError: AppError?,
+    canRetryPresentation: Boolean,
+    onRetryPresentation: () -> Unit,
+    statusRetryFocus: FocusRequester,
+    statusRetryReturnFocus: FocusRequester,
+    onStatusInteraction: () -> Unit,
     poster: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -1420,16 +2164,60 @@ private fun PlayerDetails(
         } else {
             PlayerLyrics(lyricLines, activeLyricIndex, staticLyric, lyricsLoading, lyricsFailed)
         }
-        val statusMessage = queueError ?: playbackError?.let { "播放失败：$it" }
-        if (statusMessage != null) {
+        val status = playerStatus(
+            roamError = roamError,
+            canRetryRoam = canRetryRoam,
+            queueError = queueError,
+            canRetryQueue = canRetryQueue,
+            presentationError = presentationError,
+            canRetryPresentation = canRetryPresentation,
+            playbackError = playbackError,
+        )
+        if (status != null) {
             Row(Modifier.fillMaxWidth().height(42.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(statusMessage, color = FnColors.Coral, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                if (queueError != null && canRetryQueue) {
-                    Button(onClick = onRetryQueue, modifier = Modifier.height(40.dp)) { Text("重试", maxLines = 1) }
+                Text(status.message, color = FnColors.Coral, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                val retryAction = when (status.retry) {
+                    PlayerStatusRetry.Roam -> onRetryRoam
+                    PlayerStatusRetry.Queue -> onRetryQueue
+                    PlayerStatusRetry.Presentation -> onRetryPresentation
+                    null -> null
+                }
+                if (retryAction != null) {
+                    PlayerStatusRetryButton(
+                        focusRequester = statusRetryFocus,
+                        returnFocusRequester = statusRetryReturnFocus,
+                        onInteraction = onStatusInteraction,
+                        onRetry = retryAction,
+                    )
                 }
             }
         }
     }
+}
+
+@Composable
+internal fun PlayerStatusRetryButton(
+    focusRequester: FocusRequester,
+    returnFocusRequester: FocusRequester,
+    onInteraction: () -> Unit,
+    onRetry: () -> Unit,
+) {
+    Button(
+        onClick = {
+            onInteraction()
+            returnFocusRequester.requestFocus()
+            onRetry()
+        },
+        modifier = Modifier.height(40.dp)
+            .focusProperties {
+                left = FocusRequester.Cancel
+                right = FocusRequester.Cancel
+                down = returnFocusRequester
+            }
+            .focusRequester(focusRequester)
+            .onFocusChanged { if (it.isFocused) onInteraction() }
+            .semantics { contentDescription = "重试播放状态" },
+    ) { Text("重试", maxLines = 1) }
 }
 
 @Composable
@@ -1731,7 +2519,122 @@ private fun PlayerLyrics(
 }
 
 @Composable
-private fun PlayerControlOverlay(
+internal fun PlaybackQueueOverlay(
+    items: List<PlaybackQueueItem>,
+    loadedCount: Int,
+    queueError: String?,
+    canRetry: Boolean,
+    onRetry: () -> Unit,
+    onSelect: (Int) -> Unit,
+    onInteraction: () -> Unit,
+) {
+    val listState = rememberLazyListState()
+    var focusedRowKey by remember { mutableStateOf<String?>(null) }
+    val requesterKeys = remember(items.map(PlaybackQueueItem::mediaId)) {
+        val occurrences = mutableMapOf<String, Int>()
+        items.map { item ->
+            val occurrence = occurrences[item.mediaId] ?: 0
+            occurrences[item.mediaId] = occurrence + 1
+            "${item.mediaId}:$occurrence"
+        }
+    }
+    val targetKey = queueFocusTargetKey(
+        requesterKeys = requesterKeys,
+        currentIndex = initialQueueFocusIndex(items),
+        previouslyFocusedKey = focusedRowKey,
+    )
+    LaunchedEffect(targetKey, requesterKeys) {
+        val targetIndex = targetKey?.let(requesterKeys::indexOf) ?: -1
+        if (targetIndex >= 0) {
+            listState.scrollToItem(targetIndex)
+        }
+    }
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.34f))) {
+        Column(
+            Modifier.fillMaxHeight().fillMaxWidth(0.43f).align(Alignment.CenterEnd)
+                .background(Color(0xF2161C1A)).padding(horizontal = 24.dp, vertical = 28.dp),
+        ) {
+            Text("当前播放 ($loadedCount)", fontSize = 25.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(18.dp))
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                itemsIndexed(
+                    items = items,
+                    key = { index, _ -> requesterKeys[index] },
+                ) { index, item ->
+                    val rowKey = requesterKeys[index]
+                    val requester = remember(rowKey) { FocusRequester() }
+                    LaunchedEffect(targetKey, rowKey) {
+                        if (targetKey == rowKey) requester.requestFocus()
+                    }
+                    Button(
+                        onClick = {
+                            onInteraction()
+                            onSelect(item.queueIndex)
+                        },
+                        modifier = Modifier.fillMaxWidth().height(58.dp)
+                            .focusProperties {
+                                left = FocusRequester.Cancel
+                                right = FocusRequester.Cancel
+                            }
+                            .focusRequester(requester)
+                            .onFocusChanged {
+                                if (it.isFocused) {
+                                    focusedRowKey = rowKey
+                                    onInteraction()
+                                }
+                            }
+                            .semantics {
+                                contentDescription = "${index + 1}. ${item.title} ${item.artist}" +
+                                    if (item.isCurrent) "，正在播放" else ""
+                            },
+                        scale = ButtonDefaults.scale(focusedScale = 1.015f),
+                        colors = ButtonDefaults.colors(
+                            containerColor = if (item.isCurrent) Color(0xFF2E3835) else Color.Transparent,
+                            contentColor = FnColors.Text,
+                            focusedContainerColor = Color(0xFF3A4541),
+                            focusedContentColor = FnColors.Text,
+                        ),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 5.dp),
+                    ) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text("${index + 1}", color = FnColors.Muted, fontSize = 13.sp, modifier = Modifier.width(34.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(item.title.ifBlank { "未知歌曲" }, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(item.artist.ifBlank { "未知演唱者" }, color = FnColors.Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            if (item.isCurrent) {
+                                Text("正在播放", color = FnColors.Coral, fontSize = 11.sp, maxLines = 1)
+                            }
+                        }
+                    }
+                }
+                if (queueError != null && canRetry) {
+                    item(key = "queue-retry") {
+                        Button(
+                            onClick = {
+                                onInteraction()
+                                onRetry()
+                            },
+                            modifier = Modifier.fillMaxWidth().height(50.dp)
+                                .focusProperties {
+                                    left = FocusRequester.Cancel
+                                    right = FocusRequester.Cancel
+                                }
+                                .onFocusChanged { if (it.isFocused) onInteraction() },
+                        ) { Text("队列加载失败，重试", maxLines = 1) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun PlayerControlOverlay(
     positionMs: Long,
     durationMs: Long,
     isPlaying: Boolean,
@@ -1742,12 +2645,20 @@ private fun PlayerControlOverlay(
     previousFocus: FocusRequester,
     playFocus: FocusRequester,
     nextFocus: FocusRequester,
+    modeFocus: FocusRequester,
+    queueFocus: FocusRequester,
     exitRoamFocus: FocusRequester,
+    statusRetryFocus: FocusRequester,
+    statusRetryAvailable: Boolean,
+    playMode: PlayMode,
+    queueCount: Int,
     onInteraction: () -> Unit,
     onSeek: (Long) -> Unit,
     onPrevious: () -> Unit,
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
+    onCyclePlayMode: () -> Unit,
+    onOpenQueue: () -> Unit,
     onExitRoam: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1762,7 +2673,7 @@ private fun PlayerControlOverlay(
             Canvas(
                 Modifier.weight(1f).height(14.dp)
                     .focusProperties {
-                        up = FocusRequester.Cancel
+                        up = if (statusRetryAvailable) statusRetryFocus else FocusRequester.Cancel
                         down = playFocus
                     }
                     .focusRequester(progressFocus)
@@ -1790,6 +2701,7 @@ private fun PlayerControlOverlay(
                             }
                             Key.DirectionUp -> {
                                 onInteraction()
+                                if (statusRetryAvailable) statusRetryFocus.requestFocus()
                                 true
                             }
                             else -> false
@@ -1813,6 +2725,21 @@ private fun PlayerControlOverlay(
             Text(formatDuration(durationMs), color = FnColors.Muted, fontSize = 9.sp, modifier = Modifier.width(29.dp), maxLines = 1)
         }
         Box(Modifier.fillMaxWidth().weight(1f)) {
+            if (!roaming) {
+                PlayerSideActionButton(
+                    glyph = playModeGlyph(playMode),
+                    description = "播放模式：${playModeLabel(playMode)}",
+                    focusRequester = modeFocus,
+                    upFocus = progressFocus,
+                    rightFocus = if (previousEnabled) previousFocus else playFocus,
+                    onFocus = onInteraction,
+                    onClick = {
+                        onInteraction()
+                        onCyclePlayMode()
+                    },
+                    modifier = Modifier.align(Alignment.CenterStart),
+                )
+            }
             Row(
                 Modifier.align(Alignment.Center),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -1824,6 +2751,7 @@ private fun PlayerControlOverlay(
                     enabled = previousEnabled,
                     focusRequester = previousFocus,
                     upFocus = progressFocus,
+                    leftFocus = modeFocus.takeIf { !roaming },
                     rightFocus = playFocus,
                     onFocus = onInteraction,
                     onClick = onPrevious,
@@ -1833,11 +2761,15 @@ private fun PlayerControlOverlay(
                     description = if (isPlaying) "暂停" else "播放",
                     focusRequester = playFocus,
                     upFocus = progressFocus,
-                    leftFocus = previousFocus.takeIf { previousEnabled },
+                    leftFocus = when {
+                        previousEnabled -> previousFocus
+                        !roaming -> modeFocus
+                        else -> null
+                    },
                     rightFocus = when {
                         nextEnabled -> nextFocus
                         roaming -> exitRoamFocus
-                        else -> null
+                        else -> queueFocus
                     },
                     emphasized = true,
                     onFocus = onInteraction,
@@ -1850,37 +2782,164 @@ private fun PlayerControlOverlay(
                     focusRequester = nextFocus,
                     upFocus = progressFocus,
                     leftFocus = playFocus,
-                    rightFocus = exitRoamFocus.takeIf { roaming },
+                    rightFocus = if (roaming) exitRoamFocus else queueFocus,
                     onFocus = onInteraction,
                     onClick = onNext,
                 )
             }
-            if (roaming) {
-                Button(
-                    onClick = onExitRoam,
-                    modifier = Modifier.align(Alignment.CenterEnd).size(width = 95.dp, height = 29.dp)
-                        .focusProperties {
-                            up = progressFocus
-                            down = FocusRequester.Cancel
-                            left = if (nextEnabled) nextFocus else playFocus
-                            right = FocusRequester.Cancel
-                        }
-                        .focusRequester(exitRoamFocus)
-                        .onFocusChanged { if (it.isFocused) onInteraction() }
-                        .semantics { contentDescription = "退出漫游" },
-                    scale = ButtonDefaults.scale(focusedScale = 1.04f),
-                    colors = ButtonDefaults.colors(
-                        containerColor = Color(0xFF382A27),
-                        contentColor = Color(0xFFF0D9D1),
-                        focusedContainerColor = FnColors.Coral,
-                        focusedContentColor = FnColors.Background,
-                    ),
-                    contentPadding = PaddingValues(0.dp),
-                ) { Text("退出漫游", fontSize = 12.sp, maxLines = 1) }
+            PlayerSideActionButton(
+                label = "退出漫游".takeIf { roaming },
+                glyph = PlayerSideActionGlyph.Queue.takeUnless { roaming },
+                description = if (roaming) "退出漫游" else "播放队列，共 $queueCount 首",
+                focusRequester = if (roaming) exitRoamFocus else queueFocus,
+                upFocus = progressFocus,
+                leftFocus = if (nextEnabled) nextFocus else playFocus,
+                onFocus = onInteraction,
+                onClick = {
+                    onInteraction()
+                    if (roaming) onExitRoam() else onOpenQueue()
+                },
+                emphasized = roaming,
+                modifier = Modifier.align(Alignment.CenterEnd),
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlayerSideActionButton(
+    description: String,
+    focusRequester: FocusRequester,
+    upFocus: FocusRequester,
+    modifier: Modifier = Modifier,
+    label: String? = null,
+    glyph: PlayerSideActionGlyph? = null,
+    leftFocus: FocusRequester? = null,
+    rightFocus: FocusRequester? = null,
+    emphasized: Boolean = false,
+    onFocus: () -> Unit,
+    onClick: () -> Unit,
+) {
+    Button(
+        onClick = onClick,
+        modifier = modifier.size(width = if (glyph == null) 104.dp else 36.dp, height = 29.dp)
+            .focusProperties {
+                up = upFocus
+                down = FocusRequester.Cancel
+                left = leftFocus ?: FocusRequester.Cancel
+                right = rightFocus ?: FocusRequester.Cancel
+            }
+            .focusRequester(focusRequester)
+            .onFocusChanged { if (it.isFocused) onFocus() }
+            .semantics { contentDescription = description },
+        scale = ButtonDefaults.scale(focusedScale = 1.04f),
+        colors = ButtonDefaults.colors(
+            containerColor = if (emphasized) Color(0xFF382A27) else Color(0xFF202624),
+            contentColor = if (emphasized) Color(0xFFF0D9D1) else FnColors.Text,
+            focusedContainerColor = if (emphasized) FnColors.Coral else Color(0xFF303734),
+            focusedContentColor = if (emphasized) FnColors.Background else FnColors.Text,
+        ),
+        contentPadding = PaddingValues(if (glyph == null) 8.dp else 0.dp),
+    ) {
+        if (glyph != null) {
+            PlayerSideActionIcon(glyph)
+        } else {
+            Text(label.orEmpty(), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+private enum class PlayerSideActionGlyph { RepeatAll, Shuffle, RepeatOne, Sequence, Queue }
+
+private fun playModeGlyph(mode: PlayMode): PlayerSideActionGlyph = when (mode) {
+    PlayMode.ListRepeat -> PlayerSideActionGlyph.RepeatAll
+    PlayMode.Shuffle -> PlayerSideActionGlyph.Shuffle
+    PlayMode.SingleRepeat -> PlayerSideActionGlyph.RepeatOne
+    PlayMode.Sequence -> PlayerSideActionGlyph.Sequence
+}
+
+@Composable
+private fun PlayerSideActionIcon(glyph: PlayerSideActionGlyph) {
+    val iconColor = LocalContentColor.current
+    Canvas(Modifier.size(17.dp)) {
+        val stroke = 1.7.dp.toPx()
+        fun line(startX: Float, startY: Float, endX: Float, endY: Float) {
+            drawLine(
+                color = iconColor,
+                start = androidx.compose.ui.geometry.Offset(size.width * startX, size.height * startY),
+                end = androidx.compose.ui.geometry.Offset(size.width * endX, size.height * endY),
+                strokeWidth = stroke,
+                cap = StrokeCap.Round,
+            )
+        }
+        fun rightArrow(tipX: Float, tipY: Float) {
+            line(tipX - 0.16f, tipY - 0.13f, tipX, tipY)
+            line(tipX - 0.16f, tipY + 0.13f, tipX, tipY)
+        }
+        when (glyph) {
+            PlayerSideActionGlyph.RepeatAll,
+            PlayerSideActionGlyph.RepeatOne,
+            -> {
+                line(0.20f, 0.32f, 0.80f, 0.32f)
+                line(0.80f, 0.32f, 0.66f, 0.19f)
+                line(0.80f, 0.32f, 0.66f, 0.45f)
+                line(0.80f, 0.68f, 0.20f, 0.68f)
+                line(0.20f, 0.68f, 0.34f, 0.55f)
+                line(0.20f, 0.68f, 0.34f, 0.81f)
+                if (glyph == PlayerSideActionGlyph.RepeatOne) {
+                    line(0.49f, 0.44f, 0.56f, 0.39f)
+                    line(0.56f, 0.39f, 0.56f, 0.61f)
+                }
+            }
+            PlayerSideActionGlyph.Shuffle -> {
+                line(0.15f, 0.28f, 0.32f, 0.28f)
+                line(0.32f, 0.28f, 0.70f, 0.72f)
+                line(0.70f, 0.72f, 0.84f, 0.72f)
+                rightArrow(0.84f, 0.72f)
+                line(0.15f, 0.72f, 0.32f, 0.72f)
+                line(0.32f, 0.72f, 0.70f, 0.28f)
+                line(0.70f, 0.28f, 0.84f, 0.28f)
+                rightArrow(0.84f, 0.28f)
+            }
+            PlayerSideActionGlyph.Sequence -> {
+                line(0.18f, 0.50f, 0.82f, 0.50f)
+                rightArrow(0.82f, 0.50f)
+                line(0.18f, 0.29f, 0.44f, 0.29f)
+                line(0.18f, 0.71f, 0.44f, 0.71f)
+            }
+            PlayerSideActionGlyph.Queue -> {
+                line(0.15f, 0.27f, 0.58f, 0.27f)
+                line(0.15f, 0.50f, 0.58f, 0.50f)
+                line(0.15f, 0.73f, 0.58f, 0.73f)
+                val play = Path().apply {
+                    moveTo(size.width * 0.69f, size.height * 0.32f)
+                    lineTo(size.width * 0.89f, size.height * 0.50f)
+                    lineTo(size.width * 0.69f, size.height * 0.68f)
+                    close()
+                }
+                drawPath(play, iconColor)
             }
         }
     }
 }
+
+internal fun playModeLabel(mode: PlayMode): String = when (mode) {
+    PlayMode.ListRepeat -> "列表循环"
+    PlayMode.Shuffle -> "随机播放"
+    PlayMode.SingleRepeat -> "单曲循环"
+    PlayMode.Sequence -> "顺序播放"
+}
+
+internal fun initialQueueFocusIndex(items: List<PlaybackQueueItem>): Int =
+    items.indexOfFirst(PlaybackQueueItem::isCurrent).coerceAtLeast(0)
+
+internal fun queueFocusTargetKey(
+    requesterKeys: List<String>,
+    currentIndex: Int,
+    previouslyFocusedKey: String?,
+): String? = previouslyFocusedKey?.takeIf(requesterKeys::contains)
+    ?: requesterKeys.getOrNull(currentIndex)
+    ?: requesterKeys.firstOrNull()
 
 private enum class TransportGlyph { Previous, Play, Pause, Next }
 
@@ -2083,66 +3142,84 @@ internal fun playerProgressFraction(positionMs: Long, durationMs: Long): Float =
 @Composable
 private fun SettingsScreen(container: AppContainer) {
     val preferences by container.appPreferences.state.collectAsStateWithLifecycle()
-    val scope = rememberCoroutineScope()
-    var usage by remember { mutableStateOf(CacheUsage(0, 0, 0)) }
+    val scope = LocalLibraryRetainedState.current.scope
+    val coverStyleFocus = remember { FocusRequester() }
+    val posterStyleFocus = remember { FocusRequester() }
+    var usage by remember { mutableStateOf(CacheUsage(artworkBytes = 0, indexBytes = 0)) }
     suspend fun refreshUsage() {
-        container.musicRepository.applyArtworkBudget()
         usage = container.musicRepository.cacheUsage()
     }
-    LaunchedEffect(preferences.cacheBudget) { refreshUsage() }
+    LaunchedEffect(Unit) {
+        container.musicRepository.applyArtworkBudget()
+        refreshUsage()
+    }
+    LaunchedEffect(Unit) {
+        yield()
+        runCatching { coverStyleFocus.requestFocus() }
+    }
     Column(Modifier.fillMaxSize().padding(72.dp, 50.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
         Text("设置", fontSize = 42.sp, fontWeight = FontWeight.Bold)
         Text("播放界面", fontSize = 25.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Button(onClick = { container.appPreferences.setPlayerStyle(com.fnmusic.tv.core.model.PlayerStyle.Cover) }) {
+            Button(
+                onClick = { container.appPreferences.setPlayerStyle(com.fnmusic.tv.core.model.PlayerStyle.Cover) },
+                modifier = Modifier.focusProperties { right = posterStyleFocus }.focusRequester(coverStyleFocus),
+            ) {
                 Text(if (preferences.playerStyle == com.fnmusic.tv.core.model.PlayerStyle.Cover) "CD 模式 · 已选" else "CD 模式")
             }
-            Button(onClick = { container.appPreferences.setPlayerStyle(com.fnmusic.tv.core.model.PlayerStyle.Poster) }) {
+            Button(
+                onClick = { container.appPreferences.setPlayerStyle(com.fnmusic.tv.core.model.PlayerStyle.Poster) },
+                modifier = Modifier.focusProperties { left = coverStyleFocus }.focusRequester(posterStyleFocus),
+            ) {
                 Text(if (preferences.playerStyle == com.fnmusic.tv.core.model.PlayerStyle.Poster) "大海报模式 · 已选" else "大海报模式")
             }
         }
-        Text("音频 + 图片缓存上限", fontSize = 25.sp)
+        Text("图片磁盘缓存上限", fontSize = 25.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             CacheBudget.entries.forEach { budget ->
                 Button(onClick = {
-                    container.appPreferences.setCacheBudget(budget)
-                    scope.launch { refreshUsage() }
+                    scope.launch {
+                        container.appPreferences.setCacheBudget(budget)
+                        container.musicRepository.applyArtworkBudget()
+                        refreshUsage()
+                    }
                 }) {
                     Text(if (preferences.cacheBudget == budget) "${budget.megabytes} MB · 已选" else "${budget.megabytes} MB")
                 }
             }
         }
         Text(
-            "当前 ${formatBytes(usage.totalBytes)}（音频 ${formatBytes(usage.mediaBytes)} / 图片 ${formatBytes(usage.artworkBytes)}）",
+            "当前 ${formatBytes(usage.totalBytes)}（图片 ${formatBytes(usage.artworkBytes)} / 资料 ${formatBytes(usage.indexBytes)}）",
             color = FnColors.Muted,
             fontSize = 18.sp,
         )
         Text(
-            "图片额度立即清理，音频额度下次播放服务启动时生效；资料索引当前 ${formatBytes(usage.indexBytes)}，最多另占 32 MB",
+            "图片额度立即生效；资料缓存独立遵守 24 MB 目标、32 MB 物理上限",
             color = FnColors.Muted,
             fontSize = 18.sp,
         )
         Button(onClick = {
             scope.launch {
-                container.musicRepository.clearArtwork()
-                container.playbackController.clearMediaCache()
-                usage = container.musicRepository.cacheUsage()
+                container.musicRepository.clearAllEvictableCaches()
+                container.nowPlayingPresenter.refreshCurrentPresentation()
+                refreshUsage()
             }
-        }) { Text("清除音频和图片缓存") }
+        }) { Text("清除图片和资料缓存") }
     }
 }
 
 @Composable
 private fun InlineError(error: AppError) {
-    val message = when (error) {
-        AppError.NetworkUnavailable -> "NAS 暂时不可用"
-        AppError.Empty -> "暂无内容"
-        AppError.UnavailableTrack -> "歌曲不可访问"
-        AppError.TranscodeUnavailable -> "兼容播放参数尚未确认"
-        AppError.CollectionChanged -> "列表已更新，请返回后重新载入"
-        else -> "加载失败，请重试"
-    }
-    Text(message, color = FnColors.Coral, fontSize = 18.sp, modifier = Modifier.padding(top = 12.dp))
+    Text(appErrorMessage(error), color = FnColors.Coral, fontSize = 18.sp, modifier = Modifier.padding(top = 12.dp))
+}
+
+private fun appErrorMessage(error: AppError): String = when (error) {
+    AppError.NetworkUnavailable -> "NAS 暂时不可用"
+    AppError.Empty -> "暂无内容"
+    AppError.UnavailableTrack -> "歌曲不可访问"
+    AppError.TranscodeUnavailable -> "兼容播放参数尚未确认"
+    AppError.CollectionChanged -> "列表已更新，请返回后重新载入"
+    else -> "加载失败，请重试"
 }
 
 private fun formatDuration(ms: Long): String {

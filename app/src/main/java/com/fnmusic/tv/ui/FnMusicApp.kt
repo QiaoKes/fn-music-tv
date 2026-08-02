@@ -72,7 +72,7 @@ import kotlinx.coroutines.launch
 private enum class Route { Home, My, Player }
 
 @Composable
-fun FnMusicApp(container: AppContainer) {
+fun FnMusicApp(container: AppContainer, onMoveToBackground: () -> Unit) {
     val session by container.sessionRepository.state.collectAsStateWithLifecycle()
     val playback by container.playbackController.state.collectAsStateWithLifecycle()
     FnMusicTheme {
@@ -80,12 +80,6 @@ fun FnMusicApp(container: AppContainer) {
             when (val current = session) {
                 SessionState.Loading -> BrandLoading()
                 is SessionState.SignedOut -> {
-                    LaunchedEffect(current.error) {
-                        if (current.error == AppError.Unauthenticated || current.error == AppError.AccountDisabled) {
-                            container.playbackController.clearSession()
-                            container.musicRepository.clearArtwork()
-                        }
-                    }
                     LoginScreen(
                         savedServer = current.savedServer,
                         recentServers = current.recentServers,
@@ -96,11 +90,7 @@ fun FnMusicApp(container: AppContainer) {
                     )
                 }
                 is SessionState.SignedIn -> {
-                    LaunchedEffect(current.user.guid) {
-                        container.appPreferences.bindNamespace(container.sessionRepository.cacheNamespace())
-                        container.playbackController.configure(container.sessionRepository.playbackCredentials())
-                    }
-                    AuthenticatedApp(container, current, playback)
+                    AuthenticatedApp(container, current, playback, onMoveToBackground)
                 }
             }
         }

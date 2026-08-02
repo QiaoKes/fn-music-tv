@@ -4,14 +4,21 @@ import com.fnmusic.tv.core.data.server.NormalizedServer
 import com.fnmusic.tv.core.model.AppError
 import com.fnmusic.tv.core.model.AppException
 import java.io.IOException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import java.security.MessageDigest
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.JsonElement
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.security.MessageDigest
+import okhttp3.Response
 
 class TrimMusicApi(
     private val server: NormalizedServer,
@@ -120,76 +127,88 @@ class TrimMusicApi(
     }
 
     private suspend inline fun <reified T> execute(builder: Request.Builder, authenticated: Boolean): T =
-        withContext(Dispatchers.IO) {
-            if (authenticated) {
-                val current = token() ?: throw AppException(AppError.Unauthenticated)
-                builder.header("Authorization", current)
-            }
-            try {
-                client.newCall(builder.build()).execute().use { response ->
-                    if (response.isRedirect) throw AppException(AppError.NetworkUnavailable)
-                    if (response.code == 401) throw AppException(AppError.Unauthenticated)
-                    if (response.code == 404) throw AppException(AppError.NotFound)
-                    if (!response.isSuccessful) throw AppException(AppError.NetworkUnavailable)
-                    ApiDecoder.decode<T>(response.body.string())
-                }
-            } catch (cause: AppException) {
-                throw cause
-            } catch (cause: IOException) {
-                throw AppException(AppError.NetworkUnavailable, cause)
-            }
-        }
+        executeResponse(builder, authenticated) { response -> ApiDecoder.decode<T>(response.body.string()) }
 
     private suspend inline fun <reified T> executeNullable(builder: Request.Builder, authenticated: Boolean): T? =
-        withContext(Dispatchers.IO) {
-            if (authenticated) builder.header("Authorization", token() ?: throw AppException(AppError.Unauthenticated))
-            try {
-                client.newCall(builder.build()).execute().use { response ->
-                    if (response.code == 401) throw AppException(AppError.Unauthenticated)
-                    if (!response.isSuccessful || response.isRedirect) throw AppException(AppError.NetworkUnavailable)
-                    ApiDecoder.decodeNullable<T>(response.body.string())
-                }
-            } catch (cause: AppException) {
-                throw cause
-            } catch (cause: IOException) {
-                throw AppException(AppError.NetworkUnavailable, cause)
-            }
-        }
+        executeResponse(builder, authenticated) { response -> ApiDecoder.decodeNullable<T>(response.body.string()) }
 
     private suspend fun executeBytes(builder: Request.Builder, authenticated: Boolean): ByteArray =
-        withContext(Dispatchers.IO) {
-            if (authenticated) builder.header("Authorization", token() ?: throw AppException(AppError.Unauthenticated))
-            try {
-                client.newCall(builder.build()).execute().use { response ->
-                    if (!response.isSuccessful || response.isRedirect || response.header("Content-Type")?.contains("json") == true) {
-                        throw AppException(AppError.NetworkUnavailable)
-                    }
-                    response.body.bytes()
-                }
-            } catch (cause: AppException) {
-                throw cause
-            } catch (cause: IOException) {
-                throw AppException(AppError.NetworkUnavailable, cause)
+        executeResponse(builder, authenticated) { response ->
+            if (response.header("Content-Type")?.contains("json", ignoreCase = true) == true) {
+                ApiDecoder.decode<JsonElement>(response.body.string())
+                throw AppException(AppError.Unknown("invalid_json"))
             }
+            response.body.bytes().takeIf(ByteArray::isNotEmpty) ?: throw AppException(AppError.Empty)
         }
 
-    private suspend fun executeUnit(builder: Request.Builder, authenticated: Boolean) = withContext(Dispatchers.IO) {
-        if (authenticated) {
-            val current = token() ?: throw AppException(AppError.Unauthenticated)
-            builder.header("Authorization", current)
+    private suspend fun executeUnit(builder: Request.Builder, authenticated: Boolean) =
+        executeResponse(builder, authenticated) { response -> ApiDecoder.decodeUnit(response.body.string()) }
+
+    private suspend fun <T> executeResponse(
+        builder: Request.Builder,
+        authenticated: Boolean,
+        decode: (Response) -> T,
+    ): T {
+        if (authenticated) builder.header("Authorization", token() ?: throw AppException(AppError.Unauthenticated))
+        val call = client.newCall(builder.build())
+        return suspendCancellableCoroutine { continuation ->
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(
+                object : Callback {
+                    override fun onFailure(call: Call, e: IOException) {
+                        if (continuation.isActive) {
+                            continuation.resumeWithException(e.asRequestFailure())
+                        }
+                    }
+
+                    override fun onResponse(call: Call, response: Response) {
+                        val result = runCatching {
+                            response.use {
+                                classifyStatus(it)
+                                decode(it)
+                            }
+                        }
+                        if (!continuation.isActive) return
+                        result.fold(
+                            onSuccess = continuation::resume,
+                            onFailure = { continuation.resumeWithException(it.asRequestFailure()) },
+                        )
+                    }
+                },
+            )
         }
-        try {
-            client.newCall(builder.build()).execute().use { response ->
-                if (response.isRedirect) throw AppException(AppError.NetworkUnavailable)
-                if (response.code == 401) throw AppException(AppError.Unauthenticated)
-                if (response.code == 404) throw AppException(AppError.NotFound)
-                if (!response.isSuccessful) throw AppException(AppError.NetworkUnavailable)
-                ApiDecoder.decodeUnit(response.body.string())
-            }
-        } catch (cause: AppException) {
-            throw cause
-        } catch (cause: IOException) {
-            throw AppException(AppError.NetworkUnavailable, cause)
+    }
+
+    private fun Throwable.asRequestFailure(): Throwable = when (this) {
+        is CancellationException, is AppException -> this
+        is IOException -> AppException(
+            AppError.NetworkUnavailable,
+            ApiRequestFailure(retryable = true, cause = this),
+        )
+        else -> this
+    }
+
+    private fun classifyStatus(response: Response) {
+        when {
+            response.code == 401 -> throw AppException(
+                AppError.Unauthenticated,
+                ApiRequestFailure(retryable = false, statusCode = response.code),
+            )
+            response.code == 404 -> throw AppException(
+                AppError.NotFound,
+                ApiRequestFailure(retryable = false, statusCode = response.code),
+            )
+            response.isRedirect -> throw AppException(
+                AppError.NetworkUnavailable,
+                ApiRequestFailure(retryable = false, statusCode = response.code),
+            )
+            !response.isSuccessful -> throw AppException(
+                AppError.NetworkUnavailable,
+                ApiRequestFailure(
+                    retryable = response.code == 408 || response.code == 429 || response.code >= 500,
+                    statusCode = response.code,
+                ),
+            )
         }
     }
 
@@ -198,6 +217,16 @@ class TrimMusicApi(
             .followRedirects(false)
             .followSslRedirects(false)
             .retryOnConnectionFailure(false)
+            .addNetworkInterceptor { chain ->
+                val request = if (chain.connection()?.protocol() == Protocol.HTTP_1_1) {
+                    chain.request().newBuilder()
+                        .header("Connection", "close")
+                        .build()
+                } else {
+                    chain.request()
+                }
+                chain.proceed(request)
+            }
             .build()
     }
 }
