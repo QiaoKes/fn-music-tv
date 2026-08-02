@@ -58,27 +58,48 @@ object LrcParser {
 
 object LyricParser {
     fun parse(content: String): LyricTimeline {
+        val lrc = LrcParser.parse(content)
         val yrc = YrcParser.parse(content)
-        return yrc.takeIf { it.lines.isNotEmpty() } ?: LrcParser.parse(content)
+        return when {
+            yrc.hasTimedLyrics -> yrc.timeline
+            lrc.lines.isNotEmpty() -> mergeTimelines(yrc.timeline, lrc)
+            else -> yrc.timeline
+        }
     }
+
+    private fun mergeTimelines(first: LyricTimeline, second: LyricTimeline): LyricTimeline =
+        LyricTimeline(
+            (first.lines + second.lines)
+                .groupBy(LyricLine::startMs)
+                .toSortedMap()
+                .map { (startMs, lines) -> LyricLine(startMs, lines.flatMap(LyricLine::texts)) },
+        )
 }
+
+private data class YrcParseResult(val timeline: LyricTimeline, val hasTimedLyrics: Boolean)
 
 private object YrcParser {
     private val json = Json
     private val lineTimestamp = Regex("""^\[(\d+),(\d+)](.*)$""")
     private val wordTimestamp = Regex("""\(\d+,\d+,\d+\)""")
 
-    fun parse(content: String): LyricTimeline {
+    fun parse(content: String): YrcParseResult {
+        var hasTimedLyrics = false
         val timed = buildList {
             content.removePrefix("\uFEFF").lineSequence().forEachIndexed { order, raw ->
-                parseTimedLine(raw, order)?.let(::add)
-                    ?: parseMetadataLine(raw, order)?.let(::add)
+                parseTimedLine(raw, order)?.let {
+                    hasTimedLyrics = true
+                    add(it)
+                } ?: parseMetadataLine(raw, order)?.let(::add)
             }
         }
-        return LyricTimeline(
-            timed.sortedWith(compareBy<ParsedLine> { it.startMs }.thenBy { it.order })
-                .groupBy { it.startMs }
-                .map { (startMs, lines) -> LyricLine(startMs, lines.map { it.text }) },
+        return YrcParseResult(
+            timeline = LyricTimeline(
+                timed.sortedWith(compareBy<ParsedLine> { it.startMs }.thenBy { it.order })
+                    .groupBy { it.startMs }
+                    .map { (startMs, lines) -> LyricLine(startMs, lines.map { it.text }) },
+            ),
+            hasTimedLyrics = hasTimedLyrics,
         )
     }
 

@@ -57,4 +57,19 @@ class LrcParserTest {
 
         assertEquals(listOf("Hello", "你好"), timeline.lines.single().texts)
     }
+
+    @Test fun `keeps lrc body when json credits are mixed into the document`() {
+        val timeline = LyricParser.parse(
+            """
+            {"t":-1,"c":[{"tx":"作词: "},{"tx":"薔薇园アヴ"}]}
+            {"t":1000,"c":[{"tx":"编曲: "},{"tx":"女王蜂"}]}
+            [00:10.00]正文第一句
+            [00:15.50]正文第二句
+            """.trimIndent(),
+        )
+
+        assertEquals(listOf(0L, 1_000L, 10_000L, 15_500L), timeline.lines.map(LyricLine::startMs))
+        assertEquals("正文第一句", timeline.lines[2].texts.single())
+        assertEquals(2, timeline.activeIndex(12_000))
+    }
 }
