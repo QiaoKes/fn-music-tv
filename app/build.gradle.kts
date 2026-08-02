@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.baselineprofile)
 }
 
 val versionProperties = Properties().apply {
@@ -123,6 +124,11 @@ kotlin {
     }
 }
 
+baselineProfile {
+    automaticGenerationDuringBuild = false
+    saveInSrc = true
+}
+
 dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:data"))
@@ -132,18 +138,15 @@ dependencies {
     implementation(libs.androidx.palette)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
-    implementation(libs.androidx.lifecycle.viewmodel.compose)
-    implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.compose.foundation)
     implementation(libs.androidx.compose.ui)
-    implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.tv.material)
+    baselineProfile(project(":baselineprofile"))
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.junit)
-    androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.uiautomator)
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
