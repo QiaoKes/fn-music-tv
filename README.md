@@ -20,7 +20,6 @@
 - **完整播放队列**：支持列表循环、随机播放、单曲循环与顺序播放。
 - **沉浸式播放器**：提供 CD 模式和大海报模式，可在设置中随时切换。
 - **歌词显示**：支持逐行歌词、普通文本歌词以及歌词偏移。
-- **后台播放**：基于 Media3 MediaSession，离开应用界面后仍可保持播放。
 - **多服务器登录**：支持 HTTP/HTTPS、登录状态恢复和最近使用的服务器记录。
 - **本地缓存**：缓存封面与音乐库资料，可设置图片缓存上限并手动清理。
 
@@ -120,7 +119,7 @@ app/build/outputs/apk/sideload/debug/
 app/            Android TV 应用、Compose 界面与应用集成
 core/model/     音乐库、队列、播放模式等领域模型
 core/data/      服务端 API、会话、本地数据库与缓存
-core/playback/  Media3 播放服务、队列和后台播放
+core/playback/  Media3 播放服务与队列
 baselineprofile/ 基准配置生成模块
 ```
 
