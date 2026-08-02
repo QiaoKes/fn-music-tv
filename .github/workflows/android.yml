@@ -11,17 +11,43 @@ permissions:
 
 concurrency:
   group: android-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
     name: Test, lint, and build APKs
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    outputs:
+      release_needed: ${{ steps.release.outputs.needed }}
+      version_code: ${{ steps.release.outputs.code }}
+      version_name: ${{ steps.release.outputs.name }}
+      version_tag: ${{ steps.release.outputs.tag }}
 
     steps:
       - name: Check out source
         uses: actions/checkout@v6
+
+      - name: Read version and detect an unpublished release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          source version.properties
+          [[ "$VERSION_CODE" =~ ^[1-9][0-9]*$ ]]
+          [[ "$VERSION_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          tag="v$VERSION_NAME"
+          needed=false
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]] && \
+              ! gh release view "$tag" >/dev/null 2>&1; then
+            needed=true
+          fi
+          echo "needed=$needed" >> "$GITHUB_OUTPUT"
+          echo "code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
@@ -82,3 +108,95 @@ jobs:
             **/build/reports/lint-results*.xml
           if-no-files-found: ignore
           retention-days: 14
+
+  release:
+    name: Sign and publish universal APK
+    needs: build
+    if: needs.build.outputs.release_needed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools platforms;android-36 build-tools;36.0.0
+
+      - name: Restore Gradle build cache
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Restore release signing identity
+        id: signing
+        shell: bash
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.FN_MUSIC_RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_PASSWORD: ${{ secrets.FN_MUSIC_RELEASE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_KEYSTORE_BASE64"
+          test -n "$RELEASE_PASSWORD"
+          keystore="$RUNNER_TEMP/fn-music-tv-release.jks"
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          chmod 600 "$keystore"
+          echo "keystore=$keystore" >> "$GITHUB_OUTPUT"
+
+      - name: Build signed universal APK
+        env:
+          FN_MUSIC_RELEASE_PASSWORD: ${{ secrets.FN_MUSIC_RELEASE_PASSWORD }}
+        run: |
+          ./gradlew --no-daemon --stacktrace \
+            -PfnMusicReleaseStoreFile="${{ steps.signing.outputs.keystore }}" \
+            :app:assembleSideloadRelease
+
+      - name: Verify and stage universal APK
+        id: artifact
+        shell: bash
+        env:
+          VERSION_CODE: ${{ needs.build.outputs.version_code }}
+          VERSION_NAME: ${{ needs.build.outputs.version_name }}
+        run: |
+          set -euo pipefail
+          source_apk="app/build/outputs/apk/sideload/release/fn-music-tv-$VERSION_NAME-sideload-release.apk"
+          test -f "$source_apk"
+
+          aapt="$ANDROID_HOME/build-tools/36.0.0/aapt"
+          apksigner="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          badging="$("$aapt" dump badging "$source_apk")"
+          grep -F "package: name='com.fnmusic.tv' versionCode='$VERSION_CODE' versionName='$VERSION_NAME'" <<< "$badging"
+          grep -F "sdkVersion:'23'" <<< "$badging"
+          grep -F "targetSdkVersion:'36'" <<< "$badging"
+          grep -F "native-code: 'arm64-v8a' 'armeabi-v7a' 'x86' 'x86_64'" <<< "$badging"
+          "$apksigner" verify --verbose --print-certs "$source_apk"
+
+          mkdir -p dist
+          release_apk="dist/fn-music-tv-$VERSION_NAME-universal.apk"
+          cp "$source_apk" "$release_apk"
+          sha256sum "$release_apk" > "$release_apk.sha256"
+          echo "apk=$release_apk" >> "$GITHUB_OUTPUT"
+          echo "checksum=$release_apk.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Create tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.version_tag }}
+          VERSION_NAME: ${{ needs.build.outputs.version_name }}
+          RELEASE_APK: ${{ steps.artifact.outputs.apk }}
+          RELEASE_CHECKSUM: ${{ steps.artifact.outputs.checksum }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            "$RELEASE_APK#Android 6.0+ universal APK" \
+            "$RELEASE_CHECKSUM#SHA-256 checksum" \
+            --target "$GITHUB_SHA" \
+            --title "回声台 $VERSION_NAME" \
+            --generate-notes
