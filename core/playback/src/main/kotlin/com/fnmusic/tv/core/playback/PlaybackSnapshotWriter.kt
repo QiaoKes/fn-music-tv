@@ -2,24 +2,29 @@ package com.fnmusic.tv.core.playback
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 internal data class PlaybackSnapshotWriteRequest(
     val namespace: String,
     val revision: Long,
     val payload: String?,
+    val snapshot: PlaybackSnapshot? = null,
 ) {
     init {
         require(namespace.isNotBlank()) { "Playback snapshot namespace must not be blank" }
         require(revision >= 0) { "Playback snapshot revision must not be negative" }
+        require(snapshot == null || payload == null) { "Playback snapshot request has two payload sources" }
     }
 }
 
@@ -65,6 +70,8 @@ internal class PlaybackSnapshotPersistence(
 
 internal class PlaybackSnapshotWriter(
     scope: CoroutineScope,
+    private val encodingDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val encodeSnapshot: (PlaybackSnapshot) -> String = PlaybackSnapshotCodec::encode,
     private val writeSnapshot: suspend (namespace: String, payload: String?) -> Unit,
 ) {
     private sealed interface PendingWrite {
@@ -172,7 +179,10 @@ internal class PlaybackSnapshotWriter(
         }
 
         try {
-            writeSnapshot(request.namespace, request.payload)
+            val payload = request.snapshot?.let { snapshot ->
+                withContext(encodingDispatcher) { encodeSnapshot(snapshot) }
+            } ?: request.payload
+            writeSnapshot(request.namespace, payload)
             latestCommittedRevision[request.namespace] = request.revision
             pending.acknowledge(PlaybackSnapshotWriteResult.Committed)
         } catch (failure: Throwable) {

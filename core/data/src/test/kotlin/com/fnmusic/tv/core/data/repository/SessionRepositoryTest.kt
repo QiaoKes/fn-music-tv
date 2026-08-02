@@ -1,6 +1,7 @@
 package com.fnmusic.tv.core.data.repository
 
 import android.content.Context
+import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import com.fnmusic.tv.core.data.api.TrimMusicApi
 import com.fnmusic.tv.core.data.security.TokenStore
@@ -52,6 +53,20 @@ class SessionRepositoryTest {
         assertSignedOut(repository, AppError.Unauthenticated)
         assertNull(tokenStore.token)
         assertEquals(1, tokenStore.clearCount)
+    }
+
+    @Test fun `construction defers secure reads and restore loads them off the main thread`() = runBlocking {
+        val tokenStore = FakeTokenStore(initialToken = null)
+
+        val repository = repository(tokenStore)
+
+        assertEquals(0, tokenStore.readCount)
+        assertEquals(0, tokenStore.accessCodeReadCount)
+        repository.restore()
+        assertEquals(1, tokenStore.readCount)
+        assertEquals(1, tokenStore.accessCodeReadCount)
+        assertTrue(!tokenStore.readOnMainThread)
+        assertSignedOut(repository, error = null)
     }
 
     @Test fun `restore clears a token for a disabled account`() = runBlocking {
@@ -141,7 +156,7 @@ class SessionRepositoryTest {
         )
     }
 
-    private fun assertSignedOut(repository: SessionRepository, error: AppError) {
+    private fun assertSignedOut(repository: SessionRepository, error: AppError?) {
         val state = repository.state.value as SessionState.SignedOut
         assertEquals(error, state.error)
     }
@@ -151,8 +166,24 @@ class SessionRepositoryTest {
             private set
         var clearCount: Int = 0
             private set
+        var readCount: Int = 0
+            private set
+        var accessCodeReadCount: Int = 0
+            private set
+        var readOnMainThread: Boolean = false
+            private set
 
-        override fun read(): String? = token
+        override fun read(): String? {
+            readCount += 1
+            readOnMainThread = readOnMainThread || Looper.myLooper() == Looper.getMainLooper()
+            return token
+        }
+
+        override fun readAccessCode(): String? {
+            accessCodeReadCount += 1
+            readOnMainThread = readOnMainThread || Looper.myLooper() == Looper.getMainLooper()
+            return null
+        }
 
         override fun write(token: String) {
             this.token = token

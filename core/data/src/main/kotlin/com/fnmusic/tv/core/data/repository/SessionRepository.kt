@@ -18,11 +18,13 @@ import com.fnmusic.tv.core.model.ServerIdentity
 import com.fnmusic.tv.core.model.User
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 
 sealed interface SessionState {
@@ -45,11 +47,13 @@ class SessionRepository internal constructor(
     private val preferences = context.getSharedPreferences("session", Context.MODE_PRIVATE)
     private val _state = MutableStateFlow<SessionState>(SessionState.Loading)
     val state: StateFlow<SessionState> = _state.asStateFlow()
-    private var memoryToken: String? = tokenStore.read()
-    private var memoryAccessCode: String? = tokenStore.readAccessCode()
+    private var memoryToken: String? = null
+    private var memoryAccessCode: String? = null
+    private var rememberedCredentialsLoaded = false
     private var connectionAccess = ConnectionAccess()
     private var api: TrimMusicApi? = null
     private val authVerification = Mutex()
+    private val credentialLoadMutex = Mutex()
 
     val savedServer: String get() = preferences.getString(SERVER, "").orEmpty()
     val recentServers: List<String>
@@ -63,8 +67,13 @@ class SessionRepository internal constructor(
     }
 
     suspend fun restore() {
+        if (savedServer.isBlank()) {
+            _state.value = signedOut()
+            return
+        }
+        loadRememberedCredentials()
         val token = memoryToken
-        if (savedServer.isBlank() || token == null) {
+        if (token == null) {
             _state.value = signedOut()
             return
         }
@@ -98,6 +107,7 @@ class SessionRepository internal constructor(
             val result = connected.api.login(username, password.concatToString(), deviceId)
             memoryToken = result.userToken
             memoryAccessCode = rawAccessCode.takeIf(String::isNotBlank)
+            rememberedCredentialsLoaded = true
             if (remember) {
                 tokenStore.write(result.userToken)
                 if (rawAccessCode.isNotBlank()) tokenStore.writeAccessCode(rawAccessCode) else tokenStore.clearAccessCode()
@@ -213,6 +223,7 @@ class SessionRepository internal constructor(
     private fun clearToken() {
         memoryToken = null
         memoryAccessCode = null
+        rememberedCredentialsLoaded = true
         connectionAccess = ConnectionAccess()
         tokenStore.clear()
         tokenStore.clearAccessCode()
@@ -233,6 +244,16 @@ class SessionRepository internal constructor(
         recentServers = recentServers,
         error = error,
     )
+
+    private suspend fun loadRememberedCredentials() = credentialLoadMutex.withLock {
+        if (rememberedCredentialsLoaded) return@withLock
+        val (token, accessCode) = withContext(Dispatchers.IO) {
+            tokenStore.read() to tokenStore.readAccessCode()
+        }
+        memoryToken = token
+        memoryAccessCode = accessCode
+        rememberedCredentialsLoaded = true
+    }
 
     private data class ConnectedServer(
         val normalized: NormalizedServer,

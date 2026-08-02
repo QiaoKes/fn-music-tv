@@ -152,7 +152,9 @@ class TrimMusicApi(
         decode: (Response) -> T,
     ): T {
         val authToken = if (authenticated) token() ?: throw AppException(AppError.Unauthenticated) else null
-        access.headers(authToken).forEach(builder::header)
+        for ((name, value) in access.headers(authToken)) {
+            builder.header(name, value)
+        }
         return suspendCancellableCoroutine { continuation ->
             var activeCall: Call? = null
             fun enqueue(request: Request, redirects: Int) {
