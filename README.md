@@ -4,7 +4,7 @@
 
 <h1 align="center">回声台</h1>
 
-<p align="center">面向 Android TV 与 Android 投影设备的飞牛音乐第三方客户端</p>
+<p align="center">面向 Android TV 与 Android 投影设备，也可侧载至普通安卓车机的飞牛音乐第三方客户端</p>
 
 项目使用 Kotlin、Compose for TV 与 Media3 构建，针对电视大屏、横屏布局、遥控器和
 触屏操作进行了适配。
@@ -146,6 +146,10 @@ baselineprofile/ 基准配置生成模块
 
 ## 兼容性说明
 
+- 通用侧载包可安装在 Android 6.0 及以上的普通安卓车机，使用横屏触控界面运行；当前尚未在
+  具体车机上实测，低分辨率屏幕、方向盘按键和车机音频策略可能因设备而异。
+- 车机侧载运行不等同于 Android Auto、CarPlay 或经过车厂认证的 Android Automotive 应用；
+  Android Automotive OS 是否允许安装和启动普通 APK 取决于车厂系统限制。请勿在驾驶过程中操作。
 - 当前客户端不会猜测尚未通过真实 NAS 验证的 CUE/HLS 转码参数；服务端参数未确认时，
   对应歌曲会提示兼容播放暂不可用。
 - 不同电视和投影设备对 Android TV feature、音频编码及后台限制的实现可能不同，目前只在vidda c3 pro 与 google 盒子上通过测试
