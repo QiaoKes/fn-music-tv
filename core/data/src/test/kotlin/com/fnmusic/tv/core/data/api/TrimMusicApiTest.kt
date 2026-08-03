@@ -82,6 +82,46 @@ class TrimMusicApiTest {
         assertEquals("raw-user-token", request.headers["Authorization"])
     }
 
+    @Test fun `favorite endpoints use documented paths payload and paging`() = runBlocking {
+        server.enqueue(
+            MockResponse.Builder()
+                .body(
+                    """{"code":0,"msg":"success","data":{"list":[{"guid":"track-1","title":"Song","isFavorite":true,"accessStatus":0}],"total":1}}""",
+                )
+                .build(),
+        )
+        server.enqueue(MockResponse.Builder().body("""{"code":0,"msg":"success","data":null}""").build())
+        server.enqueue(MockResponse.Builder().body("""{"code":0,"msg":"success","data":null}""").build())
+        val api = api()
+
+        val favorites = api.favoriteTracks(page = 2)
+        api.createFavorite("track-1")
+        api.deleteFavorite("track-1")
+
+        assertEquals(1, favorites.total)
+        assertTrue(favorites.list.single().toDomain().isFavorite)
+        val listRequest = server.takeRequest()
+        assertEquals("GET", listRequest.method)
+        assertEquals(
+            "/music/api/v1/favorite-track/list?page=2&size=50&sort=favoriteAt%2Cdesc",
+            listRequest.target,
+        )
+        val createRequest = server.takeRequest()
+        assertEquals("POST", createRequest.method)
+        assertEquals("/music/api/v1/favorite-track/create", createRequest.target)
+        assertEquals(
+            FavoriteTrackRequest("track-1"),
+            ApiDecoder.json.decodeFromString<FavoriteTrackRequest>(createRequest.body?.utf8().orEmpty()),
+        )
+        val deleteRequest = server.takeRequest()
+        assertEquals("POST", deleteRequest.method)
+        assertEquals("/music/api/v1/favorite-track/delete", deleteRequest.target)
+        assertEquals(
+            FavoriteTrackRequest("track-1"),
+            ApiDecoder.json.decodeFromString<FavoriteTrackRequest>(deleteRequest.body?.utf8().orEmpty()),
+        )
+    }
+
     @Test fun `relay and access code headers cover login and authenticated requests`() = runBlocking {
         server.enqueue(
             MockResponse.Builder()

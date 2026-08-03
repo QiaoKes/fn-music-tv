@@ -74,6 +74,17 @@ class TrimMusicApi(
     suspend fun allTracks(page: Int, size: Int = 50): SortedPageListDto<TrackDto> =
         get("track/list", "page" to page, "size" to size, "sort" to "createdAt,desc")
 
+    suspend fun favoriteTracks(page: Int, size: Int = 50): PageListDto<TrackDto> =
+        get("favorite-track/list", "page" to page, "size" to size, "sort" to "favoriteAt,desc")
+
+    suspend fun createFavorite(trackGuid: String) {
+        postUnit("favorite-track/create", FavoriteTrackRequest(trackGuid))
+    }
+
+    suspend fun deleteFavorite(trackGuid: String) {
+        postUnit("favorite-track/delete", FavoriteTrackRequest(trackGuid))
+    }
+
     suspend fun sharedLibraries(): List<SharedLibraryDto> = get<ListDto<SharedLibraryDto>>("shared-library/list").list
 
     suspend fun metadata(guid: String): TrackMetadataDto = get("track/metadata", "guid" to guid)
@@ -126,6 +137,16 @@ class TrimMusicApi(
         val builder = Request.Builder().url(server.resolveApi(path))
             .post(json.toRequestBody("application/json".toMediaType()))
         return execute(builder, authenticated)
+    }
+
+    private suspend inline fun <reified RequestType> postUnit(
+        path: String,
+        body: RequestType,
+    ) {
+        val json = ApiDecoder.json.encodeToString(body)
+        val builder = Request.Builder().url(server.resolveApi(path))
+            .post(json.toRequestBody("application/json".toMediaType()))
+        executeUnit(builder, authenticated = true)
     }
 
     private suspend inline fun <reified T> execute(builder: Request.Builder, authenticated: Boolean): T =

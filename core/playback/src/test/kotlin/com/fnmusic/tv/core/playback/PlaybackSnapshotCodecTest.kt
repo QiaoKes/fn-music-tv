@@ -28,6 +28,42 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class PlaybackSnapshotCodecTest {
     @Test
+    fun `favorite queue source survives snapshot round trip`() {
+        val snapshot = PlaybackSnapshot(
+            generation = 1,
+            revision = 2,
+            items = listOf(mediaItem("favorite-a")),
+            index = 0,
+            positionMs = 0,
+            source = QueueSource.Favorites("favoriteAt,desc"),
+            window = SlidingQueueState.fromSegments(
+                listOf(
+                    QueuePageSegment(
+                        page = 1,
+                        rawRowCount = 1,
+                        playableItems = listOf(QueuePageItem("favorite-a", 0)),
+                        sort = "favoriteAt,desc",
+                        knownTotal = 1,
+                    ),
+                ),
+                currentIndex = 0,
+            ),
+            kind = QueueKind.Normal,
+            mode = PlayMode.ListRepeat,
+            shuffleOrder = emptyList(),
+            roamWindow = null,
+            currentRoamId = null,
+            frozen = null,
+            playIntent = PlaybackPlayIntent.Pause,
+        )
+
+        val decoded = requireNotNull(PlaybackSnapshotCodec.decode(PlaybackSnapshotCodec.encode(snapshot)))
+
+        assertEquals(QueueSource.Favorites("favoriteAt,desc"), decoded.source)
+        assertEquals(listOf("favorite-a"), decoded.window?.guids)
+    }
+
+    @Test
     fun `v2 round trip preserves exact segments roam window frozen queue and play intent`() {
         val source = QueueSource.Playlist("playlist-1", "title")
         val segments = listOf(
