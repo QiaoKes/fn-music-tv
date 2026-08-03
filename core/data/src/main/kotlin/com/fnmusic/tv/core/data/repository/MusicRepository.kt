@@ -38,7 +38,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 
@@ -48,6 +54,60 @@ private const val MAX_ARTWORK_PIXELS = 16_000_000L
 private const val ARTWORK_VALIDATION_LONG_EDGE = 128
 
 internal data class ArtworkBounds(val width: Int, val height: Int)
+
+internal fun TrackDto.toFavoriteDomain(): Track = toDomain().copy(isFavorite = true)
+
+data class FavoriteLibraryState(
+    val namespace: String? = null,
+    val statuses: Map<String, Boolean> = emptyMap(),
+    val pending: Set<String> = emptySet(),
+    val revision: Long = 0L,
+    val error: AppError? = null,
+)
+
+internal data class FavoriteMutation(
+    val namespace: String,
+    val trackGuid: String,
+    val confirmed: Boolean,
+    val desired: Boolean,
+)
+
+internal fun FavoriteLibraryState.bindNamespace(namespace: String): FavoriteLibraryState =
+    if (this.namespace == namespace) this else FavoriteLibraryState(namespace = namespace)
+
+internal fun FavoriteLibraryState.observe(trackGuid: String, favorite: Boolean): FavoriteLibraryState =
+    if (trackGuid in pending) this else copy(statuses = statuses + (trackGuid to favorite))
+
+internal fun FavoriteLibraryState.beginMutation(
+    trackGuid: String,
+    fallbackFavorite: Boolean,
+): Pair<FavoriteLibraryState, FavoriteMutation> {
+    val boundNamespace = checkNotNull(namespace)
+    val confirmed = statuses[trackGuid] ?: fallbackFavorite
+    val mutation = FavoriteMutation(boundNamespace, trackGuid, confirmed, !confirmed)
+    return copy(
+        statuses = statuses + (trackGuid to mutation.desired),
+        pending = pending + trackGuid,
+        error = null,
+    ) to mutation
+}
+
+internal fun FavoriteLibraryState.complete(mutation: FavoriteMutation): FavoriteLibraryState =
+    if (namespace != mutation.namespace) this else copy(
+        statuses = statuses + (mutation.trackGuid to mutation.desired),
+        pending = pending - mutation.trackGuid,
+        revision = revision + 1L,
+        error = null,
+    )
+
+internal fun FavoriteLibraryState.rollback(
+    mutation: FavoriteMutation,
+    error: AppError? = this.error,
+): FavoriteLibraryState = if (namespace != mutation.namespace) this else copy(
+    statuses = statuses + (mutation.trackGuid to mutation.confirmed),
+    pending = pending - mutation.trackGuid,
+    error = error,
+)
 
 internal fun decodeLyrics(response: LyricListDto): Pair<LyricDocument?, LyricTimeline?> {
     val selected = response.list.firstOrNull { it.guid == response.preferred }
@@ -126,6 +186,9 @@ class MusicRepository internal constructor(
     )
 
     private val responses = SerializedResponseCache(metadataCapacityBytes, repositoryScope)
+    private val favoriteMutationMutex = Mutex()
+    private val _favoriteState = MutableStateFlow(FavoriteLibraryState())
+    val favoriteState: StateFlow<FavoriteLibraryState> = _favoriteState.asStateFlow()
     private val artworkCache = ArtworkCache(
         root = context.cacheDir.resolve("artwork"),
         memoryCapacityBytes = ARTWORK_MEMORY_CAPACITY_BYTES,
@@ -152,7 +215,7 @@ class MusicRepository internal constructor(
         sourceKey = "playlist:$guid",
         page = page,
         fetch = { session.authenticated { it.playlistTracks(guid, page) } },
-    ) { it.toDomain() }
+    ) { it.toDomain() }.also(::observeFavoriteTracks)
 
     suspend fun artists(page: Int) = cachedPage<ArtistDto, Artist>(
         sourceKey = "artists",
@@ -169,7 +232,7 @@ class MusicRepository internal constructor(
         sourceKey = "artist-tracks:$guid",
         page = page,
         fetch = { session.authenticated { it.artistTracks(guid, page) } },
-    ) { it.toDomain() }
+    ) { it.toDomain() }.also(::observeFavoriteTracks)
 
     suspend fun artistAlbums(guid: String, page: Int) = cachedPage<AlbumDto, Album>(
         sourceKey = "artist-albums:$guid",
@@ -192,19 +255,60 @@ class MusicRepository internal constructor(
         sourceKey = "album-tracks:$guid",
         page = page,
         fetch = { session.authenticated { it.albumTracks(guid, page) } },
-    ) { it.toDomain() }
+    ) { it.toDomain() }.also(::observeFavoriteTracks)
 
     suspend fun allTracks(page: Int) = cachedPage<TrackDto, Track>(
         sourceKey = "all-tracks",
         page = page,
         fetch = { session.authenticated { it.allTracks(page) } },
-    ) { it.toDomain() }
+    ) { it.toDomain() }.also(::observeFavoriteTracks)
+
+    suspend fun favoriteTracks(page: Int): Page<Track> {
+        val namespace = session.cacheNamespace()
+        val response = session.authenticated { it.favoriteTracks(page, FAVORITE_PAGE_SIZE) }
+        val result = Page(
+            items = response.list.map(TrackDto::toFavoriteDomain),
+            page = page,
+            pageSize = FAVORITE_PAGE_SIZE,
+            total = response.total,
+            sort = FAVORITE_SORT,
+        )
+        observeFavoriteTracks(result, namespace)
+        return result
+    }
+
+    suspend fun toggleFavorite(trackGuid: String, fallbackFavorite: Boolean): Result<Boolean> =
+        favoriteMutationMutex.withLock {
+            val namespace = session.cacheNamespace()
+            bindFavoriteNamespace(namespace)
+            val (optimisticState, mutation) = _favoriteState.value.beginMutation(trackGuid, fallbackFavorite)
+            _favoriteState.value = optimisticState
+            try {
+                session.authenticated { api ->
+                    if (mutation.desired) api.createFavorite(trackGuid) else api.deleteFavorite(trackGuid)
+                }
+                _favoriteState.update { it.complete(mutation) }
+                Result.success(mutation.desired)
+            } catch (cause: CancellationException) {
+                _favoriteState.update { it.rollback(mutation) }
+                throw cause
+            } catch (cause: Exception) {
+                val error = (cause as? AppException)?.error ?: AppError.Unknown(cause.message)
+                _favoriteState.update { it.rollback(mutation, error) }
+                Result.failure(cause)
+            }
+        }
+
+    fun clearFavoriteState() {
+        _favoriteState.value = FavoriteLibraryState()
+    }
 
     suspend fun queuePage(source: QueueSource, page: Int): Page<Track> = when (source) {
         is QueueSource.Playlist -> playlistTracks(source.guid, page)
         is QueueSource.Artist -> artistTracks(source.guid, page)
         is QueueSource.Album -> albumTracks(source.guid, page)
         is QueueSource.LibraryAllTracks -> allTracks(page)
+        is QueueSource.Favorites -> favoriteTracks(page)
     }
 
     suspend fun sharedLibraries(): List<SharedLibrary> = cachedIndex<List<SharedLibraryDto>, List<SharedLibrary>>(
@@ -215,7 +319,7 @@ class MusicRepository internal constructor(
     suspend fun trackMetadata(trackGuid: String): Track = cachedIndex<TrackMetadataDto, Track>(
         key = "track-metadata:$trackGuid",
         fetch = { session.authenticated { it.metadata(trackGuid) } },
-    ) { it.toDomain() }
+    ) { it.toDomain() }.also(::observeFavoriteTrack)
 
     suspend fun currentTrackMetadata(trackGuid: String): CurrentResourceResult<Track> = currentResource {
         withCurrentResourceRetry { trackMetadata(trackGuid) }
@@ -257,15 +361,24 @@ class MusicRepository internal constructor(
         document?.takeIf { it.content.isNotBlank() }?.let { CurrentLyrics(it, timeline) }
     }
 
-    suspend fun startRoam(): RoamWindow? = session.authenticated { it.roamStart(session.deviceId) }?.let {
-        RoamWindow(null, it.current.toDomain(), it.next?.toDomain())
+    suspend fun startRoam(): RoamWindow? {
+        val namespace = session.cacheNamespace()
+        return session.authenticated { it.roamStart(session.deviceId) }?.let {
+            RoamWindow(null, it.current.toDomain(), it.next?.toDomain())
+        }.also { observeFavoriteWindow(it, namespace) }
     }
 
-    suspend fun nextRoam(roamId: String): RoamWindow =
-        session.authenticated { it.roamNext(session.deviceId, roamId).toDomain() }
+    suspend fun nextRoam(roamId: String): RoamWindow {
+        val namespace = session.cacheNamespace()
+        return session.authenticated { it.roamNext(session.deviceId, roamId).toDomain() }
+            .also { observeFavoriteWindow(it, namespace) }
+    }
 
-    suspend fun previousRoam(roamId: String): RoamWindow =
-        session.authenticated { it.roamPrevious(session.deviceId, roamId).toDomain() }
+    suspend fun previousRoam(roamId: String): RoamWindow {
+        val namespace = session.cacheNamespace()
+        return session.authenticated { it.roamPrevious(session.deviceId, roamId).toDomain() }
+            .also { observeFavoriteWindow(it, namespace) }
+    }
 
     suspend fun artwork(coverId: String, variant: CoverVariant): ByteArray? = try {
         loadArtwork(coverId, variant)
@@ -307,6 +420,37 @@ class MusicRepository internal constructor(
     )
 
     suspend fun applyArtworkBudget() = artworkCache.applyBudget()
+
+    private fun observeFavoriteTracks(page: Page<Track>) {
+        page.items.forEach(::observeFavoriteTrack)
+    }
+
+    private fun observeFavoriteTracks(page: Page<Track>, namespace: String) {
+        page.items.forEach { observeFavoriteTrack(it, namespace) }
+    }
+
+    private fun observeFavoriteWindow(window: RoamWindow?, namespace: String) {
+        window ?: return
+        listOfNotNull(window.previous, window.current, window.next)
+            .forEach { observeFavoriteTrack(it.track, namespace) }
+    }
+
+    private fun observeFavoriteTrack(track: Track) {
+        val namespace = runCatching(session::cacheNamespace).getOrNull() ?: return
+        observeFavoriteTrack(track, namespace)
+    }
+
+    private fun observeFavoriteTrack(track: Track, namespace: String) {
+        if (runCatching(session::cacheNamespace).getOrNull() != namespace) return
+        bindFavoriteNamespace(namespace)
+        _favoriteState.update { it.observe(track.guid.value, track.isFavorite) }
+    }
+
+    private fun bindFavoriteNamespace(namespace: String) {
+        if (_favoriteState.value.namespace != namespace) {
+            _favoriteState.update { it.bindNamespace(namespace) }
+        }
+    }
 
     private suspend fun loadArtwork(coverId: String, variant: CoverVariant): ByteArray? {
         val namespace = session.cacheNamespace()
@@ -463,5 +607,7 @@ class MusicRepository internal constructor(
         const val METADATA_CAPACITY_BYTES = 8 * 1024 * 1024
         const val ARTWORK_MEMORY_CAPACITY_BYTES = 24 * 1024 * 1024
         const val PAGE_SIZE = 50
+        const val FAVORITE_PAGE_SIZE = 50
+        const val FAVORITE_SORT = "favoriteAt,desc"
     }
 }

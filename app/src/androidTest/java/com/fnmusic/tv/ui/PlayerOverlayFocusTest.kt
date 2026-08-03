@@ -1,6 +1,7 @@
 package com.fnmusic.tv.ui
 
 import android.graphics.Bitmap
+import android.os.ParcelFileDescriptor
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -65,6 +66,7 @@ class PlayerOverlayFocusTest {
                     canRetry = false,
                     onRetry = {},
                     onSelect = selectedQueueIndex::set,
+                    onRemove = {},
                     onInteraction = {},
                 )
             }
@@ -95,6 +97,7 @@ class PlayerOverlayFocusTest {
                     canRetry = false,
                     onRetry = {},
                     onSelect = {},
+                    onRemove = {},
                     onInteraction = {},
                 )
             }
@@ -146,6 +149,7 @@ class PlayerOverlayFocusTest {
                     canRetry = false,
                     onRetry = {},
                     onSelect = {},
+                    onRemove = {},
                     onInteraction = {},
                 )
             }
@@ -158,6 +162,35 @@ class PlayerOverlayFocusTest {
         first.assertIsDisplayed()
     }
 
+    @Test fun queueRowTraversesToDeleteAndRemovesItsOccurrenceIndex() {
+        val removedQueueIndex = AtomicInteger(-1)
+        composeRule.setContent {
+            FnMusicTheme {
+                PlaybackQueueOverlay(
+                    items = listOf(
+                        PlaybackQueueItem("current", "Current", "Artist", queueIndex = 37, isCurrent = true),
+                    ),
+                    loadedCount = 1,
+                    queueError = null,
+                    canRetry = false,
+                    onRetry = {},
+                    onSelect = {},
+                    onRemove = removedQueueIndex::set,
+                    onInteraction = {},
+                )
+            }
+        }
+
+        val row = composeRule.onNodeWithContentDescription("1. Current Artist，正在播放")
+        val delete = composeRule.onNodeWithContentDescription("从播放队列删除 Current")
+        row.assertIsFocused().performKeyInput { pressKey(Key.DirectionRight) }
+        delete.assertIsFocused().performKeyInput { pressKey(Key.DirectionLeft) }
+        row.assertIsFocused().performKeyInput { pressKey(Key.DirectionRight) }
+        delete.assertIsFocused().performKeyInput { pressKey(Key.DirectionCenter) }
+
+        composeRule.runOnIdle { assertEquals(37, removedQueueIndex.get()) }
+    }
+
     @Test fun normalControlsTraverseAllActionsAndCycleEveryMode() {
         val modeCycles = AtomicInteger(0)
         renderControls(roaming = false, modeCycles = modeCycles)
@@ -167,6 +200,7 @@ class PlayerOverlayFocusTest {
         val next = composeRule.onNodeWithContentDescription("下一首")
         val queue = composeRule.onNodeWithContentDescription("播放队列，共 5 首")
         val listRepeat = composeRule.onNodeWithContentDescription("播放模式：列表循环")
+        val favorite = composeRule.onNodeWithContentDescription("收藏当前歌曲")
 
         PlayMode.entries.forEach { mode ->
             composeRule.onNodeWithText(playModeLabel(mode)).assertDoesNotExist()
@@ -183,6 +217,9 @@ class PlayerOverlayFocusTest {
         next.assertIsFocused().performKeyInput { pressKey(Key.DirectionLeft) }
         play.assertIsFocused().performKeyInput { pressKey(Key.DirectionLeft) }
         previous.assertIsFocused().performKeyInput { pressKey(Key.DirectionLeft) }
+        listRepeat.assertIsFocused().performKeyInput { pressKey(Key.DirectionLeft) }
+        favorite.assertIsFocused().performKeyInput { pressKey(Key.DirectionRight) }
+        listRepeat.assertIsFocused()
 
         assertModeCycle("列表循环", "随机播放")
         assertModeCycle("随机播放", "单曲循环")
@@ -203,8 +240,14 @@ class PlayerOverlayFocusTest {
         composeRule.onNodeWithText("队列 5").assertDoesNotExist()
 
         val play = composeRule.onNodeWithContentDescription("播放")
+        val previous = composeRule.onNodeWithContentDescription("上一首")
+        val favorite = composeRule.onNodeWithContentDescription("收藏当前歌曲")
         val next = composeRule.onNodeWithContentDescription("下一首")
         val exit = composeRule.onNodeWithContentDescription("退出漫游")
+        play.assertIsFocused().performKeyInput { pressKey(Key.DirectionLeft) }
+        previous.assertIsFocused().performKeyInput { pressKey(Key.DirectionLeft) }
+        favorite.assertIsFocused().performKeyInput { pressKey(Key.DirectionRight) }
+        previous.assertIsFocused().performKeyInput { pressKey(Key.DirectionRight) }
         play.assertIsFocused().performKeyInput { pressKey(Key.DirectionRight) }
         next.assertIsFocused().performKeyInput { pressKey(Key.DirectionRight) }
         exit.assertIsFocused().performKeyInput { pressKey(Key.DirectionCenter) }
@@ -281,6 +324,7 @@ class PlayerOverlayFocusTest {
                     canRetry = false,
                     onRetry = {},
                     onSelect = {},
+                    onRemove = {},
                     onInteraction = {},
                 )
             }
@@ -436,6 +480,7 @@ class PlayerOverlayFocusTest {
                         canRetry = false,
                         onRetry = {},
                         onSelect = {},
+                        onRemove = {},
                         onInteraction = {},
                     )
                 } else {
@@ -455,6 +500,26 @@ class PlayerOverlayFocusTest {
         saveEvidence("player-controls")
         composeRule.runOnIdle { showQueue.value = true }
         saveEvidence("player-queue")
+    }
+
+    @Test fun selectedFavoriteKeepsItsStateWhileFocused() {
+        composeRule.setContent {
+            FnMusicTheme {
+                PlayerControlHarness(
+                    roaming = false,
+                    initialFocus = ControlInitialFocus.Favorite,
+                    favorite = true,
+                    onCycleMode = {},
+                    onExitRoam = {},
+                    onInteraction = {},
+                )
+            }
+        }
+
+        val favorite = composeRule.onNodeWithContentDescription("取消收藏当前歌曲")
+        favorite.assertIsFocused()
+        assertTrue(favorite.fetchSemanticsNode().config[SemanticsProperties.Selected])
+        saveEvidence("player-favorite-selected")
     }
 
     private fun assertModeCycle(from: String, to: String) {
@@ -492,6 +557,12 @@ class PlayerOverlayFocusTest {
         FileOutputStream(File(directory, "$name-${bitmap.width}x${bitmap.height}.png")).use { output ->
             assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
         }
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        ParcelFileDescriptor.AutoCloseInputStream(
+            instrumentation.uiAutomation.executeShellCommand(
+                "screencap -p /sdcard/$name-${bitmap.width}x${bitmap.height}.png",
+            ),
+        ).use { it.readBytes() }
     }
 
     private fun saveDisplayEvidence(
@@ -550,7 +621,7 @@ private fun lowestLightPixelY(bitmap: Bitmap, bounds: androidx.compose.ui.geomet
     return null
 }
 
-private enum class ControlInitialFocus { Play, Mode }
+private enum class ControlInitialFocus { Play, Mode, Favorite }
 
 @Composable
 private fun PlayerBackKeyHarness() {
@@ -579,6 +650,7 @@ private fun PlayerBackKeyHarness() {
 private fun PlayerControlHarness(
     roaming: Boolean,
     initialFocus: ControlInitialFocus = ControlInitialFocus.Play,
+    favorite: Boolean = false,
     onCycleMode: () -> Unit,
     onExitRoam: () -> Unit,
     onInteraction: () -> Unit,
@@ -589,6 +661,7 @@ private fun PlayerControlHarness(
     val previousFocus = remember { FocusRequester() }
     val playFocus = remember { FocusRequester() }
     val nextFocus = remember { FocusRequester() }
+    val favoriteFocus = remember { FocusRequester() }
     val modeFocus = remember { FocusRequester() }
     val queueFocus = remember { FocusRequester() }
     val exitRoamFocus = remember { FocusRequester() }
@@ -596,7 +669,11 @@ private fun PlayerControlHarness(
     var playMode by remember { mutableStateOf(PlayMode.ListRepeat) }
     LaunchedEffect(Unit) {
         yield()
-        if (initialFocus == ControlInitialFocus.Mode) modeFocus.requestFocus() else playFocus.requestFocus()
+        when (initialFocus) {
+            ControlInitialFocus.Play -> playFocus.requestFocus()
+            ControlInitialFocus.Mode -> modeFocus.requestFocus()
+            ControlInitialFocus.Favorite -> favoriteFocus.requestFocus()
+        }
     }
     Box(Modifier.fillMaxSize()) {
         PlayerControlOverlay(
@@ -610,18 +687,22 @@ private fun PlayerControlHarness(
             previousFocus = previousFocus,
             playFocus = playFocus,
             nextFocus = nextFocus,
+            favoriteFocus = favoriteFocus,
             modeFocus = modeFocus,
             queueFocus = queueFocus,
             exitRoamFocus = exitRoamFocus,
             statusRetryFocus = statusRetryFocus,
             statusRetryAvailable = false,
             playMode = playMode,
+            favorite = favorite,
+            favoriteEnabled = true,
             queueCount = 5,
             onInteraction = onInteraction,
             onSeek = onSeek,
             onPrevious = {},
             onPlayPause = onPlayPause,
             onNext = {},
+            onToggleFavorite = {},
             onCyclePlayMode = {
                 playMode = playMode.next()
                 onCycleMode()
@@ -642,6 +723,7 @@ private fun PlayerRetryHarness(
     val previousFocus = remember { FocusRequester() }
     val playFocus = remember { FocusRequester() }
     val nextFocus = remember { FocusRequester() }
+    val favoriteFocus = remember { FocusRequester() }
     val modeFocus = remember { FocusRequester() }
     val queueFocus = remember { FocusRequester() }
     val exitRoamFocus = remember { FocusRequester() }
@@ -674,18 +756,22 @@ private fun PlayerRetryHarness(
             previousFocus = previousFocus,
             playFocus = playFocus,
             nextFocus = nextFocus,
+            favoriteFocus = favoriteFocus,
             modeFocus = modeFocus,
             queueFocus = queueFocus,
             exitRoamFocus = exitRoamFocus,
             statusRetryFocus = retryFocus,
             statusRetryAvailable = true,
             playMode = PlayMode.ListRepeat,
+            favorite = false,
+            favoriteEnabled = true,
             queueCount = 5,
             onInteraction = onInteraction,
             onSeek = {},
             onPrevious = {},
             onPlayPause = {},
             onNext = {},
+            onToggleFavorite = {},
             onCyclePlayMode = {},
             onOpenQueue = {},
             onExitRoam = {},

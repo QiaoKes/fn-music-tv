@@ -96,7 +96,7 @@ fun retryCurrentPresentation(): Boolean
 fun refreshCurrentPresentation(): Boolean
 ```
 
-The player owns stable requesters for `progress`, `previous`, `playPause`, `next`, `mode`,
+The player owns stable requesters for `progress`, `favorite`, `previous`, `playPause`, `next`, `mode`,
 `queue`, `exitRoam`, and `statusRetry`. Its normal side actions are icon-only and expose their
 names through semantics:
 
@@ -105,6 +105,8 @@ PlayerControlOverlay(
     roaming: Boolean,
     playMode: PlayMode,
     queueCount: Int,
+    favorite: Boolean,
+    favoriteFocus: FocusRequester,
     modeFocus: FocusRequester,
     queueFocus: FocusRequester,
     // transport/progress/retry requesters and callbacks omitted
@@ -124,11 +126,17 @@ PlaybackQueueOverlay(
     canRetry: Boolean,
     onRetry: () -> Unit,
     onSelect: (Int) -> Unit,
+    onRemove: (Int) -> Unit,
     onInteraction: () -> Unit,
 )
 
 fun initialQueueFocusIndex(items: List<PlaybackQueueItem>): Int
 fun queueFocusTargetKey(
+    requesterKeys: List<String>,
+    currentIndex: Int,
+    previouslyFocusedKey: String?,
+): String?
+fun queueRelocationFocusTargetKey(
     requesterKeys: List<String>,
     currentIndex: Int,
     previouslyFocusedKey: String?,
@@ -291,8 +299,13 @@ interface AuthenticatedAppActions {
   Material buttons retain their normal click handling. Tapping progress seeks to the proportional
   timeline position through the same bounded relative seek callback used by D-pad input.
 - Visible normal controls have an explicit left/right graph:
-  mode -> previous -> play/pause -> next -> queue. Disabled previous/next controls are skipped and
+  favorite -> mode -> previous -> play/pause -> next -> queue. The heart remains present during
+  roam, where it precedes the available transports. Disabled previous/next controls are skipped and
   are not focus targets. Up routes to progress; progress Left/Right seeks exactly 10 seconds.
+- The heart is outline when the current server projection is not favorite and filled coral when it
+  is favorite. Its semantics are exactly `收藏当前歌曲` / `取消收藏当前歌曲`. While a mutation is
+  pending it cannot start another request; failure restores the prior server-confirmed visual and
+  shows retryable feedback.
 - Normal playback supports `ListRepeat`, `Shuffle`, `SingleRepeat`, and `Sequence`. The mode button
   cycles in that order and immediately updates its icon and content description.
 - Mode and queue buttons use familiar music glyphs only; do not render labels such as `列表循环`
@@ -306,6 +319,9 @@ interface AuthenticatedAppActions {
 - The queue is a right-side overlay on the player, not a route. It shows `loadedCount`, continuous
   row numbers, title, artist, and the current marker. Opening scrolls to and focuses the current
   row; selecting a row calls `onSelect(item.queueIndex)` and keeps focus in the overlay.
+- Every normal queue row has an icon-only trailing delete target that calls
+  `onRemove(item.queueIndex)`. Right moves row -> delete, Left moves delete -> row, and both outer
+  horizontal edges cancel focus escape. Deletion is immediate and occurrence-index based.
 - Fixed-height text controls do not rely on TV Material's default content padding for Chinese font
   centering. The roam exit label and queue retry label use a full-size centered `Box`. Queue rows use
   zero button content padding plus a full-size vertically centered `Row`; the title/artist column has
@@ -347,6 +363,10 @@ interface AuthenticatedAppActions {
   retained list. A successful initial load is not repeated on route re-entry. An empty failed list
   may retry on the next entry. The store is keyed by the signed-in user and must be discarded when
   the account changes.
+- Home's first content row is a fixed `Row` containing only Random Roam and Favorites. Playlists
+  begin in the second-row `LazyRow`, followed by All Playlists. The Favorites route reuses the
+  retained paged track collection under `favorites:tracks`; a successful favorite mutation revision
+  refreshes that route so an unfavorited track cannot remain visible after returning from player.
 - Saveable and retained state have different ownership. Session summaries shared by Home/My/full
   lists remain until the account changes. Playlist, artist, and album detail data belongs to its
   dynamic route key. After a route key is completely absent from the new back stack and the new
@@ -358,6 +378,10 @@ interface AuthenticatedAppActions {
   page return does not flash the placeholder. Artist/album lockup focus may prefetch the exact Grid
   entry for the destination detail page, but the Compact list image must never be displayed as a
   temporary Grid image; this avoids a visible low-resolution-to-high-resolution sharpening step.
+- Missing and failed remote artwork uses the same media-specific fallback on cards and details.
+  Favorites detail reuses the Home Favorites artwork; artists use the same circular first-character
+  avatar at both sizes; tracks, playlists, and albums use the shared centered first-character
+  placeholder. Do not restore the retired generic record illustration on any library surface.
 - Home/My player re-entry is a compact music pill with fixed measured bounds, cover/fallback,
   playing state, ellipsized title/artist, and a trailing cue. Focus may change border, surface, and
   scale without reflow. Its compact status row disables Android font padding, while the bold title
@@ -405,6 +429,8 @@ interface AuthenticatedAppActions {
 | Tap while player controls are hidden | Reveal controls; do not toggle playback or seek |
 | Tap the visible progress track | Seek to the tapped proportional position and reset the hide timer |
 | Normal mode button is activated | Cycle ListRepeat -> Shuffle -> SingleRepeat -> Sequence -> ListRepeat |
+| Player heart is activated | Issue one server favorite create/delete request and update the filled state |
+| Favorite request fails | Restore the prior server-confirmed heart and expose retryable feedback |
 | Mode or queue action is rendered | Show a familiar icon only; retain the exact content description |
 | Player enters roam | Remove normal mode and queue nodes from composition and the focus graph |
 | Exit roam with no frozen normal queue | Stop playback and return Home |
@@ -412,6 +438,8 @@ interface AuthenticatedAppActions {
 | Focused queue row survives a mutation | Preserve focus by occurrence-safe row key |
 | Focused queue row is deleted | Focus the new current row, otherwise the first row |
 | Queue row is selected | Play `queueIndex`, update current marker, keep overlay focus valid |
+| Queue row delete is activated | Delete that exact occurrence and relocate focus after recomposition |
+| Final queue row is deleted | Close the empty overlay, restore queue-action focus, and stop playback |
 | Roam label or queue text is measured | Its content group is vertically centered inside the fixed button/row bounds |
 | Back with queue / controls visible | Close queue first; otherwise hide controls; do not leave player early |
 | Async route first load completes | Focus its first actionable content item exactly once |
@@ -420,9 +448,13 @@ interface AuthenticatedAppActions {
 | Dynamic detail key fully leaves the back stack | Remove its saveable state and detail-owned retained entries after composition |
 | Session summary route leaves the back stack | Remove route-local saveable state but keep shared retained summary data |
 | Return to Home/My/All with successful retained summary data | Render retained entries on the first frame; do not request page 1 again |
+| Home content is rendered | Random Roam and Favorites are the first row; playlists start on row two |
+| Favorites becomes empty | Show `还没有收藏歌曲` with no stale retained rows |
 | Exact artwork bitmap is already decoded | Render it on the first composition without an empty/placeholder frame |
 | Detail Grid artwork is still loading | Keep the fixed deterministic placeholder; never substitute the Compact list bitmap |
 | Artist/album lockup receives focus | Prefetch its exact Grid artwork without changing the displayed Compact artwork |
+| Favorites or an artist has no artwork | Reuse the Favorites feature art or circular artist initial consistently on card and detail |
+| Track/playlist/album artwork is absent or fails | Render the shared centered initial placeholder inside the same fixed bounds |
 | Back at My root | Replace My with Home; do not background the task |
 | First Back at Home | Show confirmation only; playback and task remain active |
 | Second Back within 2,000 ms | Save paused state, stop playback/service, remove the task, and exit without clearing account data |
@@ -440,6 +472,8 @@ interface AuthenticatedAppActions {
   while the Home/My shared summaries stay warm for the signed-in session.
 - Good: focus an album card, keep its Compact image unchanged, then open detail and immediately use
   the independently prefetched Grid bitmap when available.
+- Good: open an artist with no cover and keep the same circular first-character identity used by
+  its My card; open Favorites and reuse the Home Favorites heart artwork in the detail header.
 - Good: tap Account, type with a phone IME, tap the center of a three-minute progress track from
   12 seconds, and request a relative seek of about 78 seconds without changing TV focus contracts.
 - Good: render the same centered login form on TV and a smaller landscape device; the TV shows the
@@ -458,8 +492,12 @@ interface AuthenticatedAppActions {
   button, then press Down to reach play/pause.
 - Good: traverse icon-only mode -> previous -> play/pause -> next -> queue using D-pad; every icon
   has a stable content description and activating mode resets the control-hide timer.
+- Good: traverse favorite -> mode in normal playback, toggle a filled heart, enter roam, and still
+  reach the same heart before the available transports.
 - Good: focus queue row C, append/reindex rows while C remains, and retain C; then delete C and move
   focus to the new current row after it is composed.
+- Good: Home always renders Random Roam and Favorites together above a separately scrolling playlist
+  row; entering Favorites restores the retained track position after returning from player.
 - Base: no current queue row focuses the first row; an empty queue owns no row requester.
 - Base: roam has no normal mode/queue nodes and skips a disabled previous action.
 - Base: My Back returns Home; Home Back once only shows the confirmation while music continues.
@@ -479,9 +517,15 @@ interface AuthenticatedAppActions {
   requester detached from the focus tree.
 - Bad: drawing `列表循环` and `队列 5` as side-button text; it wastes TV control width and makes
   familiar actions harder to scan.
+- Bad: hiding the heart in roam, persisting favorite state only on-device, or allowing two favorite
+  requests for the same Center press.
+- Bad: putting playlists in the same first-row lazy list as Random Roam/Favorites, or deleting a
+  queue row by media ID when occurrences are addressed by distinct queue indices.
 - Bad: requesting first focus before data is composed, or always requesting index zero after Back.
 - Bad: drawing an empty solid rectangle while artwork loads, or stretching a cached Compact bitmap
   into detail before swapping to Grid.
+- Bad: keeping a legacy record fallback in a detail screen while the corresponding card uses a
+  feature image or first-character avatar; missing artwork must not change visual identity by route.
 - Bad: showing the IME on center-key down without delay and letting the matching key-up enter the
   keyboard's initially focused character.
 - Bad: relying on a main-pass `detectTapGestures` outside `BasicTextField`; its own pointer input can
@@ -532,6 +576,9 @@ interface AuthenticatedAppActions {
 - Artwork continuity tests: exact decoded hits are available synchronously, Compact and Grid stay
   isolated, focused artist/album items request Grid prefetch, and a miss retains stable bounds and
   placeholder content.
+- Library fallback screenshot checks: Favorites detail matches its Home artwork, an artist without
+  a cover shows the same initial on card and detail, and source search finds no retired record
+  fallback implementation or call site.
 - Artwork ambience tests: a colorful minority swatch beats a large neutral backdrop, black margins
   do not defeat a valid color, every mapped surface stays dark, and missing artwork returns the one
   fixed brand neutral.
@@ -543,10 +590,16 @@ interface AuthenticatedAppActions {
 - Player device test: assert the normal icon-only graph reaches all transports, mode, and queue;
   no visible mode/queue labels exist; content descriptions identify all four modes and the queue;
   four activations complete the mode cycle.
+- Favorite device test: assert outline/filled semantics, one mutation per activation, rollback on
+  failure, and heart reachability in both normal and roam graphs.
 - Retry device test: navigate play/pause -> progress -> retry, activate it, assert the retry node is
   removed and progress is focused, then assert Down restores play/pause.
 - Queue device test: opening focuses current, selection uses the item's real `queueIndex`, a retained
-  row keeps focus across mutation, and deleting the focused row moves focus to the new current row.
+  row keeps focus across mutation, row/delete Left/Right stays local, and deleting the focused row
+  moves focus to the new current row. Deleting the final row closes the overlay and restores the
+  queue action.
+- Home/Favorites device test: assert the fixed Random Roam/Favorites first row, playlist-only second
+  row, Favorites empty/list/error states, retained scroll, and refresh after an unfavorite revision.
 - Queue/roam bounds test: compare unmerged text bounds with the owning semantics bounds and assert
   the roam label center and queue title/artist group center match their fixed-height containers.
 - Back device test: assert queue -> controls -> player ordering, My -> Home, one Home Back only shows
@@ -674,6 +727,18 @@ PlayerSideActionButton(
 ```
 
 ```kotlin
+// Wrong: a label-shaped control and local-only preference represent a cross-device favorite.
+Button(onClick = { localFavorites += mediaId }) { Text("收藏") }
+
+// Correct: use one icon action and drive it from the account-scoped server projection.
+PlayerSideActionButton(
+    glyph = if (favorite) HeartFilled else HeartOutline,
+    description = if (favorite) "取消收藏当前歌曲" else "收藏当前歌曲",
+    onClick = onToggleFavorite,
+)
+```
+
+```kotlin
 // Wrong: device branches create two login surfaces and text pills fake checkbox/icon controls.
 if (isPhone) PhoneLogin() else TvLogin()
 Button(onClick = onRemember) { Text("ON 保持登录") }
@@ -732,6 +797,17 @@ RemoteArtwork(coverId, CoverVariant.Grid, fallback = cachedCompact)
 // Correct: prefetch Grid on focus and keep a stable placeholder until that exact image is ready.
 onFocusChanged { if (it.isFocused) artworkBitmapCache.prefetch(coverId, CoverVariant.Grid) }
 RemoteArtwork(coverId, CoverVariant.Grid, placeholder = stableArtworkPlaceholder)
+```
+
+```kotlin
+// Wrong: each route invents an unrelated fallback for the same media identity.
+DetailArtwork(placeholder = LegacyRecordArtwork())
+
+// Correct: cards, load failures, and details select from the same media-specific fallback set.
+CollectionArtwork(
+    coverId = coverId,
+    fallback = CollectionArtworkFallback.Artist,
+)
 ```
 
 ```kotlin
