@@ -216,6 +216,7 @@ internal fun AuthenticatedApp(
             playback,
             onMy = { root(LibraryRoute.My) },
             onPlaylist = { open(LibraryRoute.PlaylistDetail(it)) },
+            onFavorites = { open(LibraryRoute.Favorites) },
             onAll = { open(LibraryRoute.AllPlaylists) },
             onPlayer = { open(LibraryRoute.Player(null)) },
         )
@@ -260,6 +261,23 @@ internal fun AuthenticatedApp(
                 open(LibraryRoute.Player(null))
             },
         )
+        LibraryRoute.Favorites -> {
+            val favoriteState by container.musicRepository.favoriteState.collectAsStateWithLifecycle()
+            TrackCollection(
+                container = container,
+                stateKey = "favorites:tracks",
+                title = "收藏",
+                loader = container.musicRepository::favoriteTracks,
+                queueSource = QueueSource::Favorites,
+                onPlayer = { open(LibraryRoute.Player(it)) },
+                detailHeader = TrackDetailHeader(
+                    kind = "收藏",
+                    onBack = back,
+                ),
+                contentRevision = favoriteState.revision,
+                emptyMessage = "还没有收藏歌曲",
+            )
+        }
         is LibraryRoute.ArtistDetail -> ArtistDetail(
             container = container,
             artist = route.artist,
@@ -467,6 +485,7 @@ private fun BrowseHome(
     playback: PlaybackUiState,
     onMy: () -> Unit,
     onPlaylist: (Playlist) -> Unit,
+    onFavorites: () -> Unit,
     onAll: () -> Unit,
     onPlayer: () -> Unit,
 ) {
@@ -480,6 +499,9 @@ private fun BrowseHome(
     var focusedKey by rememberSaveable { mutableStateOf<String?>(null) }
     var initialFocusRequested by remember { mutableStateOf(false) }
     val contentFocus = remember { FocusRequester() }
+    val roamFocus = remember { FocusRequester() }
+    val favoritesFocus = remember { FocusRequester() }
+    val playlistRowFocus = remember { FocusRequester() }
     val rowState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
@@ -487,11 +509,10 @@ private fun BrowseHome(
     }
     LaunchedEffect(playlistsLoaded, playback.hasMedia, focusedKey) {
         if (initialFocusRequested) return@LaunchedEffect
-        val restoringNowPlaying = playback.hasMedia && focusedKey == "now-playing"
-        if (!playlistsLoaded && !restoringNowPlaying) return@LaunchedEffect
         val availableKeys = buildList {
+            add("roam")
+            add("favorites")
             if (playlistsLoaded) {
-                add("roam")
                 addAll(playlists.take(12).map { "playlist:${it.guid.value}" })
                 add("all-playlists")
             }
@@ -518,42 +539,66 @@ private fun BrowseHome(
                 .then(if (focusedKey == "now-playing") Modifier.focusRequester(contentFocus) else Modifier)
                 .onFocusChanged { if (it.isFocused) focusedKey = "now-playing" },
         )
-        Spacer(Modifier.height(38.dp))
-        Text("听点什么", fontSize = 42.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(22.dp))
-        LazyRow(state = rowState, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-            item {
-                PlaylistTile(
-                    "随机漫游",
-                    "从曲库里遇见下一首",
-                    null,
-                    FnColors.Teal,
-                    showArtworkInitial = false,
-                    modifier = Modifier
-                        .then(if (focusedKey == "roam") Modifier.focusRequester(contentFocus) else Modifier)
-                        .onFocusChanged { if (it.isFocused) focusedKey = "roam" },
-                ) {
-                    if (playback.queueKind == QueueKind.Roam) {
-                        onPlayer()
-                        return@PlaylistTile
+        Spacer(Modifier.height(18.dp))
+        Text("听点什么", fontSize = 34.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+            PlaylistTile(
+                "随机漫游",
+                "从曲库里遇见下一首",
+                null,
+                FnColors.Teal,
+                showArtworkInitial = false,
+                modifier = Modifier
+                    .focusProperties {
+                        right = favoritesFocus
+                        down = playlistRowFocus
                     }
-                    if (roamActionRunning || playback.roamBusy) return@PlaylistTile
-                    roamActionRunning = true
-                    scope.launch {
-                        try {
-                            if (container.playbackController.startRoam()) {
-                                actionError = null
-                                onPlayer()
-                            } else {
-                                actionError = container.playbackController.state.value.roamError ?: AppError.Unknown()
-                            }
-                        } finally {
-                            roamActionRunning = false
+                    .focusRequester(roamFocus)
+                    .then(if (focusedKey == "roam") Modifier.focusRequester(contentFocus) else Modifier)
+                    .onFocusChanged { if (it.isFocused) focusedKey = "roam" },
+            ) {
+                if (playback.queueKind == QueueKind.Roam) {
+                    onPlayer()
+                    return@PlaylistTile
+                }
+                if (roamActionRunning || playback.roamBusy) return@PlaylistTile
+                roamActionRunning = true
+                scope.launch {
+                    try {
+                        if (container.playbackController.startRoam()) {
+                            actionError = null
+                            onPlayer()
+                        } else {
+                            actionError = container.playbackController.state.value.roamError ?: AppError.Unknown()
                         }
+                    } finally {
+                        roamActionRunning = false
                     }
                 }
             }
-            items(playlists.take(12), key = { it.guid.value }) { playlist ->
+            PlaylistTile(
+                "收藏",
+                "跨设备同步",
+                null,
+                FnColors.Coral,
+                showArtworkInitial = false,
+                artworkGlyph = PlaylistTileGlyph.Heart,
+                modifier = Modifier
+                    .focusProperties {
+                        left = roamFocus
+                        right = FocusRequester.Cancel
+                        down = playlistRowFocus
+                    }
+                    .focusRequester(favoritesFocus)
+                    .then(if (focusedKey == "favorites") Modifier.focusRequester(contentFocus) else Modifier)
+                    .onFocusChanged { if (it.isFocused) focusedKey = "favorites" },
+                onClick = onFavorites,
+            )
+        }
+        Spacer(Modifier.height(14.dp))
+        LazyRow(state = rowState, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+            itemsIndexed(playlists.take(12), key = { _, playlist -> playlist.guid.value }) { index, playlist ->
                 val key = "playlist:${playlist.guid.value}"
                 PlaylistTile(
                     playlist.name,
@@ -561,6 +606,8 @@ private fun BrowseHome(
                     playlist.coverId,
                     FnColors.Coral,
                     modifier = Modifier
+                        .focusProperties { up = if (index == 0) roamFocus else favoritesFocus }
+                        .then(if (index == 0) Modifier.focusRequester(playlistRowFocus) else Modifier)
                         .then(if (focusedKey == key) Modifier.focusRequester(contentFocus) else Modifier)
                         .onFocusChanged { if (it.isFocused) focusedKey = key },
                 ) { onPlaylist(playlist) }
@@ -573,6 +620,8 @@ private fun BrowseHome(
                     FnColors.Muted,
                     showArtworkInitial = false,
                     modifier = Modifier
+                        .focusProperties { up = favoritesFocus }
+                        .then(if (playlists.isEmpty()) Modifier.focusRequester(playlistRowFocus) else Modifier)
                         .then(if (focusedKey == "all-playlists") Modifier.focusRequester(contentFocus) else Modifier)
                         .onFocusChanged { if (it.isFocused) focusedKey = "all-playlists" },
                     onClick = onAll,
@@ -1196,6 +1245,8 @@ private fun TrackCollection(
     primaryAction: TrackCollectionPrimaryAction = TrackCollectionPrimaryAction.PlayAll,
     showTrackList: Boolean = true,
     alternateContent: @Composable () -> Unit = {},
+    contentRevision: Long = 0L,
+    emptyMessage: String = "暂无歌曲",
 ) {
     val retainedStore = LocalLibraryRetainedState.current
     val retained = retainedStore.tracks(stateKey)
@@ -1214,6 +1265,7 @@ private fun TrackCollection(
     val listState = rememberLazyListState()
     val actionScope = rememberCoroutineScope()
     var primaryActionRunning by remember(stateKey) { mutableStateOf(false) }
+    var loadedContentRevision by rememberSaveable(stateKey) { mutableStateOf<Long?>(null) }
     fun setError(value: AppError?) {
         retained.snapshot = retained.snapshot.copy(error = value)
     }
@@ -1306,7 +1358,12 @@ private fun TrackCollection(
             }
         }
     }
-    LaunchedEffect(stateKey) {
+    LaunchedEffect(stateKey, contentRevision) {
+        if (loadedContentRevision != null && loadedContentRevision != contentRevision) {
+            retained.snapshot = RetainedTrackCollectionSnapshot()
+            initialFocusRequested = false
+        }
+        loadedContentRevision = contentRevision
         if (!retained.snapshot.initialLoadCompleted) {
             load(1)
         }
@@ -1374,6 +1431,7 @@ private fun TrackCollection(
             onTrack = ::play,
             onLoadMore = { load(page + 1) },
             alternateContent = alternateContent,
+            emptyMessage = emptyMessage,
         )
     } else {
         LegacyTrackCollection(
@@ -1401,6 +1459,7 @@ private fun TrackCollection(
             },
             onTrack = ::play,
             onLoadMore = { load(page + 1) },
+            emptyMessage = emptyMessage,
         )
     }
 }
@@ -1424,6 +1483,7 @@ private fun LegacyTrackCollection(
     onTrackFocused: (Int, String) -> Unit,
     onTrack: (Int) -> Unit,
     onLoadMore: () -> Unit,
+    emptyMessage: String,
 ) {
     Row(Modifier.fillMaxSize().padding(horizontal = 56.dp, vertical = 38.dp), horizontalArrangement = Arrangement.spacedBy(34.dp)) {
         Column(Modifier.width(330.dp)) {
@@ -1470,6 +1530,9 @@ private fun LegacyTrackCollection(
             error?.let { InlineError(it) }
         }
         LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (tracks.isEmpty() && !loading && error == null) {
+                item { Text(emptyMessage, color = FnColors.Muted, fontSize = 17.sp, modifier = Modifier.padding(vertical = 24.dp)) }
+            }
             itemsIndexed(tracks, key = { _, track -> track.guid.value }) { index, track ->
                 TrackRow(
                     track,
@@ -1512,6 +1575,7 @@ private fun DetailTrackCollection(
     onTrack: (Int) -> Unit,
     onLoadMore: () -> Unit,
     alternateContent: @Composable () -> Unit,
+    emptyMessage: String,
 ) {
     Column(Modifier.fillMaxSize().padding(horizontal = 42.dp, vertical = 24.dp)) {
         Row(Modifier.fillMaxWidth().height(184.dp), verticalAlignment = Alignment.Top) {
@@ -1630,6 +1694,16 @@ private fun DetailTrackCollection(
                 if (tracks.isEmpty() && loading) {
                     item {
                         Text("正在加载歌曲", color = FnColors.Muted, fontSize = 16.sp, modifier = Modifier.padding(vertical = 20.dp))
+                    }
+                }
+                if (tracks.isEmpty() && !loading && error == null) {
+                    item {
+                        Text(
+                            emptyMessage,
+                            color = FnColors.Muted,
+                            fontSize = 17.sp,
+                            modifier = Modifier.padding(vertical = 24.dp),
+                        )
                     }
                 }
                 itemsIndexed(tracks, key = { _, track -> track.guid.value }) { index, track ->
@@ -1905,6 +1979,7 @@ private fun PlaylistTile(
     modifier: Modifier = Modifier,
     showArtworkInitial: Boolean = true,
     enabled: Boolean = true,
+    artworkGlyph: PlaylistTileGlyph? = null,
     onClick: () -> Unit,
 ) {
     val cardShape = RoundedCornerShape(8.dp)
@@ -1935,6 +2010,7 @@ private fun PlaylistTile(
                 accent = accent,
                 modifier = Modifier.fillMaxWidth().height(108.dp),
                 showInitial = showArtworkInitial,
+                glyph = artworkGlyph,
             )
             Row(
                 Modifier.fillMaxWidth().height(34.dp).padding(horizontal = 9.dp, vertical = 2.dp),
@@ -1964,10 +2040,13 @@ private fun PlaylistTileArtwork(
     accent: Color,
     modifier: Modifier = Modifier,
     showInitial: Boolean = true,
+    glyph: PlaylistTileGlyph? = null,
 ) {
     val container = LocalAuthenticatedDependencies.current
     val shape = RectangleShape
-    if (coverId != null) {
+    if (glyph != null) {
+        PlaylistTileGlyphArtwork(glyph, accent, modifier)
+    } else if (coverId != null) {
         RemoteArtwork(
             container = container,
             coverId = coverId,
@@ -1981,6 +2060,43 @@ private fun PlaylistTileArtwork(
         )
     } else {
         GeometricArtworkPlaceholder(title, accent, modifier, shape, showInitial)
+    }
+}
+
+private enum class PlaylistTileGlyph { Heart }
+
+@Composable
+private fun PlaylistTileGlyphArtwork(glyph: PlaylistTileGlyph, accent: Color, modifier: Modifier) {
+    Canvas(modifier.background(Color(0xFF241D1D))) {
+        when (glyph) {
+            PlaylistTileGlyph.Heart -> {
+                val path = Path().apply {
+                    moveTo(size.width * 0.50f, size.height * 0.78f)
+                    cubicTo(
+                        size.width * 0.20f, size.height * 0.58f,
+                        size.width * 0.18f, size.height * 0.29f,
+                        size.width * 0.36f, size.height * 0.25f,
+                    )
+                    cubicTo(
+                        size.width * 0.43f, size.height * 0.23f,
+                        size.width * 0.49f, size.height * 0.28f,
+                        size.width * 0.50f, size.height * 0.34f,
+                    )
+                    cubicTo(
+                        size.width * 0.51f, size.height * 0.28f,
+                        size.width * 0.57f, size.height * 0.23f,
+                        size.width * 0.64f, size.height * 0.25f,
+                    )
+                    cubicTo(
+                        size.width * 0.82f, size.height * 0.29f,
+                        size.width * 0.80f, size.height * 0.58f,
+                        size.width * 0.50f, size.height * 0.78f,
+                    )
+                    close()
+                }
+                drawPath(path, accent)
+            }
+        }
     }
 }
 

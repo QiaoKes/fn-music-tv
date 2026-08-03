@@ -302,6 +302,7 @@ internal object PlaybackSnapshotCodec {
                 is QueueSource.Artist -> "artist"
                 is QueueSource.Album -> "album"
                 is QueueSource.LibraryAllTracks -> "all"
+                is QueueSource.Favorites -> "favorites"
             },
         )
         .put(
@@ -311,6 +312,7 @@ internal object PlaybackSnapshotCodec {
                 is QueueSource.Artist -> source.guid
                 is QueueSource.Album -> source.guid
                 is QueueSource.LibraryAllTracks -> ""
+                is QueueSource.Favorites -> ""
             },
         )
         .put("sort", source.sort)
@@ -323,6 +325,7 @@ internal object PlaybackSnapshotCodec {
             "artist" -> QueueSource.Artist(guid.also { require(it.isNotBlank()) }, sort)
             "album" -> QueueSource.Album(guid.also { require(it.isNotBlank()) }, sort)
             "all" -> QueueSource.LibraryAllTracks(sort)
+            "favorites" -> QueueSource.Favorites(sort)
             else -> error("Unknown playback queue source")
         }
     }

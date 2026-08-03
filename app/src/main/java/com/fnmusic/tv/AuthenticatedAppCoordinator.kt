@@ -47,6 +47,7 @@ internal class AuthenticatedAppCoordinator(
                         val namespace = sessionRepository.cacheNamespace()
                         if (boundNamespace != namespace) {
                             artworkBitmapCache.clear()
+                            musicRepository.clearFavoriteState()
                             appPreferences.bindNamespace(namespace)
                             musicRepository.applyArtworkBudget()
                             boundNamespace = namespace
@@ -58,6 +59,7 @@ internal class AuthenticatedAppCoordinator(
                         val departingNamespace = boundNamespace
                         boundNamespace = null
                         artworkBitmapCache.clear()
+                        musicRepository.clearFavoriteState()
                         if (state.error == AppError.Unauthenticated || state.error == AppError.AccountDisabled) {
                             clearInvalidatedPlaybackSession(
                                 departingNamespace = departingNamespace,
