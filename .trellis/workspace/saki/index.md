@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 10
+- **Total Sessions**: 11
 - **Last Active**: 2026-08-03
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~237 | Active |
+| `journal-1.md` | ~258 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 11 | 2026-08-03 | Finish artwork loading continuity | `89fee0c` | `main` |
 | 10 | 2026-08-03 | 完成 App 等量重构与 0.1.13 发布准备 | `8c87978`, `ba698fc`, `0286d35`, `08d1650` | `opt-recode-saki` |
 | 9 | 2026-08-02 | TV library details and roam polish | `0b85f3f` | `main` |
 | 8 | 2026-08-02 | Optimize player visuals and loading | `71fdd27` | `main` |
