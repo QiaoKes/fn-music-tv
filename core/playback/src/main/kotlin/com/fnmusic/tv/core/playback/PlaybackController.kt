@@ -46,6 +46,29 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+internal data class QueueRemovalPlan(
+    val removeIndex: Int,
+    val remainingCount: Int,
+    val nextCurrentIndex: Int?,
+)
+
+internal fun queueRemovalPlan(
+    itemCount: Int,
+    currentIndex: Int,
+    removeIndex: Int,
+): QueueRemovalPlan? {
+    if (itemCount <= 0 || removeIndex !in 0 until itemCount) return null
+    val remainingCount = itemCount - 1
+    val normalizedCurrent = currentIndex.takeIf { it in 0 until itemCount } ?: 0
+    val nextCurrentIndex = when {
+        remainingCount == 0 -> null
+        removeIndex < normalizedCurrent -> normalizedCurrent - 1
+        removeIndex == normalizedCurrent -> normalizedCurrent.coerceAtMost(remainingCount - 1)
+        else -> normalizedCurrent
+    }
+    return QueueRemovalPlan(removeIndex, remainingCount, nextCurrentIndex)
+}
+
 class PlaybackController(
     private val context: Context,
     private val sessionStore: PlaybackSessionStore,
@@ -468,6 +491,36 @@ class PlaybackController(
         if (queueKind != QueueKind.Normal || queueIndex !in 0 until player.mediaItemCount) return null
         player.seekTo(queueIndex, 0L)
         player.play()
+        return structuralSnapshot(player)
+    }
+
+    fun removeQueueItem(queueIndex: Int): PlaybackTransition? {
+        val player = controller ?: return null
+        if (queueKind != QueueKind.Normal) return null
+        val removal = queueRemovalPlan(
+            itemCount = player.mediaItemCount,
+            currentIndex = player.currentMediaItemIndex,
+            removeIndex = queueIndex,
+        ) ?: return null
+        beginStructuralTransition()
+        queueSource = null
+        queueWindow = null
+        failedDirection = null
+        queueError = null
+        val restoreShuffle = playMode == PlayMode.Shuffle
+        player.removeMediaItem(queueIndex)
+        queueProjector.clear()
+        project(player)
+        if (restoreShuffle && player.mediaItemCount > 0) {
+            return reapplyShuffleAfterQueueMutation(player)
+        }
+        if (removal.nextCurrentIndex == null) {
+            player.stop()
+            playMode = PlayMode.ListRepeat
+            shuffleOrderIds = emptyList()
+            applyModeLocally(player, playMode)
+            project(player)
+        }
         return structuralSnapshot(player)
     }
 

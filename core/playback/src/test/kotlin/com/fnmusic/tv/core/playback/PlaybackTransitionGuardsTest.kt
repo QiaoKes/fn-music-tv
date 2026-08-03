@@ -13,10 +13,36 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PlaybackTransitionGuardsTest {
+    @Test
+    fun `queue removal selects the following item when current is removed`() {
+        assertEquals(
+            QueueRemovalPlan(removeIndex = 1, remainingCount = 2, nextCurrentIndex = 1),
+            queueRemovalPlan(itemCount = 3, currentIndex = 1, removeIndex = 1),
+        )
+    }
+
+    @Test
+    fun `queue removal falls back to the previous item when current tail is removed`() {
+        assertEquals(
+            QueueRemovalPlan(removeIndex = 2, remainingCount = 2, nextCurrentIndex = 1),
+            queueRemovalPlan(itemCount = 3, currentIndex = 2, removeIndex = 2),
+        )
+    }
+
+    @Test
+    fun `queue removal leaves no current item after deleting the only item`() {
+        assertEquals(
+            QueueRemovalPlan(removeIndex = 0, remainingCount = 0, nextCurrentIndex = null),
+            queueRemovalPlan(itemCount = 1, currentIndex = 0, removeIndex = 0),
+        )
+        assertNull(queueRemovalPlan(itemCount = 1, currentIndex = 0, removeIndex = 1))
+    }
+
     @Test
     fun `initial namespace bind may adopt service media but account rebind must reset it`() {
         assertEquals(PlaybackNamespaceBinding.Initial, playbackNamespaceBinding(null, "server:user-a"))

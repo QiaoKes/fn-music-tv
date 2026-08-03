@@ -49,7 +49,15 @@ SerializedResponseCache.invalidateAll()
 MusicRepository.invalidateNamespace(namespace: String, includeEssential: Boolean = false)
 MusicRepository.clearAllEvictableCaches()
 MusicRepository.cacheUsage(): CacheUsage
+MusicRepository.favoriteTracks(page: Int): Page<Track>
+MusicRepository.toggleFavorite(trackGuid: String, fallbackFavorite: Boolean): Result<Boolean>
+MusicRepository.favoriteState: StateFlow<FavoriteLibraryState>
 enum class CacheBudget(val megabytes: Int) { Small(32), Medium(64), Default(128), Large(256) }
+
+data class FavoriteTrackRequest(val trackGUID: String)
+TrimMusicApi.favoriteTracks(page: Int, size: Int = 50): PageListDto<TrackDto>
+TrimMusicApi.createFavorite(trackGuid: String)
+TrimMusicApi.deleteFavorite(trackGuid: String)
 
 ArtworkBitmapCache.peek(coverId: String, variant: CoverVariant): Bitmap?
 ArtworkBitmapCache.get(coverId: String, variant: CoverVariant): Bitmap?
@@ -68,6 +76,7 @@ PlaybackSnapshotCodec.Version == 2
 PlaybackTransition.awaitCommitted()
 PlaybackController.state: StateFlow<PlaybackUiState>
 PlaybackController.progress: StateFlow<PlaybackProgressState>
+PlaybackController.removeQueueItem(queueIndex: Int): PlaybackTransition?
 interface PlaybackSessionStore
 interface PlaybackContentSource
 data class PlaybackFailure(val code: Int, val displayName: String)
@@ -143,6 +152,25 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   token for a later restore attempt and never escape to the application main scope.
 - User-token invalidation clears auth and returns to login. HLS or roam-session invalidation must
   not clear the user token.
+
+### Server-backed favorites
+
+- Favorites use `POST favorite-track/create`, `POST favorite-track/delete`, and
+  `GET favorite-track/list?page=<page>&size=50&sort=favoriteAt,desc`. Both POST bodies are exactly
+  `{ "trackGUID": "<guid>" }`; a success envelope may contain `data: null` and must be decoded as
+  a Unit response rather than requiring a JSON payload.
+- `TrackDto.isFavorite` maps into `Track.isFavorite`. Metadata, ordinary track pages, roam results,
+  and favorite pages seed one account-scoped `FavoriteLibraryState` keyed by track GUID. A namespace
+  change or sign-out clears it before the next account can observe any value.
+- The NAS is the source of truth. Favorite list pages bypass the persistent response cache and use
+  server paging, so another device's changes are visible on reload. No favorite is persisted in
+  Room or preferences as authoritative state.
+- Toggle publishes one optimistic desired value under a serialized mutation, calls create/delete,
+  increments `revision` only after success, and removes the pending marker. Failure or cancellation
+  restores the last server-confirmed value; cancellation is rethrown. Every mutation captures its
+  originating namespace, and a completion arriving after account change is ignored.
+- `QueueSource.Favorites(sort = "favoriteAt,desc")` participates in queue paging and version-2
+  snapshot round trips exactly like the other normal queue sources.
 
 ### Response, Room, and artwork cache
 
@@ -238,6 +266,14 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   generation, revision, canonical queue, and order. A stale, malformed, rejected, or failed
   acknowledgement falls back to the declared non-shuffle mode and cannot publish a shuffle
   snapshot.
+- `removeQueueItem(queueIndex)` accepts only a valid occurrence index in a normal queue. Before the
+  Media3 mutation it starts a structural transition and clears `queueSource` plus `queueWindow`, so
+  later server paging cannot reinsert the locally removed occurrence. Removing current selects the
+  following item, removing the current tail falls back to the previous item, and removing the final
+  item stops playback and resets to `ListRepeat`.
+- After manual deletion, rebuild the bounded queue projection and persist a structural snapshot. If
+  shuffle was active, discard stale pending activation, retain the remaining acknowledged order,
+  complete a new order for remaining canonical IDs, and require a fresh exact acknowledgement.
 - Playback persistence uses strict version-2 JSON. It stores generation, monotonically increasing
   revision, up to 250 unique media items, current index/position, exact queue source and page
   segments, queue kind, play mode, complete shuffle order, roam cursor/window, at most one frozen
@@ -362,10 +398,17 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 | `/access_code_verify` rejects a blank code | `AppException(AccessCodeRequired)` |
 | `/access_code_verify` rejects a supplied code | `AppException(InvalidAccessCode)` |
 | Password login request | Send SHA-256 lowercase hex, never the plain password |
+| Favorite list request | GET page/size with `favoriteAt,desc`; do not serve an authoritative local cache |
+| Favorite create/delete succeeds with `data: null` | Accept Unit success and increment favorite revision once |
+| Favorite create/delete fails | Restore the prior server-confirmed state and clear pending |
+| Authenticated namespace changes | Clear all in-memory favorite statuses, pending entries, revisions, and errors |
 | ConfigureAuth has blank token/namespace | `SessionError.ERROR_BAD_VALUE` |
 | SetShuffleOrder has negative revision or non-exact IDs | `SessionError.ERROR_BAD_VALUE`; do not apply shuffle |
 | Valid SetShuffleOrder | Success; echo exact `SnapshotRevision` and `MediaIds` acknowledgement |
 | Shuffle acknowledgement is stale or no longer matches the queue | Controller ignores it and applies the declared fallback mode |
+| Invalid or roam queue deletion index | Return `null`; do not mutate Media3 or persist a transition |
+| Current queue item is deleted | Select the next occurrence, or previous when deleting the tail |
+| Final queue item is deleted | Stop, clear the queue, reset ListRepeat, and persist the empty snapshot |
 | Unknown MediaSession command | `SessionError.ERROR_NOT_SUPPORTED` |
 | Playback snapshot violates any version-2 invariant | Reject the entire snapshot; do not partially restore |
 | Position-only ticker update | Publish `PlaybackProgressState`; do not emit `PlaybackUiState` or rebuild queue items |
@@ -400,6 +443,10 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   evicts rows, performs one reclaim pass, and preserves account state.
 - Good: `SetShuffleOrder([c, a, b], revision=12)` against canonical `[a, b, c]` succeeds and echoes
   exactly `[c, a, b]` plus revision `12` before the controller activates shuffle.
+- Good: device A favorites a track, device B reloads `favorite-track/list` and sees it; neither
+  device depends on a local-only favorites table.
+- Good: manually deleting queue index 4 detaches the server paging source before mutation, then
+  persists the explicit remaining queue so restore cannot append the deleted occurrence again.
 - Good: four position ticks update only the progress flow; Home/My do not recompose and the existing
   queue list instance is retained until a structural player event occurs.
 - Good: revisions 12 and 13 enter the snapshot writer in order, are encoded on its background
@@ -436,6 +483,10 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   independently coordinating playback, cache, namespace, and logout operations.
 - Bad: accepting a shuffle list that merely has the same length, or activating shuffle before an
   exact service acknowledgement.
+- Bad: treating `data: null` on favorite create/delete as an empty-response error, persisting a
+  local favorite as authority, or retaining favorite state across namespaces.
+- Bad: deleting only by media ID, retaining the source paging cursor after manual deletion, or
+  writing a snapshot before shuffle reconciliation finishes.
 - Bad: copying position into the aggregate `PlaybackUiState` every 250 ms, rebuilding 250 queue rows
   for `EVENT_IS_PLAYING_CHANGED`, or launching independent snapshot encoding jobs before FIFO entry.
 - Bad: using `mediaId` alone as current-presentation identity, combining a new MediaItem ID with old
@@ -487,6 +538,12 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 - `PlaybackProjectionTest`/`PlaybackTransitionGuardsTest`: one-MediaItem field capture, monotonic
   presentation revision, progress-only queue reuse, structural event classification, exact shuffle
   acknowledgement guards, typed failure classification, and committed structural transitions.
+- `TrimMusicApiTest`/`FavoriteLibraryStateTest`: exact favorite paths, sort and request body;
+  `data: null` Unit success; account isolation; optimistic state; success revision; failure rollback;
+  and stale server observations blocked while a mutation is pending.
+- `PlaybackSnapshotCodecTest`/`PlaybackTransitionGuardsTest`: Favorites source round trip; invalid
+  deletion rejection; delete-current selection; current-tail fallback; final-item empty state; and
+  shuffle mutation invalidating the old acknowledgement.
 - `AppContainerRuntimeTest`/`NowPlayingPresenterTest`: one application runtime, durable invalid-auth
   clear, account-switch cleanup order, `(namespace, mediaId, presentationRevision)` identity,
   A -> B -> A stale rejection,
@@ -700,4 +757,16 @@ Room.databaseBuilder(context, AppDatabase::class.java, NAME)
 // Correct: versioned, exported, lossless migration.
 Room.databaseBuilder(context, AppDatabase::class.java, NAME)
     .addMigrations(AppDatabase.MIGRATION_1_2)
+```
+
+```kotlin
+// Wrong: local state is authoritative and the paging cursor can restore a deleted queue item.
+preferences.setFavorite(trackGuid, true)
+player.removeMediaItem(queueIndex) // queueSource still attached
+
+// Correct: mutate the NAS account and detach server paging before an occurrence deletion.
+musicRepository.toggleFavorite(trackGuid, fallbackFavorite)
+queueSource = null
+queueWindow = null
+player.removeMediaItem(queueIndex)
 ```
