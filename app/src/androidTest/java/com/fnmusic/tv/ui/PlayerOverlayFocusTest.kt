@@ -502,6 +502,26 @@ class PlayerOverlayFocusTest {
         saveEvidence("player-queue")
     }
 
+    @Test fun selectedFavoriteKeepsItsStateWhileFocused() {
+        composeRule.setContent {
+            FnMusicTheme {
+                PlayerControlHarness(
+                    roaming = false,
+                    initialFocus = ControlInitialFocus.Favorite,
+                    favorite = true,
+                    onCycleMode = {},
+                    onExitRoam = {},
+                    onInteraction = {},
+                )
+            }
+        }
+
+        val favorite = composeRule.onNodeWithContentDescription("取消收藏当前歌曲")
+        favorite.assertIsFocused()
+        assertTrue(favorite.fetchSemanticsNode().config[SemanticsProperties.Selected])
+        saveEvidence("player-favorite-selected")
+    }
+
     private fun assertModeCycle(from: String, to: String) {
         composeRule.onNodeWithContentDescription("播放模式：$from")
             .assertIsFocused()
@@ -601,7 +621,7 @@ private fun lowestLightPixelY(bitmap: Bitmap, bounds: androidx.compose.ui.geomet
     return null
 }
 
-private enum class ControlInitialFocus { Play, Mode }
+private enum class ControlInitialFocus { Play, Mode, Favorite }
 
 @Composable
 private fun PlayerBackKeyHarness() {
@@ -630,6 +650,7 @@ private fun PlayerBackKeyHarness() {
 private fun PlayerControlHarness(
     roaming: Boolean,
     initialFocus: ControlInitialFocus = ControlInitialFocus.Play,
+    favorite: Boolean = false,
     onCycleMode: () -> Unit,
     onExitRoam: () -> Unit,
     onInteraction: () -> Unit,
@@ -648,7 +669,11 @@ private fun PlayerControlHarness(
     var playMode by remember { mutableStateOf(PlayMode.ListRepeat) }
     LaunchedEffect(Unit) {
         yield()
-        if (initialFocus == ControlInitialFocus.Mode) modeFocus.requestFocus() else playFocus.requestFocus()
+        when (initialFocus) {
+            ControlInitialFocus.Play -> playFocus.requestFocus()
+            ControlInitialFocus.Mode -> modeFocus.requestFocus()
+            ControlInitialFocus.Favorite -> favoriteFocus.requestFocus()
+        }
     }
     Box(Modifier.fillMaxSize()) {
         PlayerControlOverlay(
@@ -669,7 +694,7 @@ private fun PlayerControlHarness(
             statusRetryFocus = statusRetryFocus,
             statusRetryAvailable = false,
             playMode = playMode,
-            favorite = false,
+            favorite = favorite,
             favoriteEnabled = true,
             queueCount = 5,
             onInteraction = onInteraction,

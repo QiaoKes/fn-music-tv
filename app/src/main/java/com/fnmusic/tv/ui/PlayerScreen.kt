@@ -77,6 +77,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -853,64 +854,35 @@ private fun PlayerArtworkPlaceholder(text: String, accent: Color, modifier: Modi
 }
 
 @Composable
-internal fun GeometricArtworkPlaceholder(
+internal fun InitialArtworkPlaceholder(
     text: String,
     accent: Color,
     modifier: Modifier,
     shape: Shape,
-    showInitial: Boolean = true,
 ) {
-    Box(modifier.clip(shape).background(Color(0xFF19201F))) {
-        Canvas(Modifier.fillMaxSize()) {
-            val shortEdge = minOf(size.width, size.height)
-            val sleeve = Path().apply {
-                moveTo(size.width * 0.04f, size.height * 0.12f)
-                lineTo(size.width * 0.52f, size.height * 0.02f)
-                lineTo(size.width * 0.46f, size.height * 0.9f)
-                lineTo(size.width * 0.02f, size.height * 0.8f)
-                close()
-            }
-            drawPath(sleeve, accent.copy(alpha = 0.72f))
-            drawRect(
-                color = FnColors.Coral.copy(alpha = 0.9f),
-                topLeft = androidx.compose.ui.geometry.Offset(size.width * 0.84f, 0f),
-                size = androidx.compose.ui.geometry.Size(size.width * 0.16f, size.height),
-            )
-            drawLine(
-                FnColors.Warning,
-                androidx.compose.ui.geometry.Offset(size.width * 0.39f, size.height * 0.12f),
-                androidx.compose.ui.geometry.Offset(size.width * 0.82f, size.height * 0.31f),
-                strokeWidth = shortEdge * 0.035f,
-                cap = StrokeCap.Round,
-            )
-            val center = androidx.compose.ui.geometry.Offset(size.width * 0.69f, size.height * 0.57f)
-            val radius = shortEdge * 0.32f
-            drawCircle(Color(0xFF101313), radius, center)
-            for (ring in 1..4) {
-                drawCircle(
-                    Color.White.copy(alpha = 0.06f + ring * 0.015f),
-                    radius * (0.48f + ring * 0.11f),
-                    center,
-                    style = Stroke(width = 1.dp.toPx()),
-                )
-            }
-            drawCircle(FnColors.Warning, radius * 0.34f, center)
-            drawCircle(Color(0xFF19201F), radius * 0.07f, center)
-            drawLine(
-                FnColors.Text.copy(alpha = 0.72f),
-                androidx.compose.ui.geometry.Offset(size.width * 0.08f, size.height * 0.87f),
-                androidx.compose.ui.geometry.Offset(size.width * 0.44f, size.height * 0.8f),
-                strokeWidth = shortEdge * 0.018f,
-                cap = StrokeCap.Round,
-            )
+    val background = androidx.compose.ui.graphics.lerp(accent, FnColors.Background, 0.76f)
+    BoxWithConstraints(
+        modifier = modifier.clip(shape).background(background),
+        contentAlignment = Alignment.Center,
+    ) {
+        val glyphSize = when {
+            maxWidth <= 60.dp -> 18.sp
+            maxWidth <= 96.dp -> 25.sp
+            maxWidth <= 220.dp -> 52.sp
+            else -> 72.sp
         }
-        if (showInitial) {
+        Box(
+            Modifier
+                .fillMaxSize(0.58f)
+                .background(accent.copy(alpha = 0.18f), CircleShape)
+                .border(1.dp, accent.copy(alpha = 0.24f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
             Text(
-                text.take(1).ifBlank { "音" },
-                color = FnColors.Text.copy(alpha = 0.9f),
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = 8.dp),
+                text.trim().take(1).ifBlank { "音" }.uppercase(),
+                color = accent.copy(alpha = 0.96f),
+                fontSize = glyphSize,
+                fontWeight = FontWeight.SemiBold,
             )
         }
     }
@@ -1160,14 +1132,14 @@ internal fun PlaybackQueueOverlay(
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.34f))) {
         Column(
             Modifier.fillMaxHeight().fillMaxWidth(0.43f).align(Alignment.CenterEnd)
-                .background(Color(0xF2161C1A)).padding(horizontal = 24.dp, vertical = 28.dp),
+                .background(Color(0xF3121717)).padding(horizontal = 24.dp, vertical = 28.dp),
         ) {
             Text("当前播放 ($loadedCount)", fontSize = 25.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(18.dp))
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
                 itemsIndexed(
                     items = items,
@@ -1179,7 +1151,8 @@ internal fun PlaybackQueueOverlay(
                     LaunchedEffect(requestedFocusKey, rowKey) {
                         if (requestedFocusKey == rowKey) requester.requestFocus()
                     }
-                    Row(Modifier.fillMaxWidth().height(58.dp), verticalAlignment = Alignment.CenterVertically) {
+                    val rowShape = RoundedCornerShape(5.dp)
+                    Row(Modifier.fillMaxWidth().height(54.dp), verticalAlignment = Alignment.CenterVertically) {
                         Button(
                             onClick = {
                                 onInteraction()
@@ -1202,17 +1175,31 @@ internal fun PlaybackQueueOverlay(
                                     contentDescription = "${index + 1}. ${item.title} ${item.artist}" +
                                         if (item.isCurrent) "，正在播放" else ""
                                 },
-                            scale = ButtonDefaults.scale(focusedScale = 1.015f),
+                            shape = ButtonDefaults.shape(rowShape, rowShape, rowShape, rowShape, rowShape),
+                            scale = ButtonDefaults.scale(focusedScale = 1f),
                             colors = ButtonDefaults.colors(
-                                containerColor = if (item.isCurrent) Color(0xFF2E3835) else Color.Transparent,
+                                containerColor = if (item.isCurrent) Color.White.copy(alpha = 0.055f) else Color.Transparent,
                                 contentColor = FnColors.Text,
-                                focusedContainerColor = Color(0xFF3A4541),
+                                focusedContainerColor = Color.White.copy(alpha = 0.075f),
                                 focusedContentColor = FnColors.Text,
+                                pressedContainerColor = Color.White.copy(alpha = 0.10f),
+                                pressedContentColor = FnColors.Text,
+                            ),
+                            border = ButtonDefaults.border(
+                                border = Border(
+                                    BorderStroke(
+                                        1.dp,
+                                        if (item.isCurrent) Color.White.copy(alpha = 0.30f) else Color.Transparent,
+                                    ),
+                                    shape = rowShape,
+                                ),
+                                focusedBorder = Border(BorderStroke(1.25.dp, Color.White.copy(alpha = 0.86f)), shape = rowShape),
+                                pressedBorder = Border(BorderStroke(1.25.dp, Color.White.copy(alpha = 0.72f)), shape = rowShape),
                             ),
                             contentPadding = PaddingValues(0.dp),
                         ) {
                             Row(
-                                Modifier.fillMaxSize().padding(start = 14.dp, end = 8.dp),
+                                Modifier.fillMaxSize().padding(start = 12.dp, end = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                             Text(
@@ -1220,7 +1207,7 @@ internal fun PlaybackQueueOverlay(
                                 color = FnColors.Muted,
                                 fontSize = 13.sp,
                                 lineHeight = 16.sp,
-                                modifier = Modifier.width(34.dp),
+                                modifier = Modifier.width(30.dp),
                             )
                             Column(
                                 Modifier.weight(1f).fillMaxHeight(),
@@ -1248,6 +1235,7 @@ internal fun PlaybackQueueOverlay(
                                     color = FnColors.Coral,
                                     fontSize = 11.sp,
                                     lineHeight = 14.sp,
+                                    fontWeight = FontWeight.Medium,
                                     maxLines = 1,
                                 )
                             }
@@ -1259,7 +1247,7 @@ internal fun PlaybackQueueOverlay(
                                 focusedRowKey = rowKey
                                 onRemove(item.queueIndex)
                             },
-                            modifier = Modifier.size(48.dp)
+                            modifier = Modifier.size(40.dp)
                                 .focusProperties {
                                     left = requester
                                     right = FocusRequester.Cancel
@@ -1272,12 +1260,19 @@ internal fun PlaybackQueueOverlay(
                                     }
                                 }
                                 .semantics { contentDescription = "从播放队列删除 ${item.title}" },
-                            scale = ButtonDefaults.scale(focusedScale = 1.06f),
+                            shape = ButtonDefaults.shape(rowShape, rowShape, rowShape, rowShape, rowShape),
+                            scale = ButtonDefaults.scale(focusedScale = 1f),
                             colors = ButtonDefaults.colors(
                                 containerColor = Color.Transparent,
-                                contentColor = FnColors.Muted,
-                                focusedContainerColor = FnColors.Coral,
-                                focusedContentColor = FnColors.Background,
+                                contentColor = FnColors.Muted.copy(alpha = 0.82f),
+                                focusedContainerColor = Color.White.copy(alpha = 0.10f),
+                                focusedContentColor = FnColors.Coral,
+                                pressedContainerColor = Color.White.copy(alpha = 0.14f),
+                                pressedContentColor = FnColors.Coral,
+                            ),
+                            border = ButtonDefaults.border(
+                                focusedBorder = Border(BorderStroke(1.dp, Color.White.copy(alpha = 0.34f)), shape = rowShape),
+                                pressedBorder = Border(BorderStroke(1.dp, Color.White.copy(alpha = 0.28f)), shape = rowShape),
                             ),
                             contentPadding = PaddingValues(0.dp),
                         ) {
@@ -1314,8 +1309,8 @@ internal fun PlaybackQueueOverlay(
 @Composable
 private fun QueueDeleteIcon() {
     val color = LocalContentColor.current
-    Canvas(Modifier.size(16.dp)) {
-        val stroke = 1.8.dp.toPx()
+    Canvas(Modifier.size(14.dp)) {
+        val stroke = 1.5.dp.toPx()
         drawLine(
             color,
             androidx.compose.ui.geometry.Offset(size.width * 0.24f, size.height * 0.24f),
@@ -1586,19 +1581,24 @@ private fun PlayerSideActionButton(
                 }
                 .focusRequester(focusRequester)
                 .onFocusChanged { if (it.isFocused) onFocus() }
-                .semantics { contentDescription = description },
+                .semantics {
+                    contentDescription = description
+                    if (glyph == PlayerSideActionGlyph.HeartOutline || glyph == PlayerSideActionGlyph.HeartFilled) {
+                        this.selected = selected
+                    }
+                },
             scale = ButtonDefaults.scale(focusedScale = 1.1f),
             colors = ButtonDefaults.colors(
                 containerColor = if (emphasized) Color(0x66382A27) else Color.Transparent,
                 contentColor = when {
-                    selected -> FnColors.Coral
+                    selected -> Color(0xFFFF3B4D)
                     emphasized -> Color(0xFFF0D9D1)
                     else -> FnColors.Text
                 },
-                focusedContainerColor = FnColors.Coral,
-                focusedContentColor = FnColors.Background,
-                pressedContainerColor = FnColors.Coral,
-                pressedContentColor = FnColors.Background,
+                focusedContainerColor = if (selected) Color(0xFFF8F3EE) else FnColors.Coral,
+                focusedContentColor = if (selected) Color(0xFFFF3B4D) else FnColors.Background,
+                pressedContainerColor = if (selected) Color(0xFFEDE7E2) else FnColors.Coral,
+                pressedContentColor = if (selected) Color(0xFFFF3B4D) else FnColors.Background,
             ),
             contentPadding = PaddingValues(0.dp),
         ) {
@@ -1674,34 +1674,15 @@ private fun PlayerSideActionIcon(glyph: PlayerSideActionGlyph) {
             PlayerSideActionGlyph.HeartOutline,
             PlayerSideActionGlyph.HeartFilled,
             -> {
-                val heart = Path().apply {
-                    moveTo(size.width * 0.50f, size.height * 0.82f)
-                    cubicTo(
-                        size.width * 0.18f, size.height * 0.61f,
-                        size.width * 0.17f, size.height * 0.28f,
-                        size.width * 0.36f, size.height * 0.24f,
-                    )
-                    cubicTo(
-                        size.width * 0.43f, size.height * 0.22f,
-                        size.width * 0.49f, size.height * 0.28f,
-                        size.width * 0.50f, size.height * 0.35f,
-                    )
-                    cubicTo(
-                        size.width * 0.51f, size.height * 0.28f,
-                        size.width * 0.57f, size.height * 0.22f,
-                        size.width * 0.64f, size.height * 0.24f,
-                    )
-                    cubicTo(
-                        size.width * 0.83f, size.height * 0.28f,
-                        size.width * 0.82f, size.height * 0.61f,
-                        size.width * 0.50f, size.height * 0.82f,
-                    )
-                    close()
-                }
+                val heart = heartPath(size)
                 if (glyph == PlayerSideActionGlyph.HeartFilled) {
                     drawPath(heart, iconColor)
                 } else {
-                    drawPath(heart, iconColor, style = Stroke(width = stroke, cap = StrokeCap.Round))
+                    drawPath(
+                        heart,
+                        iconColor,
+                        style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round),
+                    )
                 }
             }
             PlayerSideActionGlyph.RepeatAll,
