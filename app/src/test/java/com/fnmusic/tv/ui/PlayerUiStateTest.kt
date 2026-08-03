@@ -63,6 +63,11 @@ class PlayerUiStateTest {
         assertTrue(!store.contains("artist:artist-a:tracks"))
     }
 
+    @Test fun `favorites route owns only its track collection state`() {
+        assertEquals("favorites", LibraryRoute.Favorites.storageKey())
+        assertEquals(setOf("favorites:tracks"), LibraryRoute.Favorites.retainedStateKeys())
+    }
+
     @Test fun `queue opens on current row and falls back to first`() {
         val queue = listOf(
             PlaybackQueueItem("a", "A", "Artist", 0, isCurrent = false),
