@@ -256,3 +256,26 @@ Archived the completed artwork loading continuity task after confirming its acce
 ### Status
 
 [OK] **Completed**
+
+
+## Session 12: Release 1.0.0 favorites and queue
+
+**Date**: 2026-08-03
+**Task**: Release 1.0.0 favorites and queue
+**Branch**: `feature-favorite-saki`
+
+### Summary
+
+Added server-synced favorites, queue item deletion, Home and player visual refinements, unified artwork fallbacks, and prepared the 1.0.0 release.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `505e129` | (see git log) |
+| `1eaba0c` | (see git log) |
+| `3bb58ba` | (see git log) |
+
+### Status
+
+[OK] **Completed**
