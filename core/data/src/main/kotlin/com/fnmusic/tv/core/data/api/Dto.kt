@@ -27,6 +27,7 @@ data class SystemConfigDto(
 }
 
 @Serializable data class PasswordLoginRequest(val username: String, val password: String, val deviceId: String)
+@Serializable data class FavoriteTrackRequest(val trackGUID: String)
 @Serializable data class LoginResultDto(val userToken: String, val user: UserDto)
 
 @Serializable
@@ -100,6 +101,7 @@ data class TrackDto(
     val artists: List<ArtistDto> = emptyList(),
     val audioSpec: AudioSpecDto = AudioSpecDto(),
     val accessStatus: Int? = null,
+    val isFavorite: Boolean = false,
 ) {
     fun toDomain(sourceAudioSpec: AudioSpecDto = audioSpec) = Track(
         guid = TrackGuid(guid),
@@ -111,6 +113,7 @@ data class TrackDto(
         isCue = isCue,
         accessStatus = accessStatus,
         audioFormat = sourceAudioSpec.displayFormat(),
+        isFavorite = isFavorite,
     )
 }
 

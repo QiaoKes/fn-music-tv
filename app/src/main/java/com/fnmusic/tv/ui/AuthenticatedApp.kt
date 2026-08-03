@@ -79,6 +79,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.key.Key
@@ -101,6 +102,7 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -216,6 +218,7 @@ internal fun AuthenticatedApp(
             playback,
             onMy = { root(LibraryRoute.My) },
             onPlaylist = { open(LibraryRoute.PlaylistDetail(it)) },
+            onFavorites = { open(LibraryRoute.Favorites) },
             onAll = { open(LibraryRoute.AllPlaylists) },
             onPlayer = { open(LibraryRoute.Player(null)) },
         )
@@ -254,12 +257,31 @@ internal fun AuthenticatedApp(
             onPlayer = { open(LibraryRoute.Player(it)) },
             detailHeader = TrackDetailHeader(
                 kind = "音乐库",
+                artworkFallback = CollectionArtworkFallback.Collection,
                 onBack = back,
             ),
             primaryAction = TrackCollectionPrimaryAction.StartRoam {
                 open(LibraryRoute.Player(null))
             },
         )
+        LibraryRoute.Favorites -> {
+            val favoriteState by container.musicRepository.favoriteState.collectAsStateWithLifecycle()
+            TrackCollection(
+                container = container,
+                stateKey = "favorites:tracks",
+                title = "收藏",
+                loader = container.musicRepository::favoriteTracks,
+                queueSource = QueueSource::Favorites,
+                onPlayer = { open(LibraryRoute.Player(it)) },
+                detailHeader = TrackDetailHeader(
+                    kind = "收藏",
+                    artworkFallback = CollectionArtworkFallback.Favorites,
+                    onBack = back,
+                ),
+                contentRevision = favoriteState.revision,
+                emptyMessage = "还没有收藏歌曲",
+            )
+        }
         is LibraryRoute.ArtistDetail -> ArtistDetail(
             container = container,
             artist = route.artist,
@@ -467,6 +489,7 @@ private fun BrowseHome(
     playback: PlaybackUiState,
     onMy: () -> Unit,
     onPlaylist: (Playlist) -> Unit,
+    onFavorites: () -> Unit,
     onAll: () -> Unit,
     onPlayer: () -> Unit,
 ) {
@@ -480,6 +503,9 @@ private fun BrowseHome(
     var focusedKey by rememberSaveable { mutableStateOf<String?>(null) }
     var initialFocusRequested by remember { mutableStateOf(false) }
     val contentFocus = remember { FocusRequester() }
+    val roamFocus = remember { FocusRequester() }
+    val favoritesFocus = remember { FocusRequester() }
+    val playlistRowFocus = remember { FocusRequester() }
     val rowState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
@@ -487,11 +513,10 @@ private fun BrowseHome(
     }
     LaunchedEffect(playlistsLoaded, playback.hasMedia, focusedKey) {
         if (initialFocusRequested) return@LaunchedEffect
-        val restoringNowPlaying = playback.hasMedia && focusedKey == "now-playing"
-        if (!playlistsLoaded && !restoringNowPlaying) return@LaunchedEffect
         val availableKeys = buildList {
+            add("roam")
+            add("favorites")
             if (playlistsLoaded) {
-                add("roam")
                 addAll(playlists.take(12).map { "playlist:${it.guid.value}" })
                 add("all-playlists")
             }
@@ -518,42 +543,65 @@ private fun BrowseHome(
                 .then(if (focusedKey == "now-playing") Modifier.focusRequester(contentFocus) else Modifier)
                 .onFocusChanged { if (it.isFocused) focusedKey = "now-playing" },
         )
-        Spacer(Modifier.height(38.dp))
-        Text("听点什么", fontSize = 42.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(22.dp))
-        LazyRow(state = rowState, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-            item {
-                PlaylistTile(
-                    "随机漫游",
-                    "从曲库里遇见下一首",
-                    null,
-                    FnColors.Teal,
-                    showArtworkInitial = false,
-                    modifier = Modifier
-                        .then(if (focusedKey == "roam") Modifier.focusRequester(contentFocus) else Modifier)
-                        .onFocusChanged { if (it.isFocused) focusedKey = "roam" },
-                ) {
-                    if (playback.queueKind == QueueKind.Roam) {
-                        onPlayer()
-                        return@PlaylistTile
+        Spacer(Modifier.height(18.dp))
+        Text("听点什么", fontSize = 34.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+            PlaylistTile(
+                "随机漫游",
+                "",
+                null,
+                FnColors.Teal,
+                featureArtwork = HomeArtworkKind.Roam,
+                modifier = Modifier
+                    .focusProperties {
+                        right = favoritesFocus
+                        down = playlistRowFocus
                     }
-                    if (roamActionRunning || playback.roamBusy) return@PlaylistTile
-                    roamActionRunning = true
-                    scope.launch {
-                        try {
-                            if (container.playbackController.startRoam()) {
-                                actionError = null
-                                onPlayer()
-                            } else {
-                                actionError = container.playbackController.state.value.roamError ?: AppError.Unknown()
-                            }
-                        } finally {
-                            roamActionRunning = false
+                    .focusRequester(roamFocus)
+                    .then(if (focusedKey == "roam") Modifier.focusRequester(contentFocus) else Modifier)
+                    .onFocusChanged { if (it.isFocused) focusedKey = "roam" },
+            ) {
+                if (playback.queueKind == QueueKind.Roam) {
+                    onPlayer()
+                    return@PlaylistTile
+                }
+                if (roamActionRunning || playback.roamBusy) return@PlaylistTile
+                roamActionRunning = true
+                scope.launch {
+                    try {
+                        if (container.playbackController.startRoam()) {
+                            actionError = null
+                            onPlayer()
+                        } else {
+                            actionError = container.playbackController.state.value.roamError ?: AppError.Unknown()
                         }
+                    } finally {
+                        roamActionRunning = false
                     }
                 }
             }
-            items(playlists.take(12), key = { it.guid.value }) { playlist ->
+            PlaylistTile(
+                "收藏",
+                "",
+                null,
+                FnColors.Coral,
+                featureArtwork = HomeArtworkKind.Favorites,
+                modifier = Modifier
+                    .focusProperties {
+                        left = roamFocus
+                        right = FocusRequester.Cancel
+                        down = playlistRowFocus
+                    }
+                    .focusRequester(favoritesFocus)
+                    .then(if (focusedKey == "favorites") Modifier.focusRequester(contentFocus) else Modifier)
+                    .onFocusChanged { if (it.isFocused) focusedKey = "favorites" },
+                onClick = onFavorites,
+            )
+        }
+        Spacer(Modifier.height(14.dp))
+        LazyRow(state = rowState, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+            itemsIndexed(playlists.take(12), key = { _, playlist -> playlist.guid.value }) { index, playlist ->
                 val key = "playlist:${playlist.guid.value}"
                 PlaylistTile(
                     playlist.name,
@@ -561,6 +609,8 @@ private fun BrowseHome(
                     playlist.coverId,
                     FnColors.Coral,
                     modifier = Modifier
+                        .focusProperties { up = if (index == 0) roamFocus else favoritesFocus }
+                        .then(if (index == 0) Modifier.focusRequester(playlistRowFocus) else Modifier)
                         .then(if (focusedKey == key) Modifier.focusRequester(contentFocus) else Modifier)
                         .onFocusChanged { if (it.isFocused) focusedKey = key },
                 ) { onPlaylist(playlist) }
@@ -568,11 +618,13 @@ private fun BrowseHome(
             item {
                 PlaylistTile(
                     "全部歌单",
-                    "浏览完整列表",
+                    "",
                     null,
                     FnColors.Muted,
-                    showArtworkInitial = false,
+                    featureArtwork = HomeArtworkKind.Collection,
                     modifier = Modifier
+                        .focusProperties { up = favoritesFocus }
+                        .then(if (playlists.isEmpty()) Modifier.focusRequester(playlistRowFocus) else Modifier)
                         .then(if (focusedKey == "all-playlists") Modifier.focusRequester(contentFocus) else Modifier)
                         .onFocusChanged { if (it.isFocused) focusedKey = "all-playlists" },
                     onClick = onAll,
@@ -934,9 +986,12 @@ private data class TrackDetailHeader(
     val kind: String,
     val declaredTrackCount: Int? = null,
     val extraMetadata: String? = null,
+    val artworkFallback: CollectionArtworkFallback = CollectionArtworkFallback.Initial,
     val tabs: List<TrackDetailTab> = emptyList(),
     val onBack: () -> Unit,
 )
+
+private enum class CollectionArtworkFallback { Initial, Artist, Favorites, Collection }
 
 private sealed interface TrackCollectionPrimaryAction {
     data object PlayAll : TrackCollectionPrimaryAction
@@ -1004,6 +1059,7 @@ private fun ArtistDetail(
             kind = "歌手",
             declaredTrackCount = artist.trackCount,
             extraMetadata = artist.albumCount?.let { "$it 张专辑" },
+            artworkFallback = CollectionArtworkFallback.Artist,
             tabs = tabs,
             onBack = onBack,
         ),
@@ -1144,11 +1200,11 @@ private fun DetailAlbumCard(album: Album, modifier: Modifier = Modifier, onClick
                     shape = artworkShape,
                     contentScale = ContentScale.Crop,
                     placeholderContent = {
-                        GeometricArtworkPlaceholder(album.name, FnColors.Coral, Modifier.fillMaxSize(), artworkShape)
+                        InitialArtworkPlaceholder(album.name, FnColors.Coral, Modifier.fillMaxSize(), artworkShape)
                     },
                 )
             } else {
-                GeometricArtworkPlaceholder(album.name, FnColors.Coral, Modifier.size(88.dp), artworkShape)
+                InitialArtworkPlaceholder(album.name, FnColors.Coral, Modifier.size(88.dp), artworkShape)
             }
             Spacer(Modifier.width(11.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
@@ -1196,6 +1252,8 @@ private fun TrackCollection(
     primaryAction: TrackCollectionPrimaryAction = TrackCollectionPrimaryAction.PlayAll,
     showTrackList: Boolean = true,
     alternateContent: @Composable () -> Unit = {},
+    contentRevision: Long = 0L,
+    emptyMessage: String = "暂无歌曲",
 ) {
     val retainedStore = LocalLibraryRetainedState.current
     val retained = retainedStore.tracks(stateKey)
@@ -1214,6 +1272,7 @@ private fun TrackCollection(
     val listState = rememberLazyListState()
     val actionScope = rememberCoroutineScope()
     var primaryActionRunning by remember(stateKey) { mutableStateOf(false) }
+    var loadedContentRevision by rememberSaveable(stateKey) { mutableStateOf<Long?>(null) }
     fun setError(value: AppError?) {
         retained.snapshot = retained.snapshot.copy(error = value)
     }
@@ -1306,7 +1365,12 @@ private fun TrackCollection(
             }
         }
     }
-    LaunchedEffect(stateKey) {
+    LaunchedEffect(stateKey, contentRevision) {
+        if (loadedContentRevision != null && loadedContentRevision != contentRevision) {
+            retained.snapshot = RetainedTrackCollectionSnapshot()
+            initialFocusRequested = false
+        }
+        loadedContentRevision = contentRevision
         if (!retained.snapshot.initialLoadCompleted) {
             load(1)
         }
@@ -1374,6 +1438,7 @@ private fun TrackCollection(
             onTrack = ::play,
             onLoadMore = { load(page + 1) },
             alternateContent = alternateContent,
+            emptyMessage = emptyMessage,
         )
     } else {
         LegacyTrackCollection(
@@ -1401,6 +1466,7 @@ private fun TrackCollection(
             },
             onTrack = ::play,
             onLoadMore = { load(page + 1) },
+            emptyMessage = emptyMessage,
         )
     }
 }
@@ -1424,37 +1490,19 @@ private fun LegacyTrackCollection(
     onTrackFocused: (Int, String) -> Unit,
     onTrack: (Int) -> Unit,
     onLoadMore: () -> Unit,
+    emptyMessage: String,
 ) {
     Row(Modifier.fillMaxSize().padding(horizontal = 56.dp, vertical = 38.dp), horizontalArrangement = Arrangement.spacedBy(34.dp)) {
         Column(Modifier.width(330.dp)) {
             val artworkShape = RoundedCornerShape(8.dp)
-            if (coverId != null) {
-                RemoteArtwork(
-                    container = container,
-                    coverId = coverId,
-                    variant = CoverVariant.Grid,
-                    modifier = Modifier.size(300.dp),
-                    shape = artworkShape,
-                    contentScale = ContentScale.Crop,
-                    placeholderContent = {
-                        GeometricArtworkPlaceholder(
-                            text = title,
-                            accent = FnColors.Coral,
-                            modifier = Modifier.fillMaxSize(),
-                            shape = artworkShape,
-                            showInitial = false,
-                        )
-                    },
-                )
-            } else {
-                GeometricArtworkPlaceholder(
-                    text = title,
-                    accent = FnColors.Coral,
-                    modifier = Modifier.size(300.dp),
-                    shape = artworkShape,
-                    showInitial = false,
-                )
-            }
+            CollectionArtwork(
+                container = container,
+                title = title,
+                coverId = coverId,
+                fallback = CollectionArtworkFallback.Initial,
+                modifier = Modifier.size(300.dp),
+                shape = artworkShape,
+            )
             Text(title, fontSize = 36.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (subtitle.isNotBlank()) Text(subtitle, color = FnColors.Muted, fontSize = 21.sp)
             Spacer(Modifier.height(18.dp))
@@ -1470,6 +1518,9 @@ private fun LegacyTrackCollection(
             error?.let { InlineError(it) }
         }
         LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (tracks.isEmpty() && !loading && error == null) {
+                item { Text(emptyMessage, color = FnColors.Muted, fontSize = 17.sp, modifier = Modifier.padding(vertical = 24.dp)) }
+            }
             itemsIndexed(tracks, key = { _, track -> track.guid.value }) { index, track ->
                 TrackRow(
                     track,
@@ -1512,6 +1563,7 @@ private fun DetailTrackCollection(
     onTrack: (Int) -> Unit,
     onLoadMore: () -> Unit,
     alternateContent: @Composable () -> Unit,
+    emptyMessage: String,
 ) {
     Column(Modifier.fillMaxSize().padding(horizontal = 42.dp, vertical = 24.dp)) {
         Row(Modifier.fillMaxWidth().height(184.dp), verticalAlignment = Alignment.Top) {
@@ -1523,27 +1575,14 @@ private fun DetailTrackCollection(
             )
             Spacer(Modifier.width(18.dp))
             val artworkShape = RoundedCornerShape(6.dp)
-            if (coverId != null) {
-                RemoteArtwork(
-                    container = container,
-                    coverId = coverId,
-                    variant = CoverVariant.Grid,
-                    modifier = Modifier.size(184.dp),
-                    shape = artworkShape,
-                    contentScale = ContentScale.Crop,
-                    placeholderContent = {
-                        GeometricArtworkPlaceholder(title, FnColors.Coral, Modifier.fillMaxSize(), artworkShape, showInitial = false)
-                    },
-                )
-            } else {
-                GeometricArtworkPlaceholder(
-                    text = title,
-                    accent = FnColors.Coral,
-                    modifier = Modifier.size(184.dp),
-                    shape = artworkShape,
-                    showInitial = false,
-                )
-            }
+            CollectionArtwork(
+                container = container,
+                title = title,
+                coverId = coverId,
+                fallback = header.artworkFallback,
+                modifier = Modifier.size(184.dp),
+                shape = artworkShape,
+            )
             Spacer(Modifier.width(24.dp))
             Column(Modifier.weight(1f).fillMaxHeight()) {
                 Text(header.kind, color = FnColors.Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
@@ -1632,6 +1671,16 @@ private fun DetailTrackCollection(
                         Text("正在加载歌曲", color = FnColors.Muted, fontSize = 16.sp, modifier = Modifier.padding(vertical = 20.dp))
                     }
                 }
+                if (tracks.isEmpty() && !loading && error == null) {
+                    item {
+                        Text(
+                            emptyMessage,
+                            color = FnColors.Muted,
+                            fontSize = 17.sp,
+                            modifier = Modifier.padding(vertical = 24.dp),
+                        )
+                    }
+                }
                 itemsIndexed(tracks, key = { _, track -> track.guid.value }) { index, track ->
                     DetailTrackRow(
                         index = index,
@@ -1658,6 +1707,61 @@ private fun DetailTrackCollection(
         } else {
             Box(Modifier.weight(1f).fillMaxWidth()) { alternateContent() }
         }
+    }
+}
+
+@Composable
+private fun CollectionArtwork(
+    container: AuthenticatedAppDependencies,
+    title: String,
+    coverId: String?,
+    fallback: CollectionArtworkFallback,
+    modifier: Modifier,
+    shape: Shape,
+) {
+    val resolvedShape = if (fallback == CollectionArtworkFallback.Artist) CircleShape else shape
+    if (coverId != null) {
+        RemoteArtwork(
+            container = container,
+            coverId = coverId,
+            variant = CoverVariant.Grid,
+            modifier = modifier,
+            shape = resolvedShape,
+            contentScale = ContentScale.Crop,
+            placeholderContent = {
+                CollectionArtworkFallbackContent(title, fallback, Modifier.fillMaxSize(), resolvedShape)
+            },
+        )
+    } else {
+        CollectionArtworkFallbackContent(title, fallback, modifier, resolvedShape)
+    }
+}
+
+@Composable
+private fun CollectionArtworkFallbackContent(
+    title: String,
+    fallback: CollectionArtworkFallback,
+    modifier: Modifier,
+    shape: Shape,
+) {
+    when (fallback) {
+        CollectionArtworkFallback.Artist -> ArtistAvatarPlaceholder(
+            title = title,
+            modifier = modifier,
+            fontSize = 58.sp,
+        )
+        CollectionArtworkFallback.Favorites -> Box(modifier.clip(shape)) {
+            HomeFeatureArtwork(HomeArtworkKind.Favorites, Modifier.fillMaxSize())
+        }
+        CollectionArtworkFallback.Collection -> Box(modifier.clip(shape)) {
+            HomeFeatureArtwork(HomeArtworkKind.Collection, Modifier.fillMaxSize())
+        }
+        CollectionArtworkFallback.Initial -> InitialArtworkPlaceholder(
+            text = title,
+            accent = FnColors.Coral,
+            modifier = modifier,
+            shape = shape,
+        )
     }
 }
 
@@ -1869,22 +1973,20 @@ private fun TrackRow(track: Track, enabled: Boolean, modifier: Modifier = Modifi
                     shape = artworkShape,
                     contentScale = ContentScale.Crop,
                     placeholderContent = {
-                        GeometricArtworkPlaceholder(
+                        InitialArtworkPlaceholder(
                             text = track.title,
                             accent = FnColors.Teal,
                             modifier = Modifier.fillMaxSize(),
                             shape = artworkShape,
-                            showInitial = false,
                         )
                     },
                 )
             } else {
-                GeometricArtworkPlaceholder(
+                InitialArtworkPlaceholder(
                     text = track.title,
                     accent = FnColors.Teal,
                     modifier = Modifier.size(52.dp),
                     shape = artworkShape,
-                    showInitial = false,
                 )
             }
             Column(Modifier.weight(1f)) {
@@ -1903,8 +2005,8 @@ private fun PlaylistTile(
     coverId: String?,
     accent: Color,
     modifier: Modifier = Modifier,
-    showArtworkInitial: Boolean = true,
     enabled: Boolean = true,
+    featureArtwork: HomeArtworkKind? = null,
     onClick: () -> Unit,
 ) {
     val cardShape = RoundedCornerShape(8.dp)
@@ -1934,7 +2036,7 @@ private fun PlaylistTile(
                 coverId = coverId,
                 accent = accent,
                 modifier = Modifier.fillMaxWidth().height(108.dp),
-                showInitial = showArtworkInitial,
+                featureArtwork = featureArtwork,
             )
             Row(
                 Modifier.fillMaxWidth().height(34.dp).padding(horizontal = 9.dp, vertical = 2.dp),
@@ -1963,11 +2065,13 @@ private fun PlaylistTileArtwork(
     coverId: String?,
     accent: Color,
     modifier: Modifier = Modifier,
-    showInitial: Boolean = true,
+    featureArtwork: HomeArtworkKind? = null,
 ) {
     val container = LocalAuthenticatedDependencies.current
     val shape = RectangleShape
-    if (coverId != null) {
+    if (featureArtwork != null) {
+        HomeFeatureArtwork(featureArtwork, modifier)
+    } else if (coverId != null) {
         RemoteArtwork(
             container = container,
             coverId = coverId,
@@ -1976,11 +2080,222 @@ private fun PlaylistTileArtwork(
             shape = shape,
             contentScale = ContentScale.Crop,
             placeholderContent = {
-                GeometricArtworkPlaceholder(title, accent, Modifier.fillMaxSize(), shape, showInitial)
+                InitialArtworkPlaceholder(title, accent, Modifier.fillMaxSize(), shape)
             },
         )
     } else {
-        GeometricArtworkPlaceholder(title, accent, modifier, shape, showInitial)
+        InitialArtworkPlaceholder(title, accent, modifier, shape)
+    }
+}
+
+private enum class HomeArtworkKind { Roam, Favorites, Collection }
+
+@Composable
+private fun HomeFeatureArtwork(kind: HomeArtworkKind, modifier: Modifier) {
+    Canvas(modifier) {
+        val shortEdge = minOf(size.width, size.height)
+        fun point(x: Float, y: Float) = androidx.compose.ui.geometry.Offset(size.width * x, size.height * y)
+        fun drawVinyl(center: androidx.compose.ui.geometry.Offset, radius: Float, label: Color) {
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        Color(0xFF38393D),
+                        Color(0xFF0B0C0E),
+                        Color(0xFF27282C),
+                        Color(0xFF08090A),
+                    ),
+                    center = center,
+                    radius = radius,
+                ),
+                radius = radius,
+                center = center,
+            )
+            listOf(0.58f, 0.72f, 0.86f).forEach { scale ->
+                drawCircle(
+                    Color.White.copy(alpha = 0.08f),
+                    radius * scale,
+                    center,
+                    style = Stroke(shortEdge * 0.006f),
+                )
+            }
+            drawCircle(label, radius * 0.24f, center)
+            drawCircle(Color(0xFFF8F2E7), radius * 0.055f, center)
+        }
+
+        when (kind) {
+            HomeArtworkKind.Roam -> {
+                drawRect(
+                    brush = Brush.linearGradient(
+                        colors = listOf(Color(0xFFEAE6DF), Color(0xFFC5CDCB)),
+                        start = point(0.08f, 0f),
+                        end = point(0.94f, 1f),
+                    ),
+                )
+                drawVinyl(point(0.69f, 0.51f), shortEdge * 0.43f, FnColors.Warning)
+
+                val sleeveEdge = size.height * 0.84f
+                val sleeveTopLeft = point(0.12f, 0.08f)
+                val sleeveSize = androidx.compose.ui.geometry.Size(sleeveEdge, sleeveEdge)
+                val sleeveCorner = androidx.compose.ui.geometry.CornerRadius(shortEdge * 0.065f)
+                drawRoundRect(
+                    color = Color.Black.copy(alpha = 0.20f),
+                    topLeft = sleeveTopLeft + androidx.compose.ui.geometry.Offset(shortEdge * 0.035f, shortEdge * 0.045f),
+                    size = sleeveSize,
+                    cornerRadius = sleeveCorner,
+                )
+                drawRoundRect(
+                    brush = Brush.linearGradient(
+                        colors = listOf(
+                            Color(0xFFFF4938),
+                            FnColors.Coral,
+                            Color(0xFFEC477E),
+                            Color(0xFF7569D8),
+                        ),
+                        start = sleeveTopLeft,
+                        end = sleeveTopLeft + androidx.compose.ui.geometry.Offset(sleeveEdge, sleeveEdge),
+                    ),
+                    topLeft = sleeveTopLeft,
+                    size = sleeveSize,
+                    cornerRadius = sleeveCorner,
+                )
+                val orangeWave = Path().apply {
+                    moveTo(sleeveTopLeft.x, sleeveTopLeft.y + sleeveEdge * 0.68f)
+                    cubicTo(
+                        sleeveTopLeft.x + sleeveEdge * 0.18f, sleeveTopLeft.y + sleeveEdge * 0.48f,
+                        sleeveTopLeft.x + sleeveEdge * 0.32f, sleeveTopLeft.y + sleeveEdge * 0.56f,
+                        sleeveTopLeft.x + sleeveEdge * 0.48f, sleeveTopLeft.y + sleeveEdge * 0.42f,
+                    )
+                    cubicTo(
+                        sleeveTopLeft.x + sleeveEdge * 0.66f, sleeveTopLeft.y + sleeveEdge * 0.24f,
+                        sleeveTopLeft.x + sleeveEdge * 0.78f, sleeveTopLeft.y + sleeveEdge * 0.24f,
+                        sleeveTopLeft.x + sleeveEdge, sleeveTopLeft.y + sleeveEdge * 0.05f,
+                    )
+                    lineTo(sleeveTopLeft.x + sleeveEdge, sleeveTopLeft.y + sleeveEdge)
+                    lineTo(sleeveTopLeft.x, sleeveTopLeft.y + sleeveEdge)
+                    close()
+                }
+                drawPath(orangeWave, Color(0xFFFFA538).copy(alpha = 0.84f))
+                drawRoundRect(
+                    brush = Brush.linearGradient(
+                        colors = listOf(Color.White.copy(alpha = 0.18f), Color.Transparent),
+                        start = sleeveTopLeft,
+                        end = sleeveTopLeft + androidx.compose.ui.geometry.Offset(sleeveEdge * 0.72f, sleeveEdge),
+                    ),
+                    topLeft = sleeveTopLeft,
+                    size = sleeveSize,
+                    cornerRadius = sleeveCorner,
+                )
+            }
+
+            HomeArtworkKind.Favorites -> {
+                drawRect(
+                    brush = Brush.linearGradient(
+                        colors = listOf(
+                            Color(0xFFFF304D),
+                            Color(0xFFFF563F),
+                            Color(0xFFFF9D37),
+                            Color(0xFFFFD45A),
+                        ),
+                        start = point(0.08f, 0.06f),
+                        end = point(0.94f, 0.92f),
+                    ),
+                )
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0xFFD91442).copy(alpha = 0.72f), Color.Transparent),
+                        center = point(0.20f, 0.20f),
+                        radius = shortEdge * 0.78f,
+                    ),
+                    radius = shortEdge * 0.78f,
+                    center = point(0.20f, 0.20f),
+                )
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0xFFFFDA70).copy(alpha = 0.65f), Color.Transparent),
+                        center = point(0.89f, 0.89f),
+                        radius = shortEdge * 0.62f,
+                    ),
+                    radius = shortEdge * 0.62f,
+                    center = point(0.89f, 0.89f),
+                )
+                val heartSize = androidx.compose.ui.geometry.Size(shortEdge * 0.56f, shortEdge * 0.56f)
+                val heartOrigin = androidx.compose.ui.geometry.Offset(
+                    (size.width - heartSize.width) / 2f,
+                    (size.height - heartSize.height) / 2f - shortEdge * 0.015f,
+                )
+                withTransform({ translate(heartOrigin.x + shortEdge * 0.035f, heartOrigin.y + shortEdge * 0.055f) }) {
+                    drawPath(heartPath(heartSize), Color(0xFF9E1731).copy(alpha = 0.18f))
+                }
+                withTransform({ translate(heartOrigin.x, heartOrigin.y) }) {
+                    drawPath(heartPath(heartSize), Color(0xFFFFDDD8).copy(alpha = 0.78f))
+                }
+            }
+
+            HomeArtworkKind.Collection -> {
+                drawRect(
+                    brush = Brush.linearGradient(
+                        colors = listOf(Color(0xFF124A3A), Color(0xFF267A60), FnColors.Teal),
+                        start = point(0f, 0.10f),
+                        end = point(1f, 0.90f),
+                    ),
+                )
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0xFFB4ECD7).copy(alpha = 0.30f), Color.Transparent),
+                        center = point(0.88f, 0.12f),
+                        radius = shortEdge * 0.72f,
+                    ),
+                    radius = shortEdge * 0.72f,
+                    center = point(0.88f, 0.12f),
+                )
+                val discCenter = point(0.70f, 0.50f)
+                drawCircle(Color.Black.copy(alpha = 0.18f), shortEdge * 0.36f, discCenter + point(0.015f, 0.035f))
+                drawVinyl(discCenter, shortEdge * 0.35f, FnColors.Coral)
+
+                val coverEdge = size.height * 0.70f
+                val corner = androidx.compose.ui.geometry.CornerRadius(shortEdge * 0.045f)
+                drawRoundRect(
+                    color = Color.Black.copy(alpha = 0.18f),
+                    topLeft = point(0.16f, 0.20f),
+                    size = androidx.compose.ui.geometry.Size(coverEdge, coverEdge),
+                    cornerRadius = corner,
+                )
+                drawRoundRect(
+                    color = Color(0xFFE7C95D),
+                    topLeft = point(0.12f, 0.13f),
+                    size = androidx.compose.ui.geometry.Size(coverEdge, coverEdge),
+                    cornerRadius = corner,
+                )
+                drawRoundRect(
+                    brush = Brush.linearGradient(
+                        colors = listOf(Color(0xFFF4EFE5), Color(0xFFD5E0DB)),
+                        start = point(0.19f, 0.17f),
+                        end = point(0.53f, 0.84f),
+                    ),
+                    topLeft = point(0.19f, 0.17f),
+                    size = androidx.compose.ui.geometry.Size(coverEdge, coverEdge),
+                    cornerRadius = corner,
+                )
+                drawRoundRect(
+                    color = FnColors.Coral,
+                    topLeft = point(0.24f, 0.24f),
+                    size = androidx.compose.ui.geometry.Size(coverEdge * 0.23f, coverEdge * 0.62f),
+                    cornerRadius = corner,
+                )
+                drawRoundRect(
+                    color = Color(0xFF202528),
+                    topLeft = point(0.35f, 0.24f),
+                    size = androidx.compose.ui.geometry.Size(coverEdge * 0.14f, coverEdge * 0.62f),
+                    cornerRadius = corner,
+                )
+                drawRoundRect(
+                    color = FnColors.Teal,
+                    topLeft = point(0.43f, 0.24f),
+                    size = androidx.compose.ui.geometry.Size(coverEdge * 0.09f, coverEdge * 0.62f),
+                    cornerRadius = corner,
+                )
+            }
+        }
     }
 }
 
@@ -2019,10 +2334,10 @@ private fun ArtistLockup(
                     modifier = Modifier.size(61.dp),
                     shape = CircleShape,
                     contentScale = ContentScale.Crop,
-                    placeholderContent = { ArtistAvatarPlaceholder(title) },
+                    placeholderContent = { ArtistAvatarPlaceholder(title, Modifier.size(61.dp)) },
                 )
             } else {
-                ArtistAvatarPlaceholder(title)
+                ArtistAvatarPlaceholder(title, Modifier.size(61.dp))
             }
             Spacer(Modifier.width(10.dp))
             LockupLabels(title, subtitle, Modifier.weight(1f))
@@ -2031,12 +2346,21 @@ private fun ArtistLockup(
 }
 
 @Composable
-private fun ArtistAvatarPlaceholder(title: String) {
+private fun ArtistAvatarPlaceholder(
+    title: String,
+    modifier: Modifier = Modifier,
+    fontSize: TextUnit = 23.sp,
+) {
     Box(
-        Modifier.size(61.dp).background(Color(0xFF2D4A46), CircleShape),
+        modifier.background(Color(0xFF2D4A46), CircleShape),
         contentAlignment = Alignment.Center,
     ) {
-        Text(title.trim().take(1).uppercase(), color = FnColors.Teal, fontSize = 23.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            title.trim().take(1).ifBlank { "音" }.uppercase(),
+            color = FnColors.Teal,
+            fontSize = fontSize,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 
@@ -2077,11 +2401,11 @@ private fun AlbumLockup(
                     shape = artworkShape,
                     contentScale = ContentScale.Crop,
                     placeholderContent = {
-                        GeometricArtworkPlaceholder(title, FnColors.Coral, Modifier.fillMaxSize(), artworkShape)
+                        InitialArtworkPlaceholder(title, FnColors.Coral, Modifier.fillMaxSize(), artworkShape)
                     },
                 )
             } else {
-                GeometricArtworkPlaceholder(title, FnColors.Coral, Modifier.size(73.dp), artworkShape)
+                InitialArtworkPlaceholder(title, FnColors.Coral, Modifier.size(73.dp), artworkShape)
             }
             Spacer(Modifier.width(9.dp))
             LockupLabels(title, subtitle, Modifier.weight(1f))
@@ -2109,7 +2433,7 @@ private fun LibraryLockup(
         contentPadding = PaddingValues(7.dp),
     ) {
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-            GeometricArtworkPlaceholder(title, FnColors.Teal, Modifier.size(61.dp), artworkShape)
+            InitialArtworkPlaceholder(title, FnColors.Teal, Modifier.size(61.dp), artworkShape)
             Spacer(Modifier.width(10.dp))
             LockupLabels(title, subtitle, Modifier.weight(1f))
         }
@@ -2172,12 +2496,11 @@ private fun RemoteArtwork(
             if (placeholderContent != null) {
                 placeholderContent()
             } else {
-                GeometricArtworkPlaceholder(
+                InitialArtworkPlaceholder(
                     text = "",
                     accent = FnColors.Teal,
                     modifier = Modifier.fillMaxSize(),
                     shape = shape,
-                    showInitial = false,
                 )
             }
         }

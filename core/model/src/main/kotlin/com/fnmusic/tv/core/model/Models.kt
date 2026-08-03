@@ -52,6 +52,7 @@ data class Track(
     val isCue: Boolean,
     val accessStatus: Int? = null,
     val audioFormat: String? = null,
+    val isFavorite: Boolean = false,
 )
 
 data class SharedLibrary(

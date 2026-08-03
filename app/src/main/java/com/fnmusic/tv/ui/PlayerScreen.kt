@@ -77,6 +77,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -259,6 +260,9 @@ internal fun ImmersivePlayer(
     val staticLyric = currentLyrics?.document?.takeUnless { it.isLrc }?.content
     val lyricsLoading = displayedLyrics is NowPlayingResourceState.Loading
     val lyricsFailed = displayedLyrics is NowPlayingResourceState.RetryableFailure
+    val favoriteLibraryState by container.musicRepository.favoriteState.collectAsStateWithLifecycle()
+    val currentFavorite = favoriteLibraryState.statuses[playback.mediaId] ?: metadata?.isFavorite ?: false
+    val favoritePending = playback.mediaId in favoriteLibraryState.pending
     var controlsVisible by remember { mutableStateOf(true) }
     var queueVisible by remember { mutableStateOf(false) }
     var consumeBackKeyUp by remember { mutableStateOf(false) }
@@ -269,12 +273,14 @@ internal fun ImmersivePlayer(
     val playFocus = remember { FocusRequester() }
     val nextFocus = remember { FocusRequester() }
     val modeFocus = remember { FocusRequester() }
+    val favoriteFocus = remember { FocusRequester() }
     val queueFocus = remember { FocusRequester() }
     val exitRoamFocus = remember { FocusRequester() }
     val statusRetryFocus = remember { FocusRequester() }
     val context = LocalContext.current
     val roaming = playback.queueKind == QueueKind.Roam
     val playbackProgress = container.playbackController.progress.collectAsStateWithLifecycle()
+    val actionScope = rememberCoroutineScope()
     fun revealControls() {
         controlsVisible = true
         interactionEpoch++
@@ -327,6 +333,14 @@ internal fun ImmersivePlayer(
     }
     LaunchedEffect(roaming) {
         if (!roaming && controlsVisible) playFocus.requestFocus()
+    }
+    LaunchedEffect(queueVisible, playback.queueItems.isEmpty()) {
+        if (queueVisible && playback.queueItems.isEmpty()) {
+            queueVisible = false
+            controlsVisible = true
+            yield()
+            runCatching { queueFocus.requestFocus() }
+        }
     }
     BackHandler(queueVisible || controlsVisible) {
         dismissPlayerChrome()
@@ -409,12 +423,15 @@ internal fun ImmersivePlayer(
                     previousFocus = previousFocus,
                     playFocus = playFocus,
                     nextFocus = nextFocus,
+                    favoriteFocus = favoriteFocus,
                     modeFocus = modeFocus,
                     queueFocus = queueFocus,
                     exitRoamFocus = exitRoamFocus,
                     statusRetryFocus = statusRetryFocus,
                     statusRetryAvailable = statusRetryAvailable,
                     playMode = playback.playMode,
+                    favorite = currentFavorite,
+                    favoriteEnabled = playback.mediaId.isNotBlank() && !favoritePending,
                     queueCount = playback.loadedPlayableCount,
                     onInteraction = ::revealControls,
                     onSeek = container.playbackController::seekBy,
@@ -429,6 +446,16 @@ internal fun ImmersivePlayer(
                     onNext = {
                         revealControls()
                         container.playbackController.next()
+                    },
+                    onToggleFavorite = {
+                        val trackGuid = playback.mediaId
+                        if (trackGuid.isBlank() || favoritePending) return@PlayerControlOverlay
+                        actionScope.launch {
+                            container.musicRepository.toggleFavorite(trackGuid, currentFavorite)
+                                .onFailure {
+                                    Toast.makeText(context, "收藏操作失败，请重试", Toast.LENGTH_SHORT).show()
+                                }
+                        }
                     },
                     onCyclePlayMode = { container.playbackController.cyclePlayMode() },
                     onOpenQueue = {
@@ -451,6 +478,7 @@ internal fun ImmersivePlayer(
                 canRetry = playback.canRetryQueue,
                 onRetry = container.playbackController::retryQueuePage,
                 onSelect = container.playbackController::selectQueueItem,
+                onRemove = container.playbackController::removeQueueItem,
                 onInteraction = ::revealControls,
             )
         }
@@ -826,64 +854,35 @@ private fun PlayerArtworkPlaceholder(text: String, accent: Color, modifier: Modi
 }
 
 @Composable
-internal fun GeometricArtworkPlaceholder(
+internal fun InitialArtworkPlaceholder(
     text: String,
     accent: Color,
     modifier: Modifier,
     shape: Shape,
-    showInitial: Boolean = true,
 ) {
-    Box(modifier.clip(shape).background(Color(0xFF19201F))) {
-        Canvas(Modifier.fillMaxSize()) {
-            val shortEdge = minOf(size.width, size.height)
-            val sleeve = Path().apply {
-                moveTo(size.width * 0.04f, size.height * 0.12f)
-                lineTo(size.width * 0.52f, size.height * 0.02f)
-                lineTo(size.width * 0.46f, size.height * 0.9f)
-                lineTo(size.width * 0.02f, size.height * 0.8f)
-                close()
-            }
-            drawPath(sleeve, accent.copy(alpha = 0.72f))
-            drawRect(
-                color = FnColors.Coral.copy(alpha = 0.9f),
-                topLeft = androidx.compose.ui.geometry.Offset(size.width * 0.84f, 0f),
-                size = androidx.compose.ui.geometry.Size(size.width * 0.16f, size.height),
-            )
-            drawLine(
-                FnColors.Warning,
-                androidx.compose.ui.geometry.Offset(size.width * 0.39f, size.height * 0.12f),
-                androidx.compose.ui.geometry.Offset(size.width * 0.82f, size.height * 0.31f),
-                strokeWidth = shortEdge * 0.035f,
-                cap = StrokeCap.Round,
-            )
-            val center = androidx.compose.ui.geometry.Offset(size.width * 0.69f, size.height * 0.57f)
-            val radius = shortEdge * 0.32f
-            drawCircle(Color(0xFF101313), radius, center)
-            for (ring in 1..4) {
-                drawCircle(
-                    Color.White.copy(alpha = 0.06f + ring * 0.015f),
-                    radius * (0.48f + ring * 0.11f),
-                    center,
-                    style = Stroke(width = 1.dp.toPx()),
-                )
-            }
-            drawCircle(FnColors.Warning, radius * 0.34f, center)
-            drawCircle(Color(0xFF19201F), radius * 0.07f, center)
-            drawLine(
-                FnColors.Text.copy(alpha = 0.72f),
-                androidx.compose.ui.geometry.Offset(size.width * 0.08f, size.height * 0.87f),
-                androidx.compose.ui.geometry.Offset(size.width * 0.44f, size.height * 0.8f),
-                strokeWidth = shortEdge * 0.018f,
-                cap = StrokeCap.Round,
-            )
+    val background = androidx.compose.ui.graphics.lerp(accent, FnColors.Background, 0.76f)
+    BoxWithConstraints(
+        modifier = modifier.clip(shape).background(background),
+        contentAlignment = Alignment.Center,
+    ) {
+        val glyphSize = when {
+            maxWidth <= 60.dp -> 18.sp
+            maxWidth <= 96.dp -> 25.sp
+            maxWidth <= 220.dp -> 52.sp
+            else -> 72.sp
         }
-        if (showInitial) {
+        Box(
+            Modifier
+                .fillMaxSize(0.58f)
+                .background(accent.copy(alpha = 0.18f), CircleShape)
+                .border(1.dp, accent.copy(alpha = 0.24f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
             Text(
-                text.take(1).ifBlank { "音" },
-                color = FnColors.Text.copy(alpha = 0.9f),
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = 8.dp),
+                text.trim().take(1).ifBlank { "音" }.uppercase(),
+                color = accent.copy(alpha = 0.96f),
+                fontSize = glyphSize,
+                fontWeight = FontWeight.SemiBold,
             )
         }
     }
@@ -1102,6 +1101,7 @@ internal fun PlaybackQueueOverlay(
     canRetry: Boolean,
     onRetry: () -> Unit,
     onSelect: (Int) -> Unit,
+    onRemove: (Int) -> Unit,
     onInteraction: () -> Unit,
 ) {
     val listState = rememberLazyListState()
@@ -1132,14 +1132,14 @@ internal fun PlaybackQueueOverlay(
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.34f))) {
         Column(
             Modifier.fillMaxHeight().fillMaxWidth(0.43f).align(Alignment.CenterEnd)
-                .background(Color(0xF2161C1A)).padding(horizontal = 24.dp, vertical = 28.dp),
+                .background(Color(0xF3121717)).padding(horizontal = 24.dp, vertical = 28.dp),
         ) {
             Text("当前播放 ($loadedCount)", fontSize = 25.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(18.dp))
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
                 itemsIndexed(
                     items = items,
@@ -1147,50 +1147,67 @@ internal fun PlaybackQueueOverlay(
                 ) { index, item ->
                     val rowKey = requesterKeys[index]
                     val requester = remember(rowKey) { FocusRequester() }
+                    val deleteRequester = remember(rowKey) { FocusRequester() }
                     LaunchedEffect(requestedFocusKey, rowKey) {
                         if (requestedFocusKey == rowKey) requester.requestFocus()
                     }
-                    Button(
-                        onClick = {
-                            onInteraction()
-                            onSelect(item.queueIndex)
-                        },
-                        modifier = Modifier.fillMaxWidth().height(58.dp)
-                            .focusProperties {
-                                left = FocusRequester.Cancel
-                                right = FocusRequester.Cancel
-                            }
-                            .focusRequester(requester)
-                            .onFocusChanged {
-                                if (it.isFocused) {
-                                    focusedRowKey = rowKey
-                                    if (requestedFocusKey == rowKey) requestedFocusKey = null
-                                    onInteraction()
-                                }
-                            }
-                            .semantics {
-                                contentDescription = "${index + 1}. ${item.title} ${item.artist}" +
-                                    if (item.isCurrent) "，正在播放" else ""
+                    val rowShape = RoundedCornerShape(5.dp)
+                    Row(Modifier.fillMaxWidth().height(54.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Button(
+                            onClick = {
+                                onInteraction()
+                                onSelect(item.queueIndex)
                             },
-                        scale = ButtonDefaults.scale(focusedScale = 1.015f),
-                        colors = ButtonDefaults.colors(
-                            containerColor = if (item.isCurrent) Color(0xFF2E3835) else Color.Transparent,
-                            contentColor = FnColors.Text,
-                            focusedContainerColor = Color(0xFF3A4541),
-                            focusedContentColor = FnColors.Text,
-                        ),
-                        contentPadding = PaddingValues(0.dp),
-                    ) {
-                        Row(
-                            Modifier.fillMaxSize().padding(horizontal = 14.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f).fillMaxHeight()
+                                .focusProperties {
+                                    left = FocusRequester.Cancel
+                                    right = deleteRequester
+                                }
+                                .focusRequester(requester)
+                                .onFocusChanged {
+                                    if (it.isFocused) {
+                                        focusedRowKey = rowKey
+                                        if (requestedFocusKey == rowKey) requestedFocusKey = null
+                                        onInteraction()
+                                    }
+                                }
+                                .semantics {
+                                    contentDescription = "${index + 1}. ${item.title} ${item.artist}" +
+                                        if (item.isCurrent) "，正在播放" else ""
+                                },
+                            shape = ButtonDefaults.shape(rowShape, rowShape, rowShape, rowShape, rowShape),
+                            scale = ButtonDefaults.scale(focusedScale = 1f),
+                            colors = ButtonDefaults.colors(
+                                containerColor = if (item.isCurrent) Color.White.copy(alpha = 0.055f) else Color.Transparent,
+                                contentColor = FnColors.Text,
+                                focusedContainerColor = Color.White.copy(alpha = 0.075f),
+                                focusedContentColor = FnColors.Text,
+                                pressedContainerColor = Color.White.copy(alpha = 0.10f),
+                                pressedContentColor = FnColors.Text,
+                            ),
+                            border = ButtonDefaults.border(
+                                border = Border(
+                                    BorderStroke(
+                                        1.dp,
+                                        if (item.isCurrent) Color.White.copy(alpha = 0.30f) else Color.Transparent,
+                                    ),
+                                    shape = rowShape,
+                                ),
+                                focusedBorder = Border(BorderStroke(1.25.dp, Color.White.copy(alpha = 0.86f)), shape = rowShape),
+                                pressedBorder = Border(BorderStroke(1.25.dp, Color.White.copy(alpha = 0.72f)), shape = rowShape),
+                            ),
+                            contentPadding = PaddingValues(0.dp),
                         ) {
+                            Row(
+                                Modifier.fillMaxSize().padding(start = 12.dp, end = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
                             Text(
                                 "${index + 1}",
                                 color = FnColors.Muted,
                                 fontSize = 13.sp,
                                 lineHeight = 16.sp,
-                                modifier = Modifier.width(34.dp),
+                                modifier = Modifier.width(30.dp),
                             )
                             Column(
                                 Modifier.weight(1f).fillMaxHeight(),
@@ -1218,9 +1235,48 @@ internal fun PlaybackQueueOverlay(
                                     color = FnColors.Coral,
                                     fontSize = 11.sp,
                                     lineHeight = 14.sp,
+                                    fontWeight = FontWeight.Medium,
                                     maxLines = 1,
                                 )
                             }
+                            }
+                        }
+                        Button(
+                            onClick = {
+                                onInteraction()
+                                focusedRowKey = rowKey
+                                onRemove(item.queueIndex)
+                            },
+                            modifier = Modifier.size(40.dp)
+                                .focusProperties {
+                                    left = requester
+                                    right = FocusRequester.Cancel
+                                }
+                                .focusRequester(deleteRequester)
+                                .onFocusChanged {
+                                    if (it.isFocused) {
+                                        focusedRowKey = rowKey
+                                        onInteraction()
+                                    }
+                                }
+                                .semantics { contentDescription = "从播放队列删除 ${item.title}" },
+                            shape = ButtonDefaults.shape(rowShape, rowShape, rowShape, rowShape, rowShape),
+                            scale = ButtonDefaults.scale(focusedScale = 1f),
+                            colors = ButtonDefaults.colors(
+                                containerColor = Color.Transparent,
+                                contentColor = FnColors.Muted.copy(alpha = 0.82f),
+                                focusedContainerColor = Color.White.copy(alpha = 0.10f),
+                                focusedContentColor = FnColors.Coral,
+                                pressedContainerColor = Color.White.copy(alpha = 0.14f),
+                                pressedContentColor = FnColors.Coral,
+                            ),
+                            border = ButtonDefaults.border(
+                                focusedBorder = Border(BorderStroke(1.dp, Color.White.copy(alpha = 0.34f)), shape = rowShape),
+                                pressedBorder = Border(BorderStroke(1.dp, Color.White.copy(alpha = 0.28f)), shape = rowShape),
+                            ),
+                            contentPadding = PaddingValues(0.dp),
+                        ) {
+                            QueueDeleteIcon()
                         }
                     }
                 }
@@ -1251,6 +1307,28 @@ internal fun PlaybackQueueOverlay(
 }
 
 @Composable
+private fun QueueDeleteIcon() {
+    val color = LocalContentColor.current
+    Canvas(Modifier.size(14.dp)) {
+        val stroke = 1.5.dp.toPx()
+        drawLine(
+            color,
+            androidx.compose.ui.geometry.Offset(size.width * 0.24f, size.height * 0.24f),
+            androidx.compose.ui.geometry.Offset(size.width * 0.76f, size.height * 0.76f),
+            stroke,
+            StrokeCap.Round,
+        )
+        drawLine(
+            color,
+            androidx.compose.ui.geometry.Offset(size.width * 0.76f, size.height * 0.24f),
+            androidx.compose.ui.geometry.Offset(size.width * 0.24f, size.height * 0.76f),
+            stroke,
+            StrokeCap.Round,
+        )
+    }
+}
+
+@Composable
 internal fun PlayerControlOverlay(
     positionMs: Long,
     durationMs: Long,
@@ -1262,18 +1340,22 @@ internal fun PlayerControlOverlay(
     previousFocus: FocusRequester,
     playFocus: FocusRequester,
     nextFocus: FocusRequester,
+    favoriteFocus: FocusRequester,
     modeFocus: FocusRequester,
     queueFocus: FocusRequester,
     exitRoamFocus: FocusRequester,
     statusRetryFocus: FocusRequester,
     statusRetryAvailable: Boolean,
     playMode: PlayMode,
+    favorite: Boolean,
+    favoriteEnabled: Boolean,
     queueCount: Int,
     onInteraction: () -> Unit,
     onSeek: (Long) -> Unit,
     onPrevious: () -> Unit,
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
+    onToggleFavorite: () -> Unit,
     onCyclePlayMode: () -> Unit,
     onOpenQueue: () -> Unit,
     onExitRoam: () -> Unit,
@@ -1362,20 +1444,43 @@ internal fun PlayerControlOverlay(
             Text(formatDuration(durationMs), color = Color.White.copy(alpha = 0.72f), fontSize = 9.sp, lineHeight = 10.sp, maxLines = 1)
         }
         Box(Modifier.fillMaxWidth().weight(1f)) {
-            if (!roaming) {
+            Row(
+                Modifier.align(Alignment.CenterStart),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 PlayerSideActionButton(
-                    glyph = playModeGlyph(playMode),
-                    description = "播放模式：${playModeLabel(playMode)}",
-                    focusRequester = modeFocus,
+                    glyph = if (favorite) PlayerSideActionGlyph.HeartFilled else PlayerSideActionGlyph.HeartOutline,
+                    description = if (favorite) "取消收藏当前歌曲" else "收藏当前歌曲",
+                    focusRequester = favoriteFocus,
                     upFocus = progressFocus,
-                    rightFocus = if (previousEnabled) previousFocus else playFocus,
+                    rightFocus = when {
+                        !roaming -> modeFocus
+                        previousEnabled -> previousFocus
+                        else -> playFocus
+                    },
+                    selected = favorite,
                     onFocus = onInteraction,
                     onClick = {
                         onInteraction()
-                        onCyclePlayMode()
+                        if (favoriteEnabled) onToggleFavorite()
                     },
-                    modifier = Modifier.align(Alignment.CenterStart),
                 )
+                if (!roaming) {
+                    PlayerSideActionButton(
+                        glyph = playModeGlyph(playMode),
+                        description = "播放模式：${playModeLabel(playMode)}",
+                        focusRequester = modeFocus,
+                        upFocus = progressFocus,
+                        leftFocus = favoriteFocus,
+                        rightFocus = if (previousEnabled) previousFocus else playFocus,
+                        onFocus = onInteraction,
+                        onClick = {
+                            onInteraction()
+                            onCyclePlayMode()
+                        },
+                    )
+                }
             }
             Row(
                 Modifier.align(Alignment.Center),
@@ -1388,7 +1493,7 @@ internal fun PlayerControlOverlay(
                     enabled = previousEnabled,
                     focusRequester = previousFocus,
                     upFocus = progressFocus,
-                    leftFocus = modeFocus.takeIf { !roaming },
+                    leftFocus = if (roaming) favoriteFocus else modeFocus,
                     rightFocus = playFocus,
                     onFocus = onInteraction,
                     onClick = onPrevious,
@@ -1400,8 +1505,8 @@ internal fun PlayerControlOverlay(
                     upFocus = progressFocus,
                     leftFocus = when {
                         previousEnabled -> previousFocus
-                        !roaming -> modeFocus
-                        else -> null
+                        roaming -> favoriteFocus
+                        else -> modeFocus
                     },
                     rightFocus = when {
                         nextEnabled -> nextFocus
@@ -1454,6 +1559,7 @@ private fun PlayerSideActionButton(
     leftFocus: FocusRequester? = null,
     rightFocus: FocusRequester? = null,
     emphasized: Boolean = false,
+    selected: Boolean = false,
     onFocus: () -> Unit,
     onClick: () -> Unit,
 ) {
@@ -1475,15 +1581,24 @@ private fun PlayerSideActionButton(
                 }
                 .focusRequester(focusRequester)
                 .onFocusChanged { if (it.isFocused) onFocus() }
-                .semantics { contentDescription = description },
+                .semantics {
+                    contentDescription = description
+                    if (glyph == PlayerSideActionGlyph.HeartOutline || glyph == PlayerSideActionGlyph.HeartFilled) {
+                        this.selected = selected
+                    }
+                },
             scale = ButtonDefaults.scale(focusedScale = 1.1f),
             colors = ButtonDefaults.colors(
                 containerColor = if (emphasized) Color(0x66382A27) else Color.Transparent,
-                contentColor = if (emphasized) Color(0xFFF0D9D1) else FnColors.Text,
-                focusedContainerColor = FnColors.Coral,
-                focusedContentColor = FnColors.Background,
-                pressedContainerColor = FnColors.Coral,
-                pressedContentColor = FnColors.Background,
+                contentColor = when {
+                    selected -> Color(0xFFFF3B4D)
+                    emphasized -> Color(0xFFF0D9D1)
+                    else -> FnColors.Text
+                },
+                focusedContainerColor = if (selected) Color(0xFFF8F3EE) else FnColors.Coral,
+                focusedContentColor = if (selected) Color(0xFFFF3B4D) else FnColors.Background,
+                pressedContainerColor = if (selected) Color(0xFFEDE7E2) else FnColors.Coral,
+                pressedContentColor = if (selected) Color(0xFFFF3B4D) else FnColors.Background,
             ),
             contentPadding = PaddingValues(0.dp),
         ) {
@@ -1520,7 +1635,15 @@ private fun Modifier.playerTouchTarget(enabled: Boolean = true, onClick: () -> U
         }
     }
 
-private enum class PlayerSideActionGlyph { RepeatAll, Shuffle, RepeatOne, Sequence, Queue }
+private enum class PlayerSideActionGlyph {
+    HeartOutline,
+    HeartFilled,
+    RepeatAll,
+    Shuffle,
+    RepeatOne,
+    Sequence,
+    Queue,
+}
 
 private fun playModeGlyph(mode: PlayMode): PlayerSideActionGlyph = when (mode) {
     PlayMode.ListRepeat -> PlayerSideActionGlyph.RepeatAll
@@ -1548,6 +1671,20 @@ private fun PlayerSideActionIcon(glyph: PlayerSideActionGlyph) {
             line(tipX - 0.16f, tipY + 0.13f, tipX, tipY)
         }
         when (glyph) {
+            PlayerSideActionGlyph.HeartOutline,
+            PlayerSideActionGlyph.HeartFilled,
+            -> {
+                val heart = heartPath(size)
+                if (glyph == PlayerSideActionGlyph.HeartFilled) {
+                    drawPath(heart, iconColor)
+                } else {
+                    drawPath(
+                        heart,
+                        iconColor,
+                        style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round),
+                    )
+                }
+            }
             PlayerSideActionGlyph.RepeatAll,
             PlayerSideActionGlyph.RepeatOne,
             -> {
