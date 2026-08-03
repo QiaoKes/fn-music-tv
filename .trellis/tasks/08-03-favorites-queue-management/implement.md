@@ -12,6 +12,9 @@
 - [x] Update Trellis frontend/backend contracts with the durable favorite and queue-mutation conventions.
 - [x] Run targeted model/data/playback/UI tests, full sideload unit tests, lint, and debug assembly.
 - [x] Capture and inspect 1920x1080 and 1280x720 player/home/favorites screenshots for focus, clipping, and overlap.
+- [x] Refine the shared heart silhouette and redesign only the Random Roam, Favorites, and All Playlists Home artwork; rebuild and inspect both TV viewports.
+- [x] Restyle queue rows and delete focus after the NetEase reference, and keep the selected player heart red across focus and press states.
+- [x] Remove the legacy record fallback across library surfaces; reuse Favorites artwork in its detail and keep artist initials consistent between cards and detail.
 
 ## Validation
 

@@ -378,6 +378,10 @@ interface AuthenticatedAppActions {
   page return does not flash the placeholder. Artist/album lockup focus may prefetch the exact Grid
   entry for the destination detail page, but the Compact list image must never be displayed as a
   temporary Grid image; this avoids a visible low-resolution-to-high-resolution sharpening step.
+- Missing and failed remote artwork uses the same media-specific fallback on cards and details.
+  Favorites detail reuses the Home Favorites artwork; artists use the same circular first-character
+  avatar at both sizes; tracks, playlists, and albums use the shared centered first-character
+  placeholder. Do not restore the retired generic record illustration on any library surface.
 - Home/My player re-entry is a compact music pill with fixed measured bounds, cover/fallback,
   playing state, ellipsized title/artist, and a trailing cue. Focus may change border, surface, and
   scale without reflow. Its compact status row disables Android font padding, while the bold title
@@ -449,6 +453,8 @@ interface AuthenticatedAppActions {
 | Exact artwork bitmap is already decoded | Render it on the first composition without an empty/placeholder frame |
 | Detail Grid artwork is still loading | Keep the fixed deterministic placeholder; never substitute the Compact list bitmap |
 | Artist/album lockup receives focus | Prefetch its exact Grid artwork without changing the displayed Compact artwork |
+| Favorites or an artist has no artwork | Reuse the Favorites feature art or circular artist initial consistently on card and detail |
+| Track/playlist/album artwork is absent or fails | Render the shared centered initial placeholder inside the same fixed bounds |
 | Back at My root | Replace My with Home; do not background the task |
 | First Back at Home | Show confirmation only; playback and task remain active |
 | Second Back within 2,000 ms | Save paused state, stop playback/service, remove the task, and exit without clearing account data |
@@ -466,6 +472,8 @@ interface AuthenticatedAppActions {
   while the Home/My shared summaries stay warm for the signed-in session.
 - Good: focus an album card, keep its Compact image unchanged, then open detail and immediately use
   the independently prefetched Grid bitmap when available.
+- Good: open an artist with no cover and keep the same circular first-character identity used by
+  its My card; open Favorites and reuse the Home Favorites heart artwork in the detail header.
 - Good: tap Account, type with a phone IME, tap the center of a three-minute progress track from
   12 seconds, and request a relative seek of about 78 seconds without changing TV focus contracts.
 - Good: render the same centered login form on TV and a smaller landscape device; the TV shows the
@@ -516,6 +524,8 @@ interface AuthenticatedAppActions {
 - Bad: requesting first focus before data is composed, or always requesting index zero after Back.
 - Bad: drawing an empty solid rectangle while artwork loads, or stretching a cached Compact bitmap
   into detail before swapping to Grid.
+- Bad: keeping a legacy record fallback in a detail screen while the corresponding card uses a
+  feature image or first-character avatar; missing artwork must not change visual identity by route.
 - Bad: showing the IME on center-key down without delay and letting the matching key-up enter the
   keyboard's initially focused character.
 - Bad: relying on a main-pass `detectTapGestures` outside `BasicTextField`; its own pointer input can
@@ -566,6 +576,9 @@ interface AuthenticatedAppActions {
 - Artwork continuity tests: exact decoded hits are available synchronously, Compact and Grid stay
   isolated, focused artist/album items request Grid prefetch, and a miss retains stable bounds and
   placeholder content.
+- Library fallback screenshot checks: Favorites detail matches its Home artwork, an artist without
+  a cover shows the same initial on card and detail, and source search finds no retired record
+  fallback implementation or call site.
 - Artwork ambience tests: a colorful minority swatch beats a large neutral backdrop, black margins
   do not defeat a valid color, every mapped surface stays dark, and missing artwork returns the one
   fixed brand neutral.
@@ -784,6 +797,17 @@ RemoteArtwork(coverId, CoverVariant.Grid, fallback = cachedCompact)
 // Correct: prefetch Grid on focus and keep a stable placeholder until that exact image is ready.
 onFocusChanged { if (it.isFocused) artworkBitmapCache.prefetch(coverId, CoverVariant.Grid) }
 RemoteArtwork(coverId, CoverVariant.Grid, placeholder = stableArtworkPlaceholder)
+```
+
+```kotlin
+// Wrong: each route invents an unrelated fallback for the same media identity.
+DetailArtwork(placeholder = LegacyRecordArtwork())
+
+// Correct: cards, load failures, and details select from the same media-specific fallback set.
+CollectionArtwork(
+    coverId = coverId,
+    fallback = CollectionArtworkFallback.Artist,
+)
 ```
 
 ```kotlin
