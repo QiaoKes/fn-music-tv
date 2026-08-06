@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/android-client-contracts.md","reason":"加密凭据、登录摘要、会话恢复和旧数据迁移契约"}
+{"file":".trellis/spec/frontend/android-tv-interaction.md","reason":"登录历史、直接登录、恢复界面和电视焦点契约"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"检查存储到仓库、协调器和 Compose 的跨层数据流"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"复用现有连接解析、主题颜色和登录控件"}

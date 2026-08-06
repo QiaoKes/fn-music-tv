@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 12
-- **Last Active**: 2026-08-03
+- **Total Sessions**: 14
+- **Last Active**: 2026-08-07
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~281 | Active |
+| `journal-1.md` | ~321 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,8 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 14 | 2026-08-07 | Archive remaining Trellis tasks | - | `fix-relogin-saki` |
+| 13 | 2026-08-07 | Release 1.0.1 login recovery and TV controls | `d091835` | `fix-relogin-saki` |
 | 12 | 2026-08-03 | Release 1.0.0 favorites and queue | `505e129`, `1eaba0c`, `3bb58ba` | `feature-favorite-saki` |
 | 11 | 2026-08-03 | Finish artwork loading continuity | `89fee0c` | `main` |
 | 10 | 2026-08-03 | 完成 App 等量重构与 0.1.13 发布准备 | `8c87978`, `ba698fc`, `0286d35`, `08d1650` | `opt-recode-saki` |

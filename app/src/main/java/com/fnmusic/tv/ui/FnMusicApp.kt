@@ -45,6 +45,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -73,6 +74,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 import com.fnmusic.tv.AppUiDependencies
+import com.fnmusic.tv.core.data.repository.LoginDraft
+import com.fnmusic.tv.core.data.repository.LoginHistoryEntry
 import com.fnmusic.tv.core.data.repository.SessionState
 import com.fnmusic.tv.core.data.server.ConnectionResolver
 import com.fnmusic.tv.core.data.server.ServerUrlNormalizer
@@ -90,14 +93,25 @@ internal fun FnMusicApp(container: AppUiDependencies, onExitApplication: () -> U
         Box(Modifier.fillMaxSize().background(FnColors.Background)) {
             when (val current = session) {
                 SessionState.Loading -> BrandLoading()
+                is SessionState.Recovering -> SessionRecoveryScreen(
+                    state = current,
+                    onRetry = container.authenticatedActions::retrySessionRestore,
+                    onShowLogin = container.authenticatedActions::showLogin,
+                )
                 is SessionState.SignedOut -> {
                     LoginScreen(
                         savedServer = current.savedServer,
                         recentServers = current.recentServers,
+                        loginHistory = current.loginHistory,
+                        initialSelectedProfileId = current.selectedProfileId,
                         initialError = current.error,
                         onLogin = { server, https, user, password, remember, accessCode ->
                             container.sessionRepository.login(server, https, user, password, remember, accessCode)
                         },
+                        onHistoryLogin = container.sessionRepository::loginWithHistory,
+                        onHistoryDelete = container.sessionRepository::deleteLoginHistory,
+                        onHistoryClear = container.sessionRepository::clearLoginHistory,
+                        historyDraft = container.sessionRepository::loginDraft,
                     )
                 }
                 is SessionState.SignedIn -> {
@@ -106,6 +120,53 @@ internal fun FnMusicApp(container: AppUiDependencies, onExitApplication: () -> U
             }
         }
     }
+}
+
+@Composable
+private fun SessionRecoveryScreen(
+    state: SessionState.Recovering,
+    onRetry: suspend () -> Unit,
+    onShowLogin: suspend () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val retryFocus = remember { FocusRequester() }
+    val loginFocus = remember { FocusRequester() }
+    Column(
+        Modifier.fillMaxSize().padding(64.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("正在重新连接", color = FnColors.Text, fontSize = 34.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(12.dp))
+        Text(state.server, color = FnColors.Muted, fontSize = 21.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        state.username?.let { username ->
+            Spacer(Modifier.height(5.dp))
+            Text(username, color = FnColors.Muted, fontSize = 19.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "${errorMessage(state.error)} · 第 ${state.attempt} 次重试",
+            color = FnColors.Warning,
+            fontSize = 19.sp,
+            maxLines = 1,
+        )
+        Spacer(Modifier.height(24.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            LoginActionButton(
+                onClick = { scope.launch { onRetry() } },
+                modifier = Modifier.width(190.dp).height(54.dp)
+                    .focusProperties { right = loginFocus }
+                    .focusRequester(retryFocus),
+            ) { Text("立即重试", fontSize = 20.sp) }
+            LoginActionButton(
+                onClick = { scope.launch { onShowLogin() } },
+                modifier = Modifier.width(190.dp).height(54.dp)
+                    .focusProperties { left = retryFocus }
+                    .focusRequester(loginFocus),
+            ) { Text("切换登录", fontSize = 20.sp) }
+        }
+    }
+    LaunchedEffect(Unit) { retryFocus.requestFocus() }
 }
 
 @Composable
@@ -123,14 +184,32 @@ internal fun LoginScreen(
     recentServers: List<String>,
     initialError: AppError?,
     onLogin: suspend (String, Boolean, String, CharArray, Boolean, CharArray) -> Unit,
+    loginHistory: List<LoginHistoryEntry> = emptyList(),
+    initialSelectedProfileId: String? = null,
+    onHistoryLogin: suspend (String, CharArray?, Boolean) -> Unit = { _, accessCode, _ ->
+        accessCode?.fill('\u0000')
+    },
+    onHistoryDelete: suspend (String) -> Unit = {},
+    onHistoryClear: suspend () -> Unit = {},
+    historyDraft: (String) -> LoginDraft? = { null },
 ) {
-    val initialServer = remember(savedServer) { ServerUrlNormalizer.editableInput(savedServer, false) }
-    var server by remember(initialServer) { mutableStateOf(initialServer.address) }
-    var username by remember { mutableStateOf("") }
+    val selectedDraft = remember(initialSelectedProfileId, loginHistory) {
+        initialSelectedProfileId?.let(historyDraft)
+    }
+    val initialServer = remember(savedServer, selectedDraft) {
+        selectedDraft?.let { ServerUrlNormalizer.editableInput(it.server, it.useHttps) }
+            ?: ServerUrlNormalizer.editableInput(savedServer, false)
+    }
+    var server by remember(initialServer, selectedDraft?.profileId) { mutableStateOf(initialServer.address) }
+    var username by remember(selectedDraft?.profileId) { mutableStateOf(selectedDraft?.username.orEmpty()) }
     var password by remember { mutableStateOf("") }
-    var accessCode by remember { mutableStateOf("") }
+    var accessCode by remember(selectedDraft?.profileId) { mutableStateOf(selectedDraft?.accessCode.orEmpty()) }
     var rememberLogin by remember { mutableStateOf(true) }
     var https by remember(initialServer) { mutableStateOf(initialServer.useHttps) }
+    var selectedProfileId by remember(initialSelectedProfileId) { mutableStateOf(initialSelectedProfileId) }
+    var hasSavedPassword by remember(selectedDraft?.profileId) {
+        mutableStateOf(selectedDraft?.hasSavedPassword == true)
+    }
     var passwordVisible by remember { mutableStateOf(false) }
     var showServerHistory by remember { mutableStateOf(false) }
     var submitting by remember { mutableStateOf(false) }
@@ -148,7 +227,8 @@ internal fun LoginScreen(
     val loginFocus = remember { FocusRequester() }
     val fnIdInput = ConnectionResolver.isFnId(server)
     val validServer = fnIdInput || ServerUrlNormalizer.normalize(server, https) is ServerUrlResult.Valid
-    val canSubmit = !submitting && validServer && username.isNotBlank() && password.isNotBlank()
+    val canSubmit = !submitting && validServer && username.isNotBlank() &&
+        (password.isNotBlank() || (hasSavedPassword && selectedProfileId != null))
     LaunchedEffect(Unit) { if (savedServer.isBlank()) serverFocus.requestFocus() else usernameFocus.requestFocus() }
 
     Box(
@@ -175,18 +255,24 @@ internal fun LoginScreen(
                         val edited = ServerUrlNormalizer.editableInput(it, https)
                         server = edited.address
                         https = edited.useHttps
+                        selectedProfileId = null
+                        hasSavedPassword = false
                     },
                     label = "NAS 地址或 FNID",
                     modifier = Modifier.weight(1f),
                     downFocus = usernameFocus,
-                    rightFocus = historyFocus.takeIf { recentServers.isNotEmpty() },
+                    rightFocus = historyFocus.takeIf { loginHistory.isNotEmpty() || recentServers.isNotEmpty() },
                     inputModifier = Modifier.focusRequester(serverFocus).focusProperties {
-                        right = if (recentServers.isNotEmpty()) historyFocus else FocusRequester.Cancel
+                        right = if (loginHistory.isNotEmpty() || recentServers.isNotEmpty()) {
+                            historyFocus
+                        } else {
+                            FocusRequester.Cancel
+                        }
                         down = usernameFocus
                     },
                 )
                 LoginActionButton(
-                    enabled = recentServers.isNotEmpty(),
+                    enabled = loginHistory.isNotEmpty() || recentServers.isNotEmpty(),
                     onClick = { showServerHistory = true },
                     modifier = Modifier.size(52.dp)
                         .semantics { contentDescription = "历史" }
@@ -196,13 +282,17 @@ internal fun LoginScreen(
                         }
                         .focusRequester(historyFocus),
                 ) {
-                    HistoryIcon(enabled = recentServers.isNotEmpty())
+                    HistoryIcon(enabled = loginHistory.isNotEmpty() || recentServers.isNotEmpty())
                 }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 TvTextField(
                     value = username,
-                    onValueChange = { username = it },
+                    onValueChange = {
+                        username = it
+                        selectedProfileId = null
+                        hasSavedPassword = false
+                    },
                     label = "账号",
                     modifier = Modifier.weight(1f),
                     upFocus = serverFocus,
@@ -237,8 +327,12 @@ internal fun LoginScreen(
             ) {
                 TvTextField(
                     value = password,
-                    onValueChange = { password = it },
+                    onValueChange = {
+                        password = it
+                        hasSavedPassword = false
+                    },
                     label = "密码",
+                    placeholder = "已保存密码".takeIf { hasSavedPassword },
                     modifier = Modifier.weight(1f),
                     upFocus = usernameFocus,
                     downFocus = rememberFocus,
@@ -286,7 +380,11 @@ internal fun LoginScreen(
                             down = if (canSubmit) loginFocus else FocusRequester.Cancel
                         }
                         .focusRequester(httpsFocus),
-                ) { https = !https }
+                ) {
+                    https = !https
+                    selectedProfileId = null
+                    hasSavedPassword = false
+                }
             }
             val statusMessage = error?.let {
                 if (loginAttempted && it == AppError.Unauthenticated) "账号或密码错误" else errorMessage(it)
@@ -310,11 +408,17 @@ internal fun LoginScreen(
                     error = null
                     val submittedPassword = password.toCharArray()
                     val submittedAccessCode = accessCode.toCharArray()
+                    val savedProfileId = selectedProfileId.takeIf { hasSavedPassword && password.isBlank() }
                     password = ""
                     accessCode = ""
                     scope.launch {
                         runCatching {
-                            onLogin(server, https, username, submittedPassword, rememberLogin, submittedAccessCode)
+                            if (savedProfileId != null) {
+                                submittedPassword.fill('\u0000')
+                                onHistoryLogin(savedProfileId, submittedAccessCode, rememberLogin)
+                            } else {
+                                onLogin(server, https, username, submittedPassword, rememberLogin, submittedAccessCode)
+                            }
                         }
                             .onFailure { error = (it as? AppException)?.error ?: AppError.Unknown() }
                         submitting = false
@@ -338,34 +442,134 @@ internal fun LoginScreen(
     }
 
     if (showServerHistory) {
-        val firstHistoryFocus = remember { FocusRequester() }
+        val profileIds = loginHistory.map(LoginHistoryEntry::id)
+        val profileRowFocus = remember(profileIds) { List(loginHistory.size) { FocusRequester() } }
+        val profileDeleteFocus = remember(profileIds) { List(loginHistory.size) { FocusRequester() } }
+        val legacyRowFocus = remember(recentServers) { List(recentServers.size) { FocusRequester() } }
+        val clearHistoryFocus = remember { FocusRequester() }
+        val firstHistoryFocus = profileRowFocus.firstOrNull() ?: legacyRowFocus.firstOrNull()
         Dialog(onDismissRequest = { showServerHistory = false }) {
             Column(
-                Modifier.width(540.dp).background(FnColors.Surface, RoundedCornerShape(8.dp)).padding(28.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                Modifier.width(600.dp).background(FnColors.Surface, RoundedCornerShape(8.dp)).padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("最近服务器", fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
-                recentServers.forEachIndexed { index, recent ->
-                    val editable = ServerUrlNormalizer.editableInput(recent, https)
-                    LoginActionButton(
-                        onClick = {
-                            server = editable.address
-                            https = editable.useHttps
-                            showServerHistory = false
-                        },
-                        modifier = Modifier.fillMaxWidth().height(56.dp)
-                            .then(if (index == 0) Modifier.focusRequester(firstHistoryFocus) else Modifier),
-                    ) {
-                        Text(editable.address, fontSize = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("登录历史", fontSize = 27.sp, fontWeight = FontWeight.SemiBold)
+                loginHistory.forEachIndexed { index, entry ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        LoginActionButton(
+                            onClick = {
+                                val draft = historyDraft(entry.id) ?: return@LoginActionButton
+                                server = draft.server
+                                https = draft.useHttps
+                                username = draft.username
+                                accessCode = draft.accessCode
+                                password = ""
+                                selectedProfileId = draft.profileId
+                                hasSavedPassword = draft.hasSavedPassword
+                                showServerHistory = false
+                                submitting = true
+                                loginAttempted = true
+                                error = null
+                                scope.launch {
+                                    runCatching {
+                                        onHistoryLogin(
+                                            draft.profileId,
+                                            draft.accessCode.toCharArray(),
+                                            rememberLogin,
+                                        )
+                                    }.onFailure {
+                                        error = (it as? AppException)?.error ?: AppError.Unknown()
+                                    }
+                                    submitting = false
+                                }
+                            },
+                            modifier = Modifier.weight(1f).height(72.dp)
+                                .semantics { contentDescription = "登录历史：${entry.username}" }
+                                .focusProperties {
+                                    right = profileDeleteFocus[index]
+                                    up = profileRowFocus.getOrNull(index - 1) ?: FocusRequester.Cancel
+                                    down = profileRowFocus.getOrNull(index + 1) ?: clearHistoryFocus
+                                }
+                                .focusRequester(profileRowFocus[index]),
+                            shape = RoundedCornerShape(6.dp),
+                            selected = entry.id == selectedProfileId,
+                        ) {
+                            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                                Text(
+                                    entry.username,
+                                    color = FnColors.Text,
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    "${entry.server} (${if (entry.useHttps) "HTTPS" else "HTTP"})",
+                                    color = FnColors.Muted,
+                                    fontSize = 16.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                        LoginActionButton(
+                            onClick = { scope.launch { onHistoryDelete(entry.id) } },
+                            modifier = Modifier.size(72.dp)
+                                .semantics { contentDescription = "删除历史：${entry.username}" }
+                                .focusProperties {
+                                    left = profileRowFocus[index]
+                                    up = profileDeleteFocus.getOrNull(index - 1) ?: FocusRequester.Cancel
+                                    down = profileDeleteFocus.getOrNull(index + 1) ?: clearHistoryFocus
+                                }
+                                .focusRequester(profileDeleteFocus[index]),
+                            shape = RoundedCornerShape(6.dp),
+                        ) {
+                            DeleteHistoryIcon()
+                        }
+                    }
+                }
+                if (loginHistory.isEmpty()) {
+                    recentServers.forEachIndexed { index, recent ->
+                        val editable = ServerUrlNormalizer.editableInput(recent, https)
+                        LoginActionButton(
+                            onClick = {
+                                server = editable.address
+                                https = editable.useHttps
+                                selectedProfileId = null
+                                hasSavedPassword = false
+                                showServerHistory = false
+                            },
+                            modifier = Modifier.fillMaxWidth().height(56.dp)
+                                .focusProperties {
+                                    up = legacyRowFocus.getOrNull(index - 1) ?: FocusRequester.Cancel
+                                    down = legacyRowFocus.getOrNull(index + 1) ?: clearHistoryFocus
+                                }
+                                .focusRequester(legacyRowFocus[index]),
+                            shape = RoundedCornerShape(6.dp),
+                        ) {
+                            Text(editable.address, fontSize = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                     }
                 }
                 LoginActionButton(
-                    onClick = { showServerHistory = false },
-                    modifier = Modifier.fillMaxWidth().height(56.dp),
-                ) { Text("取消", fontSize = 20.sp) }
+                    onClick = {
+                        scope.launch {
+                            onHistoryClear()
+                            showServerHistory = false
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().height(56.dp)
+                        .focusProperties {
+                            up = profileRowFocus.lastOrNull()
+                                ?: legacyRowFocus.lastOrNull()
+                                ?: FocusRequester.Cancel
+                        }
+                        .focusRequester(clearHistoryFocus),
+                    shape = RoundedCornerShape(6.dp),
+                ) { Text("清除所有历史记录", color = FnColors.Coral, fontSize = 19.sp) }
             }
         }
-        LaunchedEffect(Unit) { firstHistoryFocus.requestFocus() }
+        LaunchedEffect(firstHistoryFocus) { firstHistoryFocus?.requestFocus() }
     }
 }
 
@@ -401,6 +605,27 @@ private fun HistoryIcon(enabled: Boolean) {
             color = iconColor,
             start = center,
             end = androidx.compose.ui.geometry.Offset(center.x + radius * 0.48f, center.y),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round,
+        )
+    }
+}
+
+@Composable
+private fun DeleteHistoryIcon() {
+    Canvas(Modifier.size(24.dp)) {
+        val stroke = 2.4.dp.toPx()
+        drawLine(
+            FnColors.Coral,
+            start = androidx.compose.ui.geometry.Offset(size.width * 0.22f, size.height * 0.22f),
+            end = androidx.compose.ui.geometry.Offset(size.width * 0.78f, size.height * 0.78f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            FnColors.Coral,
+            start = androidx.compose.ui.geometry.Offset(size.width * 0.78f, size.height * 0.22f),
+            end = androidx.compose.ui.geometry.Offset(size.width * 0.22f, size.height * 0.78f),
             strokeWidth = stroke,
             cap = StrokeCap.Round,
         )
@@ -445,6 +670,7 @@ private fun TvTextField(
     onValueChange: (String) -> Unit,
     label: String,
     modifier: Modifier = Modifier,
+    placeholder: String? = null,
     inputModifier: Modifier = Modifier,
     visualTransformation: VisualTransformation = VisualTransformation.None,
     upFocus: FocusRequester? = null,
@@ -563,6 +789,9 @@ private fun TvTextField(
                     Modifier.fillMaxSize().padding(horizontal = 16.dp),
                     contentAlignment = Alignment.CenterStart,
                 ) {
+                    if (value.isEmpty() && placeholder != null) {
+                        Text(placeholder, color = FnColors.Muted, fontSize = 22.sp)
+                    }
                     innerTextField()
                 }
             },
@@ -615,11 +844,12 @@ private fun LoginActionButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    shape: Shape = RoundedCornerShape(50),
+    selected: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
     var centerKeyDown by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(50)
     Box(
         modifier
             .onFocusChanged {
@@ -630,6 +860,7 @@ private fun LoginActionButton(
                 when {
                     !enabled -> Color(0xFF292A2F)
                     focused -> Color(0xFF4A464F)
+                    selected -> FnColors.FocusFill
                     else -> Color(0xFF414047)
                 },
                 shape,
