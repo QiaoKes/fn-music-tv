@@ -1,0 +1,3 @@
+{"file":".trellis/spec/backend/android-client-contracts.md","reason":"核对安全存储、错误矩阵、重试和测试要求"}
+{"file":".trellis/spec/frontend/android-tv-interaction.md","reason":"核对项目配色、焦点、语义和直接登录交互"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"复核凭据与错误状态的端到端流向"}

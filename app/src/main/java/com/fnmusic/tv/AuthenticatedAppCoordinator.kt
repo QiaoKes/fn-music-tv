@@ -11,13 +11,17 @@ import com.fnmusic.tv.core.playback.PlaybackController
 import com.fnmusic.tv.core.playback.PlaybackService
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 internal interface AuthenticatedAppActions {
     suspend fun verifyCurrentSession()
+    suspend fun retrySessionRestore()
+    suspend fun showLogin()
     suspend fun switchAccount()
     suspend fun clearAllEvictableCaches()
     suspend fun shutdownForExit()
@@ -34,6 +38,7 @@ internal class AuthenticatedAppCoordinator(
     private val applicationScope: CoroutineScope,
 ) : AuthenticatedAppActions {
     private val started = AtomicBoolean(false)
+    private var restoreJob: Job? = null
 
     fun start() {
         if (!started.compareAndSet(false, true)) return
@@ -72,15 +77,25 @@ internal class AuthenticatedAppCoordinator(
                         }
                     }
 
-                    SessionState.Loading -> Unit
+                    SessionState.Loading, is SessionState.Recovering -> Unit
                 }
             }
         }
-        applicationScope.launch { sessionRepository.restore() }
+        launchSessionRestore()
     }
 
     override suspend fun verifyCurrentSession() {
         sessionRepository.verifyCurrentSession()
+    }
+
+    override suspend fun retrySessionRestore() {
+        restoreJob?.cancelAndJoin()
+        launchSessionRestore()
+    }
+
+    override suspend fun showLogin() {
+        restoreJob?.cancelAndJoin()
+        sessionRepository.showLogin()
     }
 
     override suspend fun switchAccount() {
@@ -107,6 +122,10 @@ internal class AuthenticatedAppCoordinator(
         } finally {
             application.stopService(Intent(application, PlaybackService::class.java))
         }
+    }
+
+    private fun launchSessionRestore() {
+        restoreJob = applicationScope.launch { sessionRepository.restore() }
     }
 }
 
