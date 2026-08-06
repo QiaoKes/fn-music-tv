@@ -2,6 +2,7 @@ package com.fnmusic.tv.ui
 
 import android.graphics.Bitmap
 import android.os.ParcelFileDescriptor
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -13,6 +14,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -459,6 +461,38 @@ class PlayerOverlayFocusTest {
         composeRule.onNodeWithContentDescription("播放").assertDoesNotExist()
     }
 
+    @Test fun centerPressWithHiddenControlsTogglesPlaybackOnlyOnce() {
+        val playPauseCalls = AtomicInteger(0)
+        composeRule.setContent {
+            FnMusicTheme {
+                PlayerRevealKeyHarness(onPlayPause = { playPauseCalls.incrementAndGet() })
+            }
+        }
+
+        composeRule.onRoot().performKeyInput { keyDown(Key.DirectionCenter) }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithContentDescription("播放").assertIsFocused()
+        composeRule.onRoot().performKeyInput { keyUp(Key.DirectionCenter) }
+
+        composeRule.runOnIdle { assertEquals(1, playPauseCalls.get()) }
+    }
+
+    @Test fun fastCenterPressDoesNotConsumeTheNextPlaybackToggle() {
+        val playPauseCalls = AtomicInteger(0)
+        composeRule.setContent {
+            FnMusicTheme {
+                PlayerRevealKeyHarness(onPlayPause = { playPauseCalls.incrementAndGet() })
+            }
+        }
+
+        composeRule.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+        val play = composeRule.onNodeWithContentDescription("播放").assertIsFocused()
+        composeRule.runOnIdle { assertEquals(1, playPauseCalls.get()) }
+
+        play.performKeyInput { pressKey(Key.DirectionCenter) }
+        composeRule.runOnIdle { assertEquals(2, playPauseCalls.get()) }
+    }
+
     @Test fun capturePlayerAndQueueEvidence() {
         val items = List(8) { index ->
             PlaybackQueueItem(
@@ -641,6 +675,38 @@ private fun PlayerBackKeyHarness() {
                 onCycleMode = {},
                 onExitRoam = {},
                 onInteraction = {},
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlayerRevealKeyHarness(onPlayPause: () -> Unit) {
+    var controlsVisible by remember { mutableStateOf(false) }
+    var consumeCenterKeyUp by remember { mutableStateOf(false) }
+    val playerFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        playerFocus.requestFocus()
+    }
+    Box(
+        Modifier.fillMaxSize()
+            .focusRequester(playerFocus)
+            .revealPlayerChromeOnKey(
+                chromeVisible = controlsVisible,
+                shouldConsumeCenterKeyUp = { consumeCenterKeyUp },
+                setConsumeCenterKeyUp = { consumeCenterKeyUp = it },
+                onCenter = onPlayPause,
+                onReveal = { controlsVisible = true },
+            )
+            .focusable(),
+    ) {
+        if (controlsVisible) {
+            PlayerControlHarness(
+                roaming = false,
+                onCycleMode = {},
+                onExitRoam = {},
+                onInteraction = {},
+                onPlayPause = onPlayPause,
             )
         }
     }
