@@ -300,3 +300,22 @@ Added encrypted multi-server and multi-account login history, startup network re
 ### Status
 
 [OK] **Completed**
+
+
+## Session 14: Archive remaining Trellis tasks
+
+**Date**: 2026-08-07
+**Task**: Archive remaining Trellis tasks
+**Branch**: `fix-relogin-saki`
+
+### Summary
+
+Archived the completed Bootstrap Guidelines and poster color harmony tasks after confirming the working tree was clean.
+
+### Git Commits
+
+(No commits - planning session)
+
+### Status
+
+[OK] **Completed**
