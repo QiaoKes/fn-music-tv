@@ -279,3 +279,24 @@ Added server-synced favorites, queue item deletion, Home and player visual refin
 ### Status
 
 [OK] **Completed**
+
+
+## Session 13: Release 1.0.1 login recovery and TV controls
+
+**Date**: 2026-08-07
+**Task**: Release 1.0.1 login recovery and TV controls
+**Branch**: `fix-relogin-saki`
+
+### Summary
+
+Added encrypted multi-server and multi-account login history, startup network recovery, direct account switching, TV center-key playback fixes, regression coverage, and prepared version 1.0.1.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d091835` | (see git log) |
+
+### Status
+
+[OK] **Completed**
