@@ -266,6 +266,7 @@ internal fun ImmersivePlayer(
     var controlsVisible by remember { mutableStateOf(true) }
     var queueVisible by remember { mutableStateOf(false) }
     var consumeBackKeyUp by remember { mutableStateOf(false) }
+    var consumeCenterKeyUp by remember { mutableStateOf(false) }
     var interactionEpoch by remember { mutableStateOf(0) }
     val playerFocus = remember { FocusRequester() }
     val progressFocus = remember { FocusRequester() }
@@ -355,21 +356,13 @@ internal fun ImmersivePlayer(
                 setConsumeBackKeyUp = { consumeBackKeyUp = it },
                 onDismiss = ::dismissPlayerChrome,
             )
-            .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown || controlsVisible) return@onPreviewKeyEvent false
-                when (event.key) {
-                    Key.Enter, Key.DirectionCenter -> {
-                        container.playbackController.playPause()
-                        revealControls()
-                        true
-                    }
-                    Key.DirectionLeft, Key.DirectionRight, Key.DirectionUp, Key.DirectionDown -> {
-                        revealControls()
-                        true
-                    }
-                    else -> false
-                }
-            }
+            .revealPlayerChromeOnKey(
+                chromeVisible = controlsVisible,
+                shouldConsumeCenterKeyUp = { consumeCenterKeyUp },
+                setConsumeCenterKeyUp = { consumeCenterKeyUp = it },
+                onCenter = container.playbackController::playPause,
+                onReveal = ::revealControls,
+            )
             .pointerInput(controlsVisible, queueVisible) {
                 if (!controlsVisible && !queueVisible) {
                     detectTapGestures { revealControls() }
@@ -509,6 +502,37 @@ internal fun Modifier.dismissPlayerChromeOnBack(
         }
         consumeBackKeyUp -> {
             if (event.type == KeyEventType.KeyUp) setConsumeBackKeyUp(false)
+            true
+        }
+        else -> false
+    }
+}
+
+internal fun Modifier.revealPlayerChromeOnKey(
+    chromeVisible: Boolean,
+    shouldConsumeCenterKeyUp: () -> Boolean,
+    setConsumeCenterKeyUp: (Boolean) -> Unit,
+    onCenter: () -> Unit,
+    onReveal: () -> Unit,
+): Modifier = onPreviewKeyEvent { event ->
+    val isCenter = event.key == Key.Enter || event.key == Key.DirectionCenter
+    when {
+        isCenter && shouldConsumeCenterKeyUp() -> {
+            if (event.type == KeyEventType.KeyUp) setConsumeCenterKeyUp(false)
+            true
+        }
+        event.type != KeyEventType.KeyDown || chromeVisible -> false
+        isCenter -> {
+            setConsumeCenterKeyUp(true)
+            onCenter()
+            onReveal()
+            true
+        }
+        event.key == Key.DirectionLeft ||
+            event.key == Key.DirectionRight ||
+            event.key == Key.DirectionUp ||
+            event.key == Key.DirectionDown -> {
+            onReveal()
             true
         }
         else -> false

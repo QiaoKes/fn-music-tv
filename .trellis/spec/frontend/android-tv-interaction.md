@@ -211,8 +211,11 @@ interface AuthenticatedAppActions {
   focus target.
 - A custom focus target such as the Canvas progress control applies `focusProperties`, then
   `focusRequester`, then `onPreviewKeyEvent`, then `focusable()`.
-- Password text is cleared before login and never persisted. HTTP warning and login error share
-  one fixed single-line status slot so the Login button remains inside the 1080p safe area.
+- Plain password text is cleared before login and never persisted. A selected encrypted profile may
+  expose only an `已保存密码` placeholder; never put its SHA-256 digest in Compose state, text,
+  semantics, or errors. Editing server/account/protocol unbinds that profile, while typing a new
+  password replaces the saved-password state. HTTP warning and login error share one fixed
+  single-line status slot so the Login button remains inside the 1080p safe area.
 - Login has one TV-first layout for every landscape device. Do not branch on screen class or keep
   a separate phone tree. The same centered scrollable form uses the existing app palette,
   `widthIn(max = 720.dp)` before `fillMaxWidth(0.86f)`, and compact stable control heights so the
@@ -223,6 +226,10 @@ interface AuthenticatedAppActions {
 - History and password visibility are 52dp icon-only buttons. Use familiar recent-history and eye
   glyphs, preserve content descriptions `历史` and `显示或隐藏密码`, and do not place `历史`,
   `显示密码`, or `隐藏密码` inside the buttons.
+- Login history uses the project palette in one non-nested dialog. Each saved server/account row is
+  72dp high with account on the first line and `server (HTTP|HTTPS)` on the second, a separately
+  focusable delete action, selected-row treatment, and one bottom `清除所有历史记录` command.
+  Activating a profile closes the dialog and starts login immediately without another confirmation.
 - Login form commands use the local foundation-based `LoginActionButton`, including history,
   password visibility, login submission, and history-dialog actions. It owns a real focus target
   plus `Modifier.clickable(Role.Button)` so the same callback works for D-pad and physical pointer
@@ -294,7 +301,10 @@ interface AuthenticatedAppActions {
 ### Player controls, modes, and queue
 
 - Hidden controls consume the first directional key, reveal controls, and focus play/pause without
-  seeking or selecting an action. Center toggles play/pause and reveals controls.
+  seeking or selecting an action. Center toggles play/pause and reveals controls. After handling
+  center key-down, the player root must also consume repeated downs and the matching key-up even
+  after controls become visible; otherwise that key-up can activate the newly focused play/pause
+  button and immediately reverse the first toggle.
 - A tap on the player while controls are hidden reveals them without toggling playback. Visible
   Material buttons retain their normal click handling. Tapping progress seeks to the proportional
   timeline position through the same bounded relative seek callback used by D-pad input.
@@ -406,6 +416,10 @@ interface AuthenticatedAppActions {
 | Back while IME is visible | Hide IME, retain field focus, restore browse state |
 | Login returns `Unauthenticated` after an attempt | Show `账号或密码错误` in the fixed status slot |
 | A restored token is unauthorized | Show the session-expired message in the fixed status slot |
+| Startup restore has a retryable network/server failure | Show recovery state and attempt count; keep retrying without exposing the ordinary login form |
+| Recovery action `切换登录` is activated | Cancel the restore task and show the prefilled login/history surface without deleting credentials |
+| Saved history row is activated | Prefill its display fields and invoke its profile login exactly once without confirmation |
+| Saved history delete is activated | Delete only that profile; do not also activate its login row |
 | HTTP is selected without another login error | Show the unencrypted-LAN warning in the same slot |
 | Login is rendered on any landscape device | Use the same centered form tree; no device-specific alternate UI |
 | Remember Login or HTTPS is activated by touch/Center | Toggle its `ToggleableState` and keep a valid focus target |
@@ -503,8 +517,11 @@ interface AuthenticatedAppActions {
 - Base: My Back returns Home; Home Back once only shows the confirmation while music continues.
 - Good: confirm Home exit, durably save the current queue and position as paused, then stop the
   player/service and remove the app task without clearing login, preferences, or caches.
-- Base: an empty password disables Login while all preceding controls remain reachable.
+- Base: an empty password disables Login unless a still-bound profile supplies an encrypted saved
+  digest; editing server/account/protocol unbinds it and disables Login until a new password exists.
 - Base: unavailable server history disables the history icon but keeps its stable 52dp bounds.
+- Good: one server shows two account-first history rows, selecting either logs in immediately, and
+  its independent delete button never invokes login.
 - Base: a paused track changes its state treatment without changing the now-playing pill bounds.
 - Bad: keying artwork only by cover ID; two songs sharing a cover can reuse a failed or stale attempt.
 - Bad: clearing decoded artwork or renderable lyrics merely because the new exact identity first
@@ -533,6 +550,8 @@ interface AuthenticatedAppActions {
 - Bad: rendering login warning and error as separate dynamic rows and clipping Login at 1080p.
 - Bad: adding separate TV/phone login Composables or conditionally removing controls for a phone.
 - Bad: rendering `ON 保持登录`, `OFF HTTPS`, `历史`, or `显示密码` as large text pills.
+- Bad: rendering a saved digest as password bullets/text, asking for a second confirmation after
+  profile selection, copying reference-image colors, or nesting each history row in another card.
 - Bad: testing Login with semantics `performClick()` only; it bypasses the physical pointer path
   that previously failed on TV Material buttons inside the scrollable form.
 - Bad: renaming the launcher label but leaving old branding in loading, login, top bar, banner,
@@ -563,6 +582,11 @@ interface AuthenticatedAppActions {
 - Login option test: activate Remember Login through semantics/touch and assert its
   `ToggleableState` changes from On to Off. D-pad traversal must still reach Remember Login and
   HTTPS in the declared order.
+- Login history Compose/device test: assert account plus `server (protocol)` lines, selected project
+  color treatment, independent row/delete focus targets, one direct-login callback on selection,
+  no login callback on delete, clear-all behavior, and `已保存密码` without digest exposure.
+- Recovery Compose/device test: assert server/account/attempt status plus reachable `立即重试` and
+  `切换登录` actions at both 1920x1080 and 1280x720.
 - Login screenshot test at 1920x1080: assert headings, the shared base/error status slot, and the
   complete Login button are visible and non-overlapping. Assert history/password actions are
   icon-only, field text is vertically centered, and no legacy left-side branding/equalizer remains.
@@ -632,6 +656,30 @@ interface AuthenticatedAppActions {
   direct logout/verification call; coordinator order tests cover switch-account and invalid auth.
 
 ## 7. Wrong vs Correct
+
+```kotlin
+// Wrong: revealing controls on key-down lets the matching key-up reach the newly focused button.
+if (!controlsVisible && event.type == KeyEventType.KeyDown && event.key == Key.DirectionCenter) {
+    onPlayPause()
+    controlsVisible = true
+    true
+}
+
+// Correct: retain ownership until the complete center-key cycle has been consumed.
+when {
+    isCenter && shouldConsumeCenterKeyUp() -> {
+        if (event.type == KeyEventType.KeyUp) consumeCenterKeyUp = false
+        true
+    }
+    !controlsVisible && isCenter && event.type == KeyEventType.KeyDown -> {
+        consumeCenterKeyUp = true
+        onPlayPause()
+        controlsVisible = true
+        true
+    }
+    else -> false
+}
+```
 
 ```kotlin
 // Wrong: one vivid accent independently decides the full poster panel.
