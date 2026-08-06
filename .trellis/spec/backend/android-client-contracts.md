@@ -24,6 +24,18 @@ SessionRepository.login(
     remember: Boolean,
     accessCode: CharArray = charArrayOf(),
 )
+SessionRepository.loginWithHistory(
+    profileId: String,
+    accessCode: CharArray? = null,
+    remember: Boolean = true,
+)
+SessionRepository.deleteLoginHistory(profileId: String)
+SessionRepository.clearLoginHistory()
+data class SecureSessionPayload(
+    val version: Int,
+    val activeProfileId: String?,
+    val profiles: List<StoredLoginProfile>,
+)
 ConnectionResolver.resolve(input: String, useHttps: Boolean): ConnectionTarget
 ConnectionResolver.verifyAccessCode(
     target: ConnectionTarget,
@@ -129,12 +141,20 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   once as base64 UTF-8 and attach `x-access-code` plus `x-access-source: app` to login,
   authenticated API, artwork, and Media3 audio requests. Security codes are zero-filled at the UI
   boundary and, only with remember-login, encrypted by Android Keystore storage.
-- Password enters the repository as `CharArray`, is hashed once at the API boundary, and is
-  zero-filled in `finally`. It is never stored.
+- A manually entered password reaches the repository as `CharArray`, is hashed once, and is
+  zero-filled in `finally`. Only its strictly validated 64-character lowercase SHA-256 hex value
+  may be persisted; because that digest is replayable by the NAS login API, it has the same storage
+  sensitivity as a password and must remain inside the Keystore-backed encrypted payload.
 - Password login includes the stable installation `deviceId`. Authenticated API and playback HTTP
   use the returned token as the raw `Authorization` value, without a `Bearer` prefix.
-- `remember=true` stores the user token and any supplied security code with Android Keystore-backed
-  encryption. `remember=false` keeps both in memory only.
+- `remember=true` upserts one encrypted login profile keyed by canonical server plus case-sensitive
+  username. The profile contains server/relay mode, username, password digest, optional security
+  code, token, and last-used time; retain at most five profiles in descending last-used order.
+  `remember=false` keeps the new login in memory and removes a matching persisted profile.
+- Profile selection calls `loginWithHistory(profileId)` immediately. The UI receives only display
+  metadata and `hasSavedPassword`; it must never receive or render the digest. Deleting one profile
+  or clearing history removes its encrypted credentials without terminating a currently signed-in
+  in-memory session.
 - `SessionRepository` construction performs no token or access-code decryption. `restore()` loads
   remembered credentials once on `Dispatchers.IO` while `SessionState.Loading` remains published;
   login and invalidation then own the in-memory values. Application/container construction must
@@ -146,10 +166,12 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   Their network interceptor adds
   `Connection: close` only to HTTP/1.1 requests so a FNOS nginx idle timeout cannot leave a stale
   pooled socket for the next logical request. HTTP/2 and Media3 audio streaming are unaffected.
-- `SessionRepository.restore()` contains server discovery, `me()`, user mapping, and signed-in state
-  publication in one exception boundary. Cancellation is always rethrown. Invalid or disabled
-  remembered credentials clear the token and publish signed-out state; other failures retain the
-  token for a later restore attempt and never escape to the application main scope.
+- `SessionRepository.restore()` contains server discovery, `me()`, saved-digest fallback login,
+  user mapping, and signed-in publication in one exception boundary. Cancellation is always
+  rethrown. An invalid token is cleared and falls back once to the same profile's saved digest;
+  terminal credential/access/account errors publish signed-out state. Retryable transport,
+  HTTP 408/429/5xx, or temporarily unavailable-network failures retain every credential and publish
+  `Recovering` while retrying after 1, 2, 4, 8, 15, then capped 30 second delays.
 - User-token invalidation clears auth and returns to login. HLS or roam-session invalidation must
   not clear the user token.
 
@@ -366,8 +388,9 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 | --- | --- |
 | API HTTP 401 or envelope code 120001/99999 | `AppException(Unauthenticated)`, terminal, one attempt |
 | Envelope code 120002 | `AppException(AccountDisabled)`, terminal, token invalidation |
-| Remembered-token `me()` returns unauthenticated/disabled | Clear token and publish `SignedOut(error)`; do not crash |
-| Remembered-token restore has a transient failure | Retain token and publish `SignedOut(error)` for a later attempt |
+| Remembered-token `me()` returns unauthenticated with a complete profile | Clear only its token; perform one saved-digest login and replace the token on success |
+| Saved-digest login returns invalid credentials/access code or account disabled | Stop retrying; retain editable history and publish `SignedOut(error)` |
+| Remembered-session restore has a retryable transient failure | Retain all credentials, publish `Recovering`, and retry in-process with capped backoff |
 | HTTP/1.1 API request after an idle interval | Send `Connection: close`; use one fresh connection and no hidden retry |
 | HTTP/envelope 404/100005 | `AppException(NotFound)`, terminal; current artwork/lyrics `Absent`, metadata fallback |
 | I/O, HTTP 408/429/5xx | `NetworkUnavailable`, retryable; current resources make at most 3 total attempts |
@@ -388,7 +411,10 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 | Ordinary Room cache write stays below all audit thresholds | Update conservative estimates; do not run SUM/checkpoint/vacuum |
 | Room estimate crosses a target or audit interval | Run exact payload/physical queries; evict if needed and reclaim only after removal |
 | SessionRepository is constructed | Publish Loading with zero secure-store reads |
-| Session restore needs remembered credentials | Read token and access code once on `Dispatchers.IO` |
+| Session restore needs remembered credentials | Read the versioned encrypted profile payload and legacy token/access code once on `Dispatchers.IO` |
+| Encrypted session payload is malformed or has an unknown version | Publish a generic recoverable signed-out error; never overwrite the ciphertext |
+| History reaches a sixth server/account profile | Evict the least-recently-used profile and all of its encrypted credentials |
+| User clears history while signed in | Clear persisted profiles and legacy recent servers; preserve the current in-memory session |
 | Bare host or IP | Add port `5666` and `/music/api/v1/` |
 | HTTPS input without a port | Use port `443`; never append `5666` |
 | Explicit `http://` without a port | Use port `80`; a bare HTTP host retains legacy `5666` |
@@ -463,10 +489,12 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   and `mode=relay`; authenticated requests additionally carry the user token cookie.
 - Good: two HTTP/1.1 API reads each carry `Connection: close`, use distinct connections, and make
   exactly two server requests while `retryOnConnectionFailure` remains disabled.
-- Good: an expired remembered token returns to login, removes that token, and leaves startup alive;
-  a `500` during restore also returns to login but retains the token for a later attempt.
+- Good: an expired remembered token falls back once to its saved digest and securely replaces the
+  token; a startup `500` remains on `Recovering` and enters the app after the NAS becomes reachable.
 - Good: the login request contains the exact lowercase SHA-256 password hash plus the stable
   `deviceId`, and authenticated requests carry the raw token.
+- Good: one NAS stores `alice` and `bob` as separate history entries; choosing either entry starts
+  login immediately, while deleting one leaves the other's encrypted credentials intact.
 - Base: a network failure returns valid Room page/index/lyric data where permitted, persists it in
   the process LRU, and avoids another request while retained.
 - Base: a current artwork request receiving `503`, `429`, then valid bytes succeeds on its third and
@@ -493,7 +521,10 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   aggregate metadata, or converting cancellation into `NetworkUnavailable`.
 - Bad: checking the security code only during login, then omitting it from cover or audio requests;
   this produces a signed-in UI whose media cannot load.
-  token in Room, SharedPreferences, logs, tests, or workflow files.
+- Bad: storing a plaintext password or a replayable password digest in Room, unencrypted
+  SharedPreferences, logs, Compose semantics, tests, or workflow files.
+- Bad: sending a saved digest through the plaintext-password entry point, hashing it a second time,
+  or treating a startup network miss as a reason to display the ordinary login form.
 - Bad: `fallbackToDestructiveMigration`, an unexported schema version, or a cache row without a
   namespace.
 - Bad: running a root `test` selector that accidentally schedules connected benchmark tests; CI
@@ -511,9 +542,12 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   invalid JSON, redirects, retryable status classification, HTTP/1.1 close with distinct connection
   indices, no transport retry, exact request count, maximum three current-resource attempts, `404`
   terminal behavior, and cancellation calling `Call.cancel()`.
-- `SessionRepositoryTest`: remembered-token `401` and `120002` are contained and clear credentials;
-  transient restore failure is contained but retains credentials; cancellation is rethrown without
-  publishing an error state; construction performs zero secure reads and restore reads off main.
+- `SessionRepositoryTest`: expired-token saved-digest fallback and token replacement; transient
+  restore publishes `Recovering` while retaining credentials; terminal auth stops retrying;
+  same-server multi-account upsert, five-profile capacity, delete/clear, and `remember=false`;
+  legacy token compatibility, cancellation, zero constructor reads, and IO-bound secure reads.
+- `TrimMusicApiTest`: plaintext input sends exactly one SHA-256 lowercase hex digest; the saved-hash
+  entry sends the exact digest unchanged and rejects short, uppercase, or non-hex values.
 - `SerializedResponseCacheTest`: 8 MiB-equivalent byte LRU ordering, namespace isolation, same-key
   single-flight, one-of-many waiter cancellation, final-waiter upstream cancellation, failed fetch
   retryability, namespace/global generations, and late-persist rejection.
@@ -672,9 +706,18 @@ recordEvictableWrite(page.payload) // audits only when an estimate/interval requ
 private var token = tokenStore.read()
 
 // Correct: Loading remains visible while restore performs one IO-bound credential load.
-val (token, accessCode) = withContext(Dispatchers.IO) {
-    tokenStore.read() to tokenStore.readAccessCode()
+val (session, legacyToken, legacyAccessCode) = withContext(Dispatchers.IO) {
+    Triple(tokenStore.readSession(), tokenStore.read(), tokenStore.readAccessCode())
 }
+```
+
+```kotlin
+// Wrong: a replayable saved digest is rehashed as if it were plaintext.
+api.login(username, savedPasswordSha256, deviceId)
+
+// Correct: validate the persisted form and use the typed already-hashed boundary.
+val hash = PasswordHash.parse(savedPasswordSha256) ?: rejectSavedProfile()
+api.login(username, hash, deviceId)
 ```
 
 ```kotlin

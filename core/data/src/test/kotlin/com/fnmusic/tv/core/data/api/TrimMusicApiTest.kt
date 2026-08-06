@@ -61,6 +61,25 @@ class TrimMusicApiTest {
         assertEquals("device-1", payload.deviceId)
     }
 
+    @Test fun `saved password hash is sent without hashing it again`() = runBlocking {
+        server.enqueue(
+            MockResponse.Builder()
+                .body(
+                    """{"code":0,"msg":"success","data":{"userToken":"token","user":{"guid":"user-1","name":"test"}}}""",
+                )
+                .build(),
+        )
+        val encoded = "50df0896ecc8b3e44dad34d9578269d46becd5a4b6b76e274baabf15f14854ea"
+        val hash = requireNotNull(PasswordHash.parse(encoded))
+
+        api().login("test", hash, "device-1")
+
+        val payload = ApiDecoder.json.decodeFromString<PasswordLoginRequest>(server.takeRequest().body?.utf8().orEmpty())
+        assertEquals(encoded, payload.password)
+        assertEquals(null, PasswordHash.parse(encoded.uppercase()))
+        assertEquals(null, PasswordHash.parse("abc"))
+    }
+
     @Test fun `logout revokes the server token with raw authorization`() = runBlocking {
         server.enqueue(
             MockResponse.Builder()

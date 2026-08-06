@@ -30,10 +30,19 @@ class TrimMusicApi(
     fun apiBase(): String = server.apiBase.toString()
     suspend fun systemConfig(): SystemConfigDto = get("sys/config", authenticated = false)
 
-    suspend fun login(username: String, password: String, deviceId: String): LoginResultDto =
+    suspend fun login(username: String, password: String, deviceId: String): LoginResultDto {
+        val passwordChars = password.toCharArray()
+        return try {
+            login(username, PasswordHash.fromPlaintext(passwordChars), deviceId)
+        } finally {
+            passwordChars.fill('\u0000')
+        }
+    }
+
+    internal suspend fun login(username: String, password: PasswordHash, deviceId: String): LoginResultDto =
         post(
             "user/password-login",
-            PasswordLoginRequest(username, password.sha256Hex(), deviceId),
+            PasswordLoginRequest(username, password.encoded, deviceId),
             authenticated = false,
         )
 
@@ -273,14 +282,35 @@ class TrimMusicApi(
     }
 }
 
-private fun String.sha256Hex(): String {
-    val digest = MessageDigest.getInstance("SHA-256").digest(toByteArray(Charsets.UTF_8))
+@JvmInline
+internal value class PasswordHash private constructor(val encoded: String) {
+    companion object {
+        fun fromPlaintext(password: CharArray): PasswordHash {
+            val bytes = password.concatToString().toByteArray(Charsets.UTF_8)
+            return try {
+                PasswordHash(MessageDigest.getInstance("SHA-256").digest(bytes).toHex())
+            } finally {
+                bytes.fill(0)
+            }
+        }
+
+        fun parse(encoded: String): PasswordHash? = encoded
+            .takeIf { it.length == SHA256_HEX_LENGTH && it.all(::isLowercaseHex) }
+            ?.let(::PasswordHash)
+
+        private const val SHA256_HEX_LENGTH = 64
+    }
+}
+
+private fun ByteArray.toHex(): String {
     val hex = "0123456789abcdef"
-    return buildString(digest.size * 2) {
-        digest.forEach { byte ->
+    return buildString(size * 2) {
+        this@toHex.forEach { byte ->
             val value = byte.toInt() and 0xff
             append(hex[value ushr 4])
             append(hex[value and 0x0f])
         }
     }
 }
+
+private fun isLowercaseHex(value: Char): Boolean = value in '0'..'9' || value in 'a'..'f'
