@@ -7,7 +7,26 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 
-data class LyricLine(val startMs: Long, val texts: List<String>)
+data class LyricWord(
+    val startMs: Long,
+    val endMs: Long,
+    val text: String,
+)
+
+data class LyricLine(
+    val startMs: Long,
+    val endMs: Long? = null,
+    val original: String,
+    val translation: String? = null,
+    val romanization: String? = null,
+    val words: List<LyricWord> = emptyList(),
+) {
+    val texts: List<String>
+        get() = listOfNotNull(original, translation, romanization)
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+            .distinct()
+}
 
 data class LyricTimeline(val lines: List<LyricLine>) {
     fun activeIndex(positionMs: Long): Int {
@@ -49,7 +68,7 @@ object LrcParser {
         return LyricTimeline(
             timed.sortedWith(compareBy<ParsedLine> { it.startMs }.thenBy { it.order })
                 .groupBy { it.startMs }
-                .map { (startMs, lines) -> LyricLine(startMs, lines.map { it.text }) },
+                .map { (startMs, lines) -> lyricLine(startMs, lines.map { it.text }) },
         )
     }
 
@@ -72,7 +91,7 @@ object LyricParser {
             (first.lines + second.lines)
                 .groupBy(LyricLine::startMs)
                 .toSortedMap()
-                .map { (startMs, lines) -> LyricLine(startMs, lines.flatMap(LyricLine::texts)) },
+                .map { (startMs, lines) -> lyricLine(startMs, lines.flatMap(LyricLine::texts)) },
         )
 }
 
@@ -97,7 +116,16 @@ private object YrcParser {
             timeline = LyricTimeline(
                 timed.sortedWith(compareBy<ParsedLine> { it.startMs }.thenBy { it.order })
                     .groupBy { it.startMs }
-                    .map { (startMs, lines) -> LyricLine(startMs, lines.map { it.text }) },
+                    .map { (startMs, lines) ->
+                        val texts = lines.map { it.text }
+                        val timed = lines.firstOrNull { it.words.isNotEmpty() }
+                        lyricLine(
+                            startMs = startMs,
+                            texts = texts,
+                            endMs = timed?.endMs,
+                            words = timed?.words.orEmpty(),
+                        )
+                    },
             ),
             hasTimedLyrics = hasTimedLyrics,
         )
@@ -107,8 +135,13 @@ private object YrcParser {
         val match = lineTimestamp.matchEntire(raw.trim()) ?: return null
         val startMs = match.groupValues[1].toLongOrNull() ?: return null
         match.groupValues[2].toLongOrNull() ?: return null
-        val text = wordTimestamp.replace(match.groupValues[3], "").trim()
-        return text.takeIf(String::isNotEmpty)?.let { ParsedLine(startMs, it, order) }
+        val durationMs = match.groupValues[2].toLongOrNull() ?: return null
+        val content = match.groupValues[3]
+        val words = yrcWords(content)
+        val text = wordTimestamp.replace(content, "").trim()
+        return text.takeIf(String::isNotEmpty)?.let {
+            ParsedLine(startMs, startMs + durationMs, it, words, order)
+        }
     }
 
     private fun parseMetadataLine(raw: String, order: Int): ParsedLine? {
@@ -121,8 +154,43 @@ private object YrcParser {
                 .getOrNull()
                 .orEmpty()
         }.trim()
-        return text.takeIf(String::isNotEmpty)?.let { ParsedLine(startMs.coerceAtLeast(0), it, order) }
+        return text.takeIf(String::isNotEmpty)?.let {
+            ParsedLine(startMs.coerceAtLeast(0), null, it, emptyList(), order)
+        }
     }
 
-    private data class ParsedLine(val startMs: Long, val text: String, val order: Int)
+    private fun yrcWords(content: String): List<LyricWord> {
+        val matches = Regex("""\((\d+),(\d+),\d+\)(.*?)(?=\(\d+,\d+,\d+\)|$)""")
+        return matches.findAll(content).mapNotNull { match ->
+            val startMs = match.groupValues[1].toLongOrNull() ?: return@mapNotNull null
+            val durationMs = match.groupValues[2].toLongOrNull() ?: return@mapNotNull null
+            val text = match.groupValues[3]
+            text.takeIf(String::isNotEmpty)?.let { LyricWord(startMs, startMs + durationMs, it) }
+        }.toList()
+    }
+
+    private data class ParsedLine(
+        val startMs: Long,
+        val endMs: Long?,
+        val text: String,
+        val words: List<LyricWord>,
+        val order: Int,
+    )
+}
+
+private fun lyricLine(
+    startMs: Long,
+    texts: List<String>,
+    endMs: Long? = null,
+    words: List<LyricWord> = emptyList(),
+): LyricLine {
+    val content = texts.map(String::trim).filter(String::isNotEmpty).distinct()
+    return LyricLine(
+        startMs = startMs,
+        endMs = endMs,
+        original = content.firstOrNull().orEmpty(),
+        translation = content.getOrNull(1),
+        romanization = content.getOrNull(2),
+        words = words,
+    )
 }
