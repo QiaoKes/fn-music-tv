@@ -105,7 +105,7 @@ internal class AuthenticatedAppCoordinator(
                 artworkBitmapCache.clear()
                 musicRepository.clearArtwork()
             },
-            clearLocalNamespace = { musicRepository.clearLocalNamespace(includeEssential = true) },
+            clearLocalNamespace = { musicRepository.clearLocalNamespace(includeEssential = false) },
             logout = sessionRepository::logout,
         )
     }

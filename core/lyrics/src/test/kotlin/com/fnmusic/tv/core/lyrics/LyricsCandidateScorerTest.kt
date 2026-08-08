@@ -27,6 +27,19 @@ class LyricsCandidateScorerTest {
         assertEquals(100.0, scored.first().score, 0.001)
     }
 
+    @Test fun `consensus counts distinct sources rather than duplicate candidates`() {
+        val candidates = listOf(
+            candidate(LyricsSourceId.QqMusic),
+            candidate(LyricsSourceId.Netease, remoteId = "2"),
+            candidate(LyricsSourceId.Netease, remoteId = "3"),
+        )
+
+        val scored = scorer.score(request, candidates)
+
+        assertEquals(3, scored.size)
+        assertTrue(scored.all { it.consensusCount == 2 })
+    }
+
     @Test fun `duration mismatch over four seconds is rejected`() {
         assertTrue(scorer.score(request, listOf(candidate(durationMs = 273_001))).isEmpty())
     }

@@ -228,7 +228,8 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 - First-party FN lyrics use `cache_lyric`; selected third-party matches use
   `cache_matched_lyric`. Both are namespace-scoped, contribute to the same payload budget, and are
   removed by namespace/all-evictable clearing. Disabling online matching bypasses the matched table
-  without deleting it.
+  without deleting it. Negative matched-lyric entries use their encoded expiry as the exact process-
+  cache validity boundary; an expired retained entry is removed and may rematch immediately.
 - Every Room schema change increments the database version, exports its JSON schema, supplies a
   lossless migration, and preserves queue/settings/account namespaces. Destructive migration is
   forbidden.
@@ -277,7 +278,9 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 - `AuthenticatedAppCoordinator` is the sole owner of signed-in session orchestration: namespace
   binding, invalid-auth playback/cache cleanup, account switch, cache clear, and explicit exit.
   Account switch preserves playback clear -> artwork clear -> local namespace clear -> logout;
-  the existing best-effort playback-clear boundary remains non-blocking for later cleanup.
+  the local clear removes evictable rows with `includeEssential=false` so per-account preferences
+  survive a later return to that account. Invalid-auth cleanup may still remove essential account
+  state. The existing best-effort playback-clear boundary remains non-blocking for later cleanup.
 - `PlaybackService` constructs `DefaultMediaSourceFactory` directly from an authenticated
   `DefaultHttpDataSource.Factory`. Persistent audio cache classes (`SimpleCache`,
   `CacheDataSource`, cache-key factories, download stores) are forbidden.

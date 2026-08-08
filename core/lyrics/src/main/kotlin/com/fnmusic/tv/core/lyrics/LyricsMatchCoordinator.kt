@@ -3,8 +3,6 @@
 package com.fnmusic.tv.core.lyrics
 
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
@@ -34,12 +32,16 @@ class LyricsMatchCoordinator(
         val searchJobs = sources.map { source ->
             launch {
                 try {
-                    val candidates = withTimeoutOrNull(sourceTimeoutMs) {
-                        source.search(LyricsSearchQuery(primaryKeyword, request)).ifEmpty {
-                            if (primaryKeyword == request.title) emptyList()
-                            else source.search(LyricsSearchQuery(request.title, request))
-                        }
-                    } ?: throw LyricsTransportException("${source.id} search timed out")
+                    val primaryCandidates = search(source, primaryKeyword, request)
+                    val candidates = if (
+                        primaryKeyword != request.title &&
+                        scorer.score(request, primaryCandidates).isEmpty()
+                    ) {
+                        (primaryCandidates + search(source, request.title, request))
+                            .distinctBy { it.source to it.remoteId }
+                    } else {
+                        primaryCandidates
+                    }
                     outcomeChannel.send(SearchOutcome(source, candidates))
                 } catch (cause: CancellationException) {
                     throw cause
@@ -70,82 +72,80 @@ class LyricsMatchCoordinator(
 
         val ranked = scorer.score(request, outcomes.flatMap(SearchOutcome::candidates))
         if (ranked.isEmpty()) {
-            return@supervisorScope if (outcomes.all { it.failure is LyricsTransportException }) {
-                LyricsMatchResult.NetworkFailure
-            } else {
-                LyricsMatchResult.NotFound
+            return@supervisorScope when {
+                outcomes.all { it.failure == null } -> LyricsMatchResult.NotFound
+                outcomes.any { it.failure != null && it.failure !is LyricsTransportException } ->
+                    LyricsMatchResult.InvalidResponse
+                else -> LyricsMatchResult.NetworkFailure
             }
         }
 
-        val highest = ranked.first().score
-        val candidatesToFetch = ranked
-            .filter { highest - it.score <= policy.qualityTieWindow }
-            .take(MAX_FETCH_ATTEMPTS)
-        val fetchOutcomes = candidatesToFetch.map { scored ->
-            async {
-                val source = outcomes.first { it.source.id == scored.candidate.source }.source
-                try {
-                    val lyrics = withTimeoutOrNull(sourceTimeoutMs) { source.fetch(scored.candidate) }
-                        ?: throw LyricsTransportException("${source.id} lyrics timed out")
-                    FetchOutcome(
-                        fetched = lyrics.takeIf { it.original.isNotEmpty }?.let { FetchedCandidate(scored, it) },
-                    )
-                } catch (cause: CancellationException) {
-                    throw cause
-                } catch (_: LyricsTransportException) {
-                    FetchOutcome(networkFailure = true)
-                } catch (_: Throwable) {
-                    FetchOutcome(invalidPayload = true)
+        var hadNetworkFailure = false
+        var hadInvalidPayload = false
+        ranked.inTieBreakOrder().take(MAX_FETCH_ATTEMPTS).forEach { scored ->
+            val source = outcomes.first { it.source.id == scored.candidate.source }.source
+            try {
+                val lyrics = withTimeoutOrNull(sourceTimeoutMs) { source.fetch(scored.candidate) }
+                    ?: throw LyricsTransportException("${source.id} lyrics timed out")
+                if (!lyrics.original.isNotEmpty) {
+                    hadInvalidPayload = true
+                    return@forEach
                 }
-            }
-        }.awaitAll()
-        val fetched = fetchOutcomes.mapNotNull(FetchOutcome::fetched)
-        val hadNetworkFailure = fetchOutcomes.any(FetchOutcome::networkFailure)
-        val hadInvalidPayload = fetchOutcomes.any(FetchOutcome::invalidPayload)
-        val selected = fetched.maxWithOrNull(
-            compareBy<FetchedCandidate> { qualityRank(it.lyrics) }
-                .thenBy { it.scored.score }
-                .thenByDescending { policy.sourceOrder.indexOf(it.scored.candidate.source).takeIf { index -> index >= 0 } ?: Int.MAX_VALUE },
-        )
-        if (selected == null) {
-            return@supervisorScope when {
-                hadNetworkFailure -> LyricsMatchResult.NetworkFailure
-                hadInvalidPayload -> LyricsMatchResult.InvalidResponse
-                else -> LyricsMatchResult.NotFound
+                return@supervisorScope LyricsMatchResult.Found(
+                    MatchedLyrics(
+                        source = scored.candidate.source,
+                        candidate = scored.candidate,
+                        score = scored.score,
+                        original = lyrics.original,
+                        translation = lyrics.translation,
+                        romanization = lyrics.romanization,
+                    ),
+                )
+            } catch (cause: CancellationException) {
+                throw cause
+            } catch (_: LyricsTransportException) {
+                hadNetworkFailure = true
+            } catch (_: Throwable) {
+                hadInvalidPayload = true
             }
         }
-        LyricsMatchResult.Found(
-            MatchedLyrics(
-                source = selected.scored.candidate.source,
-                candidate = selected.scored.candidate,
-                score = selected.scored.score,
-                original = selected.lyrics.original,
-                translation = selected.lyrics.translation,
-                romanization = selected.lyrics.romanization,
-            ),
-        )
+        when {
+            hadNetworkFailure -> LyricsMatchResult.NetworkFailure
+            hadInvalidPayload -> LyricsMatchResult.InvalidResponse
+            else -> LyricsMatchResult.NotFound
+        }
     }
 
-    private fun qualityRank(lyrics: SourceLyrics): Int =
-        (if (lyrics.original.isTimed) 4 else 0) +
-            (if (lyrics.translation?.isNotEmpty == true) 2 else 0) +
-            (if (lyrics.romanization?.isNotEmpty == true) 1 else 0)
+    private fun List<ScoredLyricsCandidate>.inTieBreakOrder(): List<ScoredLyricsCandidate> = buildList {
+        var start = 0
+        while (start < this@inTieBreakOrder.size) {
+            val windowTopScore = this@inTieBreakOrder[start].score
+            val end = (start + 1 until this@inTieBreakOrder.size)
+                .firstOrNull { index -> windowTopScore - this@inTieBreakOrder[index].score > policy.qualityTieWindow }
+                ?: this@inTieBreakOrder.size
+            addAll(
+                this@inTieBreakOrder.subList(start, end).sortedWith(
+                    compareBy<ScoredLyricsCandidate> {
+                        policy.sourceOrder.indexOf(it.candidate.source).takeIf { index -> index >= 0 } ?: Int.MAX_VALUE
+                    }.thenByDescending(ScoredLyricsCandidate::score),
+                ),
+            )
+            start = end
+        }
+    }
+
+    private suspend fun search(
+        source: LyricsSource,
+        keyword: String,
+        request: LyricsMatchRequest,
+    ): List<LyricsCandidate> = withTimeoutOrNull(sourceTimeoutMs) {
+        source.search(LyricsSearchQuery(keyword, request))
+    } ?: throw LyricsTransportException("${source.id} search timed out")
 
     private data class SearchOutcome(
         val source: LyricsSource,
         val candidates: List<LyricsCandidate>,
         val failure: Throwable? = null,
-    )
-
-    private data class FetchedCandidate(
-        val scored: ScoredLyricsCandidate,
-        val lyrics: SourceLyrics,
-    )
-
-    private data class FetchOutcome(
-        val fetched: FetchedCandidate? = null,
-        val networkFailure: Boolean = false,
-        val invalidPayload: Boolean = false,
     )
 
     private companion object {

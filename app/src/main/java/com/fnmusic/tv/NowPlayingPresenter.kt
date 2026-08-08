@@ -339,15 +339,18 @@ class NowPlayingPresenter private constructor(
 
     private fun restartLyricsForEnrichedMetadata(token: PresentationToken, track: Track) {
         val request = synchronized(lock) {
-            if (!isCurrentLocked(token) || !activeOnlineLyricsMatching) return
-            val current = _state.value ?: return
-            if (current.lyrics !is NowPlayingResourceState.Loading) return
+            if (!isCurrentLocked(token)) return
             val previousTrack = activeLyricsTrack ?: token.identity.initialTrack()
             if (!previousTrack.hasMateriallyLessMatchingMetadataThan(track)) return
             activeLyricsTrack = track
-            LyricsReloadRequest(token, track, onlineLyricsMatchingEnabled = true)
+            val current = _state.value ?: return
+            if (!activeOnlineLyricsMatching || current.lyrics !is NowPlayingResourceState.Loading) {
+                null
+            } else {
+                LyricsReloadRequest(token, track, onlineLyricsMatchingEnabled = true)
+            }
         }
-        startLyricsRequest(request.token, request.onlineLyricsMatchingEnabled, request.track)
+        request?.let { startLyricsRequest(it.token, it.onlineLyricsMatchingEnabled, it.track) }
     }
 
     private fun applyLyrics(token: LyricsRequestToken, result: CurrentResourceResult<CurrentLyrics>) {

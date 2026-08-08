@@ -22,6 +22,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -75,7 +76,79 @@ class OnlineLyricsResolverTest {
         assertEquals(1, calls.get())
     }
 
+    @Test fun `normalized metadata equivalents reuse the same positive cache entry`() = runBlocking {
+        val calls = AtomicInteger()
+        val resolver = resolver {
+            calls.incrementAndGet()
+            LyricsMatchResult.Found(matchedLyrics())
+        }
+
+        assertTrue(resolver.resolve(track()) != null)
+        assertTrue(
+            resolver.resolve(
+                track().copy(
+                    title = "ＳＯＮＧ ",
+                    artistName = "ARTIST",
+                    albumName = "ＡＬＢＵＭ",
+                ),
+            ) != null,
+        )
+        assertEquals(1, calls.get())
+    }
+
+    @Test fun `word-timed original without translation maps to one display line`() = runBlocking {
+        val original = TimedLyricsTrack(
+            kind = LyricsTrackKind.Original,
+            lines = listOf(
+                TimedLyricsLine(
+                    startMs = 1_000L,
+                    endMs = 2_000L,
+                    words = listOf(
+                        TimedLyricsWord(1_000L, 1_500L, "你"),
+                        TimedLyricsWord(1_500L, 2_000L, "好"),
+                    ),
+                ),
+            ),
+        )
+        val lyrics = resolver {
+            LyricsMatchResult.Found(matchedLyrics(original = original, translation = null))
+        }.resolve(track()) ?: error("expected online lyrics")
+
+        assertEquals(listOf("你好"), lyrics.timeline?.lines?.single()?.texts)
+    }
+
+    @Test fun `expired negative cache immediately retries inside the same old bucket`() = runBlocking {
+        var timeMs = 1L
+        val calls = AtomicInteger()
+        val resolver = resolver(now = { timeMs }) {
+            if (calls.incrementAndGet() == 1) LyricsMatchResult.NotFound
+            else LyricsMatchResult.Found(matchedLyrics())
+        }
+
+        assertEquals(null, resolver.resolve(track()))
+        timeMs = 300_000L
+        assertEquals(null, resolver.resolve(track()))
+        assertEquals(1, calls.get())
+
+        timeMs = 300_002L
+        assertTrue(resolver.resolve(track()) != null)
+        assertEquals(2, calls.get())
+    }
+
+    @Test fun `invalid response is not retained as a negative match`() = runBlocking {
+        val calls = AtomicInteger()
+        val resolver = resolver {
+            if (calls.incrementAndGet() == 1) LyricsMatchResult.InvalidResponse
+            else LyricsMatchResult.Found(matchedLyrics())
+        }
+
+        assertTrue(runCatching { resolver.resolve(track()) }.isFailure)
+        assertTrue(resolver.resolve(track()) != null)
+        assertEquals(2, calls.get())
+    }
+
     private fun resolver(
+        now: () -> Long = { 1_000_000L },
         matcher: suspend () -> LyricsMatchResult,
     ): OnlineLyricsResolver {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default).also(scopes::add)
@@ -84,7 +157,7 @@ class OnlineLyricsResolverTest {
             responses = SerializedResponseCache(64 * 1024, scope),
             namespace = { "server:user" },
             matcher = { matcher() },
-            now = { 1_000_000L },
+            now = now,
         )
     }
 
@@ -99,7 +172,10 @@ class OnlineLyricsResolverTest {
         audioFormat = "FLAC",
     )
 
-    private fun matchedLyrics() = MatchedLyrics(
+    private fun matchedLyrics(
+        original: TimedLyricsTrack = timedTrack(LyricsTrackKind.Original, "原文"),
+        translation: TimedLyricsTrack? = timedTrack(LyricsTrackKind.Translation, "translation"),
+    ) = MatchedLyrics(
         source = LyricsSourceId.QqMusic,
         candidate = LyricsCandidate(
             source = LyricsSourceId.QqMusic,
@@ -110,8 +186,8 @@ class OnlineLyricsResolverTest {
             durationMs = 180_000L,
         ),
         score = 100.0,
-        original = timedTrack(LyricsTrackKind.Original, "原文"),
-        translation = timedTrack(LyricsTrackKind.Translation, "translation"),
+        original = original,
+        translation = translation,
     )
 
     private fun timedTrack(kind: LyricsTrackKind, text: String) = TimedLyricsTrack(
