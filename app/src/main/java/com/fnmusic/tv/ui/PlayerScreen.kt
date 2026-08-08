@@ -48,9 +48,11 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -382,6 +384,7 @@ internal fun ImmersivePlayer(
             artist = artist,
             audioFormat = audioFormat,
             isPlaying = playback.isPlaying,
+            lyricIdentity = playback.nowPlayingIdentity,
             lyricTimeline = timeline,
             playbackProgress = playbackProgress,
             staticLyric = staticLyric,
@@ -603,6 +606,7 @@ private fun PlayerMainContent(
     artist: String,
     audioFormat: String,
     isPlaying: Boolean,
+    lyricIdentity: NowPlayingIdentity?,
     lyricTimeline: LyricTimeline?,
     playbackProgress: State<PlaybackProgressState>,
     staticLyric: String?,
@@ -665,6 +669,8 @@ private fun PlayerMainContent(
                 title = title,
                 artist = artist,
                 audioFormat = audioFormat,
+                isPlaying = isPlaying,
+                lyricIdentity = lyricIdentity,
                 lyricTimeline = lyricTimeline,
                 playbackProgress = playbackProgress,
                 staticLyric = staticLyric,
@@ -701,6 +707,8 @@ private fun PlayerMainContent(
                 title = title,
                 artist = artist,
                 audioFormat = audioFormat,
+                isPlaying = isPlaying,
+                lyricIdentity = lyricIdentity,
                 lyricTimeline = lyricTimeline,
                 playbackProgress = playbackProgress,
                 staticLyric = staticLyric,
@@ -732,6 +740,8 @@ private fun PlayerDetails(
     title: String,
     artist: String,
     audioFormat: String,
+    isPlaying: Boolean,
+    lyricIdentity: NowPlayingIdentity?,
     lyricTimeline: LyricTimeline?,
     playbackProgress: State<PlaybackProgressState>,
     staticLyric: String?,
@@ -778,7 +788,11 @@ private fun PlayerDetails(
             overflow = TextOverflow.Ellipsis,
         )
         Spacer(Modifier.height(if (poster) 44.dp else 34.dp))
-        PlaybackProgressValues(playbackProgress) { positionMs, _ ->
+        SmoothLyricProgress(
+            progress = playbackProgress,
+            isPlaying = isPlaying,
+            identity = lyricIdentity,
+        ) { positionMs ->
             val lyricLines = lyricTimeline?.lines.orEmpty()
             val activeLyricIndex = lyricTimeline?.activeIndex(positionMs) ?: -1
             if (poster) {
@@ -1008,9 +1022,9 @@ private fun PosterLyricSlots(
     activeIndex: Int,
     positionMs: Long,
 ) {
-    val indices = posterLyricIndices(lyricLines.size, activeIndex)
-    val topOffsets = listOf(0.dp, 62.dp, 212.dp)
-    val heights = listOf(62.dp, 150.dp, 74.dp)
+    val indices = currentAndNextLyricIndices(lyricLines.size, activeIndex)
+    val topOffsets = listOf(10.dp, 184.dp)
+    val heights = listOf(142.dp, 92.dp)
     val windowAlpha = rememberLyricWindowAlpha(activeIndex)
     Box(Modifier.fillMaxSize().graphicsLayer { alpha = windowAlpha }) {
         indices.forEachIndexed { slot, index ->
@@ -1018,9 +1032,7 @@ private fun PosterLyricSlots(
                 val current = index == activeIndex
                 val alpha = when {
                     current -> 1f
-                    activeIndex < 0 -> 0.16f
-                    slot == 2 -> 0.34f
-                    else -> 0.16f
+                    else -> 0.42f
                 }
                 LyricDisplayLine(
                     line = lyricLines[index],
@@ -1065,7 +1077,7 @@ private fun LyricDisplayLine(
             fontSize = if (current) (if (poster) 24.sp else 26.sp) else 18.sp,
             lineHeight = if (current) (if (poster) 30.sp else 31.sp) else 22.sp,
             fontWeight = if (current) FontWeight.Bold else FontWeight.SemiBold,
-            maxLines = if (current) 2 else 1,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             softWrap = true,
         )
@@ -1077,19 +1089,7 @@ private fun LyricDisplayLine(
                 fontSize = if (current) (if (poster) 16.sp else 18.sp) else 14.sp,
                 lineHeight = if (current) (if (poster) 20.sp else 22.sp) else 17.sp,
                 fontWeight = if (current) FontWeight.Medium else FontWeight.Normal,
-                maxLines = if (current) 2 else 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        line.romanization?.takeIf(String::isNotBlank)?.let { romanization ->
-            Spacer(Modifier.height(2.dp))
-            Text(
-                romanization,
-                color = FnColors.Text.copy(alpha = if (current) 0.48f else alpha * 0.64f),
-                fontSize = if (current) 14.sp else 12.sp,
-                lineHeight = if (current) 17.sp else 15.sp,
-                fontWeight = FontWeight.Normal,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
         }
@@ -1130,31 +1130,23 @@ private fun PlayerLyrics(
     Box(Modifier.fillMaxWidth().height(256.dp), contentAlignment = Alignment.CenterStart) {
         when {
             lyricLines.isNotEmpty() -> {
-                val indices = posterLyricIndices(lyricLines.size, activeIndex)
-                val heights = listOf(58.dp, 140.dp, 58.dp)
+                val indices = currentAndNextLyricIndices(lyricLines.size, activeIndex)
+                val topOffsets = listOf(0.dp, 166.dp)
+                val heights = listOf(132.dp, 90.dp)
                 val windowAlpha = rememberLyricWindowAlpha(activeIndex)
-                Column(Modifier.fillMaxSize().graphicsLayer { alpha = windowAlpha }) {
+                Box(Modifier.fillMaxSize().graphicsLayer { alpha = windowAlpha }) {
                     indices.forEachIndexed { slot, index ->
                         Box(
-                            Modifier.fillMaxWidth().height(heights[slot]).clipToBounds(),
+                            Modifier.fillMaxWidth().align(Alignment.TopStart)
+                                .padding(top = topOffsets[slot]).height(heights[slot]).clipToBounds(),
                             contentAlignment = Alignment.CenterStart,
                         ) {
                             if (index == null) return@Box
-                            val distance = if (activeIndex >= 0) {
-                                kotlin.math.abs(index - activeIndex)
-                            } else {
-                                index + 1
-                            }
                             val current = index == activeIndex
-                            val alpha = when {
-                                current -> 1f
-                                distance == 1 -> 0.50f
-                                else -> 0.24f
-                            }
                             LyricDisplayLine(
                                 line = lyricLines[index],
                                 current = current,
-                                alpha = alpha,
+                                alpha = if (current) 1f else 0.46f,
                                 positionMs = positionMs,
                                 poster = false,
                                 modifier = Modifier.fillMaxSize(),
@@ -1169,6 +1161,49 @@ private fun PlayerLyrics(
             else -> Text("纯音乐或暂无歌词", color = FnColors.Muted, fontSize = 26.sp)
         }
     }
+}
+
+private data class LyricPositionAnchor(
+    val positionMs: Long,
+    val observedAtMs: Long,
+    val durationMs: Long,
+)
+
+@Composable
+private fun SmoothLyricProgress(
+    progress: State<PlaybackProgressState>,
+    isPlaying: Boolean,
+    identity: NowPlayingIdentity?,
+    content: @Composable (positionMs: Long) -> Unit,
+) {
+    val snapshot = progress.value
+    val anchor = remember(identity, snapshot.positionMs, snapshot.durationMs, isPlaying) {
+        LyricPositionAnchor(
+            positionMs = snapshot.positionMs,
+            observedAtMs = SystemClock.uptimeMillis(),
+            durationMs = snapshot.durationMs,
+        )
+    }
+    val currentAnchor by rememberUpdatedState(anchor)
+    var interpolatedPositionMs by remember(identity) { mutableLongStateOf(snapshot.positionMs) }
+
+    LaunchedEffect(identity, isPlaying, snapshot.durationMs) {
+        if (!isPlaying) return@LaunchedEffect
+        while (isActive) {
+            withFrameNanos {
+                val latest = currentAnchor
+                interpolatedPositionMs = interpolatedLyricPosition(
+                    anchorPositionMs = latest.positionMs,
+                    anchorObservedAtMs = latest.observedAtMs,
+                    frameObservedAtMs = SystemClock.uptimeMillis(),
+                    durationMs = latest.durationMs,
+                    isPlaying = true,
+                )
+            }
+        }
+    }
+
+    content(if (isPlaying) interpolatedPositionMs else snapshot.positionMs)
 }
 
 @Composable
@@ -2211,12 +2246,27 @@ internal fun posterSurfaceColor(color: Color): Color {
     return toneMapPosterColor(colorToOklab(color))
 }
 
-internal fun posterLyricIndices(lineCount: Int, activeIndex: Int): List<Int?> {
-    if (lineCount <= 0) return List(3) { null }
-    if (activeIndex < 0) return listOf(null, 0, 1).map { it?.takeIf { index -> index < lineCount } }
-    return listOf(-1, 0, 1).map { offset ->
-        (activeIndex + offset).takeIf { it in 0 until lineCount }
+internal fun currentAndNextLyricIndices(lineCount: Int, activeIndex: Int): List<Int?> = when {
+    lineCount <= 0 -> listOf(null, null)
+    activeIndex < 0 -> listOf(null, 0)
+    else -> listOf(activeIndex, activeIndex + 1).map { it.takeIf { index -> index in 0 until lineCount } }
+}
+
+internal fun interpolatedLyricPosition(
+    anchorPositionMs: Long,
+    anchorObservedAtMs: Long,
+    frameObservedAtMs: Long,
+    durationMs: Long,
+    isPlaying: Boolean,
+): Long {
+    val basePositionMs = anchorPositionMs.coerceAtLeast(0L)
+    val elapsedMs = if (isPlaying) {
+        (frameObservedAtMs - anchorObservedAtMs).coerceAtLeast(0L)
+    } else {
+        0L
     }
+    val positionMs = basePositionMs + elapsedMs
+    return if (durationMs > 0L) positionMs.coerceAtMost(durationMs) else positionMs
 }
 
 internal fun playerLyricWindow(lineCount: Int, activeIndex: Int, visibleCount: Int = 3): IntRange {
