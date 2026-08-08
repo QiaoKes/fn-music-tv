@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/android-client-contracts.md","reason":"Verify cache invalidation, all-provider fallback, and cancellation semantics."}
+{"file":".trellis/spec/frontend/android-tv-interaction.md","reason":"Verify TV panel bounds, text hierarchy, continuity, and input behavior remain correct."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Audit end-to-end preservation of word timing and typed secondary text."}
+{"file":".trellis/tasks/08-08-lyrics-quality-layout/research/lyric-display-references.md","reason":"Check the implementation against the researched mature lyric composition patterns."}
