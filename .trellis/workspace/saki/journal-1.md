@@ -363,3 +363,24 @@ Select the richest lyrics across all online providers before FN fallback, preser
 ### Status
 
 [OK] **Completed**
+
+
+## Session 17: Smooth compact TV lyrics
+
+**Date**: 2026-08-09
+**Task**: Smooth compact TV lyrics
+**Branch**: `codex/smooth-compact-tv-lyrics`
+
+### Summary
+
+Simplified TV lyrics to current and next groups, removed romanization rendering, and added frame-paced word highlighting with emulator and full quality verification.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `33ae74a` | (see git log) |
+
+### Status
+
+[OK] **Completed**
