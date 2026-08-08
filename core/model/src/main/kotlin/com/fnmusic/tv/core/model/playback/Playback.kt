@@ -56,6 +56,8 @@ data class NowPlayingIdentity(
     val artist: String,
     val audioFormat: String,
     val coverId: String?,
+    val album: String? = null,
+    val durationMs: Long? = null,
 )
 
 sealed interface QueueSource {

@@ -28,6 +28,7 @@ class AppPreferences(context: Context, private val localStore: LocalStore) {
             account != null -> AppPreferencesState(
                 playerStyle = account.playerStyle?.let { runCatching { PlayerStyle.valueOf(it) }.getOrNull() } ?: PlayerStyle.Poster,
                 cacheBudget = account.cacheBudget?.let { runCatching { CacheBudget.valueOf(it) }.getOrNull() } ?: CacheBudget.Default,
+                onlineLyricsMatchingEnabled = account.onlineLyricsMatchingEnabled,
             )
             migratedNamespace == null -> read().also { store.edit().putString(MIGRATED_NAMESPACE, value).apply() }
             else -> AppPreferencesState()
@@ -36,8 +37,14 @@ class AppPreferences(context: Context, private val localStore: LocalStore) {
         store.edit()
             .putString(PLAYER_STYLE, initial.playerStyle.name)
             .putString(CACHE_BUDGET, initial.cacheBudget.name)
+            .putBoolean(ONLINE_LYRICS_MATCHING, initial.onlineLyricsMatchingEnabled)
             .apply()
-        localStore.saveSettings(value, initial.playerStyle.name, initial.cacheBudget.name)
+        localStore.saveSettings(
+            value,
+            initial.playerStyle.name,
+            initial.cacheBudget.name,
+            initial.onlineLyricsMatchingEnabled,
+        )
     }
 
     fun setPlayerStyle(style: PlayerStyle) {
@@ -52,10 +59,23 @@ class AppPreferences(context: Context, private val localStore: LocalStore) {
         persist()
     }
 
+    fun setOnlineLyricsMatchingEnabled(enabled: Boolean) {
+        store.edit().putBoolean(ONLINE_LYRICS_MATCHING, enabled).apply()
+        _state.value = _state.value.copy(onlineLyricsMatchingEnabled = enabled)
+        persist()
+    }
+
     private fun persist() {
         val currentNamespace = namespace ?: return
         val current = _state.value
-        scope.launch { localStore.saveSettings(currentNamespace, current.playerStyle.name, current.cacheBudget.name) }
+        scope.launch {
+            localStore.saveSettings(
+                currentNamespace,
+                current.playerStyle.name,
+                current.cacheBudget.name,
+                current.onlineLyricsMatchingEnabled,
+            )
+        }
     }
 
     private fun read() = AppPreferencesState(
@@ -63,11 +83,13 @@ class AppPreferences(context: Context, private val localStore: LocalStore) {
             ?: PlayerStyle.Poster,
         cacheBudget = store.getString(CACHE_BUDGET, null)?.let { runCatching { CacheBudget.valueOf(it) }.getOrNull() }
             ?: CacheBudget.Default,
+        onlineLyricsMatchingEnabled = store.getBoolean(ONLINE_LYRICS_MATCHING, true),
     )
 
     private companion object {
         const val PLAYER_STYLE = "player_style"
         const val CACHE_BUDGET = "cache_budget"
+        const val ONLINE_LYRICS_MATCHING = "online_lyrics_matching"
         const val MIGRATED_NAMESPACE = "room_migrated_namespace"
     }
 }

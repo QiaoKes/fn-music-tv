@@ -104,6 +104,8 @@ data class NowPlayingIdentity(
     val artist: String,
     val audioFormat: String,
     val coverId: String?,
+    val album: String?,
+    val durationMs: Long?,
 )
 data class PlaybackCredentials(
     val apiBase: String,
@@ -114,8 +116,10 @@ data class PlaybackCredentials(
 )
 ```
 
-Room uses `AppDatabase` version 2 and exports JSON schemas. `MIGRATION_1_2` adds non-null
-`account_state.schemaRevision INTEGER DEFAULT 1`. The only Media3 custom commands are
+Room uses `AppDatabase` version 3 and exports JSON schemas. `MIGRATION_1_2` adds non-null
+`account_state.schemaRevision INTEGER DEFAULT 1`; `MIGRATION_2_3` adds
+`account_state.onlineLyricsMatchingEnabled INTEGER DEFAULT 1` and the independent
+`cache_matched_lyric` table. The only Media3 custom commands are
 `ConfigureAuth`, `ClearAuth`, and `SetShuffleOrder`; there is no media `ClearCache` command.
 Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERROR_*` constants.
 
@@ -221,6 +225,10 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   when the 24 MiB payload estimate, 32 MiB physical estimate, 4 MiB unverified growth, or 32-write
   interval is reached. `wal_checkpoint(TRUNCATE)` plus incremental vacuum runs only after actual
   eviction or explicit clear, never after an ordinary under-budget save.
+- First-party FN lyrics use `cache_lyric`; selected third-party matches use
+  `cache_matched_lyric`. Both are namespace-scoped, contribute to the same payload budget, and are
+  removed by namespace/all-evictable clearing. Disabling online matching bypasses the matched table
+  without deleting it.
 - Every Room schema change increments the database version, exports its JSON schema, supplies a
   lossless migration, and preserves queue/settings/account namespaces. Destructive migration is
   forbidden.

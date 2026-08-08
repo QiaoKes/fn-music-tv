@@ -37,9 +37,14 @@ class LocalStore(context: Context, val database: AppDatabase = AppDatabase.creat
         dao.updatePlaybackSnapshot(namespace, snapshotJson, now())
     }
 
-    suspend fun saveSettings(namespace: String, style: String, budget: String) {
+    suspend fun saveSettings(
+        namespace: String,
+        style: String,
+        budget: String,
+        onlineLyricsMatchingEnabled: Boolean = true,
+    ) {
         ensureAccount(namespace)
-        dao.updateSettings(namespace, style, budget, now())
+        dao.updateSettings(namespace, style, budget, onlineLyricsMatchingEnabled, now())
     }
 
     suspend fun page(namespace: String, sourceKey: String, page: Int): CachedPageEntity? =
@@ -58,6 +63,14 @@ class LocalStore(context: Context, val database: AppDatabase = AppDatabase.creat
         recordEvictableWrite(entity.payload)
     }
 
+    suspend fun matchedLyric(namespace: String, trackGuid: String): CachedMatchedLyricEntity? =
+        dao.matchedLyric(namespace, trackGuid)?.also { dao.touchMatchedLyric(namespace, trackGuid, now()) }
+
+    suspend fun saveMatchedLyric(entity: CachedMatchedLyricEntity) {
+        dao.upsertMatchedLyric(entity)
+        recordEvictableWrite(entity.payload)
+    }
+
     suspend fun index(namespace: String, key: String): CachedIndexEntity? =
         dao.index(namespace, key)?.also { dao.touchIndex(namespace, key, now()) }
 
@@ -69,6 +82,7 @@ class LocalStore(context: Context, val database: AppDatabase = AppDatabase.creat
     suspend fun clearNamespace(namespace: String, includeEssential: Boolean) = budgetMutex.withLock {
         dao.deletePages(namespace)
         dao.deleteLyrics(namespace)
+        dao.deleteMatchedLyrics(namespace)
         dao.deleteIndexes(namespace)
         if (includeEssential) dao.deleteAccount(namespace)
         reclaimSpace()
@@ -78,6 +92,7 @@ class LocalStore(context: Context, val database: AppDatabase = AppDatabase.creat
     suspend fun clearAllEvictable() = budgetMutex.withLock {
         dao.deleteAllPages()
         dao.deleteAllLyrics()
+        dao.deleteAllMatchedLyrics()
         dao.deleteAllIndexes()
         reclaimSpace()
         estimatedPayloadBytes = 0L
@@ -115,16 +130,17 @@ class LocalStore(context: Context, val database: AppDatabase = AppDatabase.creat
 
     private suspend fun auditBudget() {
         budgetAuditCount += 1
-        var payloadBytes = dao.pagePayloadBytes() + dao.lyricPayloadBytes() + dao.indexPayloadBytes()
+        var payloadBytes = totalPayloadBytes()
         var physicalBytes = physicalBytes()
         var removedSinceReclaim = false
         while (payloadBytes > AppDatabase.EVICTABLE_PAYLOAD_TARGET_BYTES) {
             val removed = dao.evictOldestPages(EVICTION_BATCH) +
                 dao.evictOldestLyrics(EVICTION_BATCH) +
+                dao.evictOldestMatchedLyrics(EVICTION_BATCH) +
                 dao.evictOldestIndexes(EVICTION_BATCH)
             if (removed == 0) break
             removedSinceReclaim = true
-            payloadBytes = dao.pagePayloadBytes() + dao.lyricPayloadBytes() + dao.indexPayloadBytes()
+            payloadBytes = totalPayloadBytes()
         }
         if (removedSinceReclaim) {
             reclaimSpace()
@@ -133,9 +149,10 @@ class LocalStore(context: Context, val database: AppDatabase = AppDatabase.creat
         while (physicalBytes > AppDatabase.MAX_DATABASE_BYTES) {
             val removed = dao.evictOldestPages(EVICTION_BATCH) +
                 dao.evictOldestLyrics(EVICTION_BATCH) +
+                dao.evictOldestMatchedLyrics(EVICTION_BATCH) +
                 dao.evictOldestIndexes(EVICTION_BATCH)
             if (removed == 0) break
-            payloadBytes = dao.pagePayloadBytes() + dao.lyricPayloadBytes() + dao.indexPayloadBytes()
+            payloadBytes = totalPayloadBytes()
             reclaimSpace()
             physicalBytes = physicalBytes()
         }
@@ -151,6 +168,9 @@ class LocalStore(context: Context, val database: AppDatabase = AppDatabase.creat
         unverifiedPhysicalGrowth = 0L
         writesSinceBudgetAudit = 0
     }
+
+    private suspend fun totalPayloadBytes(): Long =
+        dao.pagePayloadBytes() + dao.lyricPayloadBytes() + dao.matchedLyricPayloadBytes() + dao.indexPayloadBytes()
 
     private fun checkpoint() {
         database.openHelper.writableDatabase.query("PRAGMA wal_checkpoint(TRUNCATE)").close()

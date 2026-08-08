@@ -60,6 +60,8 @@ internal data class CapturedNowPlayingFields(
     val audioFormat: String,
     val coverId: String?,
     val artworkUrl: String?,
+    val album: String? = null,
+    val durationMs: Long? = null,
 )
 
 internal fun captureNowPlayingFields(item: MediaItem?): CapturedNowPlayingFields? {
@@ -72,6 +74,11 @@ internal fun captureNowPlayingFields(item: MediaItem?): CapturedNowPlayingFields
         audioFormat = metadata.extras?.getString(AUDIO_FORMAT_KEY).orEmpty(),
         coverId = metadata.extras?.getString(COVER_ID_KEY),
         artworkUrl = metadata.artworkUri?.toString(),
+        album = metadata.albumTitle?.toString(),
+        durationMs = metadata.extras
+            ?.takeIf { it.containsKey(DECLARED_DURATION_MS_KEY) }
+            ?.getLong(DECLARED_DURATION_MS_KEY)
+            ?.takeIf { it > 0L },
     )
 }
 

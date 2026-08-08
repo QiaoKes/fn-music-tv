@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/android-client-contracts.md", "reason": "Constrain network, cache, session isolation, cancellation, and playback-facing Android contracts."}
+{"file": ".trellis/spec/frontend/android-tv-interaction.md", "reason": "Constrain bilingual lyric rendering, TV layout, focus, and player interaction behavior."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Guide metadata and result flow across playback, data, model, and app layers."}
+{"file": ".trellis/tasks/08-07-third-party-lyrics-matching/research/lddc-portability.md", "reason": "Pin the researched LDDC commit, matching behavior, provider protocols, license, and portability boundary."}

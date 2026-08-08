@@ -28,6 +28,7 @@ dependencyResolutionManagement {
 rootProject.name = "FnMusicTV"
 include(":app")
 include(":core:model")
+include(":core:lyrics")
 include(":core:data")
 include(":core:playback")
 include(":baselineprofile")
