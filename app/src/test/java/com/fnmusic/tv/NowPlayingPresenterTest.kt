@@ -487,6 +487,54 @@ class NowPlayingPresenterTest {
         }
     }
 
+    @Test
+    fun `enabling online matching reuses metadata enriched while disabled`() {
+        val identities = MutableStateFlow<NowPlayingIdentity?>(null)
+        val styles = MutableStateFlow(PlayerStyle.Cover)
+        val onlineMatching = MutableStateFlow(false)
+        val requestedTracks = mutableListOf<Track>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val presenter = NowPlayingPresenter(
+            identities = identities,
+            playerStyles = styles,
+            currentTrackMetadata = { CurrentResourceResult.Ready(track("A", "song", "cover-a")) },
+            currentLyrics = { error("policy-aware request should be used") },
+            currentArtwork = { _, _ -> CurrentResourceResult.Absent },
+            enrichCurrentItem = {},
+            applicationScope = scope,
+            onlineLyricsMatching = onlineMatching,
+            currentLyricsWithPolicy = { track, _ ->
+                synchronized(requestedTracks) { requestedTracks += track }
+                CurrentResourceResult.Absent
+            },
+        )
+
+        try {
+            presenter.start()
+            identities.value = identity(
+                mediaId = "A",
+                revision = 14L,
+                coverId = "cover-a",
+                album = null,
+                durationMs = null,
+            )
+            await {
+                synchronized(requestedTracks) { requestedTracks.size == 1 } &&
+                    presenter.state.value?.metadata is NowPlayingResourceState.Ready<*>
+            }
+
+            onlineMatching.value = true
+            await { synchronized(requestedTracks) { requestedTracks.size == 2 } }
+
+            val tracks = synchronized(requestedTracks) { requestedTracks.toList() }
+            assertEquals(null, tracks[0].albumName)
+            assertEquals("album A", tracks[1].albumName)
+            assertEquals(1_000L, tracks[1].durationMs)
+        } finally {
+            scope.cancel()
+        }
+    }
+
     private class PendingRequests<T> {
         private val requests = mutableListOf<PendingRequest<T>>()
 

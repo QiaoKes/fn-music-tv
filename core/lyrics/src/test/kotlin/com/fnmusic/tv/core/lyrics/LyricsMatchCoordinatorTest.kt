@@ -36,21 +36,104 @@ class LyricsMatchCoordinatorTest {
         )
     }
 
-    @Test fun `tied candidate fetches overlap inside the total deadline`() = runBlocking {
+    @Test fun `highest ranked successful candidate avoids fallback fetches`() = runBlocking {
         val sources = listOf(
             FakeSource(LyricsSourceId.QqMusic, fetchDelayMs = 180),
             FakeSource(LyricsSourceId.Kugou, fetchDelayMs = 180),
             FakeSource(LyricsSourceId.Netease, fetchDelayMs = 180),
         )
-        lateinit var result: LyricsMatchResult
-
-        val elapsed = measureTimeMillis {
-            result = LyricsMatchCoordinator(sources, sourceTimeoutMs = 400, totalTimeoutMs = 500).match(request)
-        }
+        val result = LyricsMatchCoordinator(sources, sourceTimeoutMs = 400, totalTimeoutMs = 1_000).match(request)
 
         assertTrue(result is LyricsMatchResult.Found)
-        assertEquals(3, sources.sumOf(FakeSource::fetchCalls))
-        assertTrue("fetches should overlap, elapsed=$elapsed", elapsed < 450)
+        assertEquals(1, sources.sumOf(FakeSource::fetchCalls))
+        assertEquals(1, sources[0].fetchCalls)
+    }
+
+    @Test fun `title-only search runs when primary results are unusable`() = runBlocking {
+        val source = FakeSource(
+            id = LyricsSourceId.QqMusic,
+            candidates = { query ->
+                if (query.keyword == request.title) {
+                    listOf(candidate(LyricsSourceId.QqMusic, "exact"))
+                } else {
+                    listOf(candidate(LyricsSourceId.QqMusic, "irrelevant", title = "Different Song"))
+                }
+            },
+        )
+
+        val result = LyricsMatchCoordinator(listOf(source), sourceTimeoutMs = 200, totalTimeoutMs = 800).match(request)
+
+        assertTrue(result is LyricsMatchResult.Found)
+        assertEquals(listOf("Artist - Song", "Song"), source.searchKeywords)
+    }
+
+    @Test fun `failed leader falls back beyond the quality tie window`() = runBlocking {
+        val source = FakeSource(
+            id = LyricsSourceId.QqMusic,
+            candidates = {
+                listOf(
+                    candidate(LyricsSourceId.QqMusic, "leader"),
+                    candidate(
+                        LyricsSourceId.QqMusic,
+                        remoteId = "fallback",
+                        artists = listOf("Artist X"),
+                        album = null,
+                    ),
+                )
+            },
+            fetchResult = { candidate ->
+                if (candidate.remoteId == "leader") throw LyricsPayloadException("empty")
+                SourceLyrics(LyricsTextParser.parseLrc("[00:01.00]fallback"))
+            },
+        )
+
+        val result = LyricsMatchCoordinator(listOf(source), sourceTimeoutMs = 200, totalTimeoutMs = 800).match(request)
+
+        assertEquals("fallback", (result as LyricsMatchResult.Found).lyrics.candidate.remoteId)
+        assertEquals(2, source.fetchCalls)
+    }
+
+    @Test fun `source priority breaks near ties but cannot override a score gap over the window`() = runBlocking {
+        val nearTieSources = listOf(
+            FakeSource(
+                id = LyricsSourceId.QqMusic,
+                candidates = { listOf(candidate(LyricsSourceId.QqMusic, "qq", artists = listOf("Artis"))) },
+            ),
+            FakeSource(id = LyricsSourceId.Netease),
+        )
+        val nearTie = LyricsMatchCoordinator(
+            nearTieSources,
+            sourceTimeoutMs = 200,
+            totalTimeoutMs = 800,
+            aggregationWindowMs = 50,
+        ).match(request) as LyricsMatchResult.Found
+        assertEquals(LyricsSourceId.QqMusic, nearTie.lyrics.source)
+
+        val wideGapSources = listOf(
+            FakeSource(
+                id = LyricsSourceId.QqMusic,
+                candidates = { listOf(candidate(LyricsSourceId.QqMusic, "qq", artists = listOf("Art X"))) },
+            ),
+            FakeSource(id = LyricsSourceId.Netease),
+        )
+        val wideGap = LyricsMatchCoordinator(
+            wideGapSources,
+            sourceTimeoutMs = 200,
+            totalTimeoutMs = 800,
+            aggregationWindowMs = 50,
+        ).match(request) as LyricsMatchResult.Found
+        assertEquals(LyricsSourceId.Netease, wideGap.lyrics.source)
+    }
+
+    @Test fun `invalid search payload is not reduced to not found`() = runBlocking {
+        val sources = LyricsSourceId.entries.map {
+            FakeSource(it, failure = LyricsPayloadException("invalid payload"))
+        }
+
+        assertEquals(
+            LyricsMatchResult.InvalidResponse,
+            LyricsMatchCoordinator(sources, sourceTimeoutMs = 100, totalTimeoutMs = 300).match(request),
+        )
     }
 
     @Test fun `a slow fallback source does not delay an early high confidence match`() = runBlocking {
@@ -80,19 +163,46 @@ class LyricsMatchCoordinatorTest {
         private val delayMs: Long = 0,
         private val fetchDelayMs: Long = 0,
         private val failure: Throwable? = null,
+        private val candidates: (LyricsSearchQuery) -> List<LyricsCandidate> = { query ->
+            listOf(candidate(query.request, id))
+        },
+        private val fetchResult: (LyricsCandidate) -> SourceLyrics = {
+            SourceLyrics(LyricsTextParser.parseLrc("[00:01.00]line"))
+        },
     ) : LyricsSource {
         var fetchCalls = 0
+        val searchKeywords = mutableListOf<String>()
 
         override suspend fun search(query: LyricsSearchQuery): List<LyricsCandidate> {
             delay(delayMs)
             failure?.let { throw it }
-            return listOf(LyricsCandidate(id, id.name, "Song", listOf("Artist"), "Album", 180_000))
+            searchKeywords += query.keyword
+            return candidates(query)
         }
 
         override suspend fun fetch(candidate: LyricsCandidate): SourceLyrics {
             fetchCalls += 1
             delay(fetchDelayMs)
-            return SourceLyrics(LyricsTextParser.parseLrc("[00:01.00]line"))
+            return fetchResult(candidate)
         }
+    }
+
+    private companion object {
+        fun candidate(
+            source: LyricsSourceId,
+            remoteId: String,
+            title: String = "Song",
+            artists: List<String> = listOf("Artist"),
+            album: String? = "Album",
+        ) = LyricsCandidate(source, remoteId, title, artists, album, 180_000)
+
+        fun candidate(request: LyricsMatchRequest, source: LyricsSourceId) = LyricsCandidate(
+            source,
+            source.name,
+            request.title,
+            request.artists,
+            request.album,
+            request.durationMs,
+        )
     }
 }

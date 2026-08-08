@@ -6,6 +6,7 @@ import com.fnmusic.tv.core.data.local.CachedMatchedLyricEntity
 import com.fnmusic.tv.core.data.local.LocalStore
 import com.fnmusic.tv.core.lyrics.LyricsMatchRequest
 import com.fnmusic.tv.core.lyrics.LyricsMatchResult
+import com.fnmusic.tv.core.lyrics.LyricsCandidateScorer
 import com.fnmusic.tv.core.lyrics.LyricsTrackAligner
 import com.fnmusic.tv.core.lyrics.MatchedLyrics
 import com.fnmusic.tv.core.lyrics.TimedLyricsTrack
@@ -30,15 +31,17 @@ internal class OnlineLyricsResolver(
         val namespace = namespace()
         val fingerprint = track.lyricsFingerprint()
         val currentTime = now()
-        val cacheBucket = currentTime / NEGATIVE_CACHE_TTL_MS
         val key = ResponseCacheKey(
             namespace = namespace,
             kind = "matched-lyrics",
-            businessKey = "${track.guid.value}:$fingerprint:$cacheBucket",
+            businessKey = "${track.guid.value}:$fingerprint",
         )
         var shouldPersist = false
         val payload = responses.getOrFetch(
             key = key,
+            isRetainedValid = { encoded ->
+                encoded.decodeEnvelope()?.accepts(fingerprint, now()) == true
+            },
             persist = { encoded ->
                 if (shouldPersist) {
                     try {
@@ -124,9 +127,9 @@ private fun Track.toLyricsMatchRequest() = LyricsMatchRequest(
 private fun Track.lyricsFingerprint(): String {
     val value = listOf(
         guid.value,
-        title,
-        artistName.orEmpty(),
-        albumName.orEmpty(),
+        LyricsCandidateScorer.normalize(title),
+        LyricsCandidateScorer.normalize(artistName.orEmpty()),
+        LyricsCandidateScorer.normalize(albumName.orEmpty()),
         durationMs?.toString().orEmpty(),
         MATCH_PROTOCOL_VERSION,
     ).joinToString("\u0000")
@@ -141,7 +144,11 @@ private fun MatchedLyrics.toCurrentLyrics(trackGuid: String): CurrentLyrics {
         .map { line ->
             LyricLine(
                 startMs = requireNotNull(line.startMs),
-                texts = line.words.map { it.text.trim() }.filter(String::isNotBlank).distinct(),
+                texts = if (translation?.isNotEmpty == true) {
+                    line.words.map { it.text.trim() }.filter(String::isNotBlank).distinct()
+                } else {
+                    listOf(line.text)
+                },
             )
         }
         .filter { it.texts.isNotEmpty() }

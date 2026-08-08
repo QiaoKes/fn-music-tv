@@ -23,6 +23,23 @@ class LyricsTextParserTest {
         assertEquals(2_000L, track.lines.single().words.last().endMs)
     }
 
+    @Test fun `qrc retains word timing in text start duration order`() {
+        val track = LyricsTextParser.parseQrc("[1000,2000]你(1000,500)好(1500,500)")
+
+        assertEquals("你好", track.lines.single().text)
+        assertEquals(1_000L, track.lines.single().words.first().startMs)
+        assertEquals(2_000L, track.lines.single().words.last().endMs)
+    }
+
+    @Test fun `metadata-only lrc is not accepted as plain lyrics`() {
+        val track = LyricsTextParser.parseLrcOrPlain(
+            "\uFEFF[ar:Artist]\n[ti:Song]\n[offset:500]",
+            LyricsTrackKind.Original,
+        )
+
+        assertTrue(track.lines.isEmpty())
+    }
+
     @Test fun `duplicate lrc timestamps become original and translation tracks`() {
         val lyrics = LyricsTextParser.parseMultiTrackLrc("[00:01.00]Hello\n[00:01.00]你好\n[00:03.00]World\n[00:03.00]世界")
 

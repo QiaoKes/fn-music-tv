@@ -77,6 +77,7 @@ class LocalStoreTest {
 
     @Test fun `cache clearing removes first party and matched lyrics together`() = runBlocking {
         val namespace = "server:user"
+        store.saveSettings(namespace, "Poster", "Default", onlineLyricsMatchingEnabled = false)
         store.saveLyric(CachedLyricEntity(namespace, "track", "fn", 1L))
         store.saveMatchedLyric(CachedMatchedLyricEntity(namespace, "track", "online", 1L))
 
@@ -84,6 +85,7 @@ class LocalStoreTest {
 
         assertNull(store.lyric(namespace, "track"))
         assertNull(store.matchedLyric(namespace, "track"))
+        assertEquals(false, store.account(namespace)?.onlineLyricsMatchingEnabled)
     }
 
     @Test fun `playback snapshot update atomically replaces queue and clears legacy frozen queue`() = runBlocking {

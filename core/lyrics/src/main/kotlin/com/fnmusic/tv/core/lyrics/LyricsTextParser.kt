@@ -37,8 +37,9 @@ object LyricsTextParser {
         TimedLyricsTrack(
             kind,
             text.lineSequence()
-                .map(String::trim)
+                .map { it.trim().removePrefix("\uFEFF") }
                 .filter(String::isNotBlank)
+                .filterNot(metadataTag::matches)
                 .map { TimedLyricsLine(words = listOf(TimedLyricsWord(text = it))) }
                 .toList(),
         )
@@ -49,7 +50,18 @@ object LyricsTextParser {
     fun parseQrc(text: String, kind: LyricsTrackKind = LyricsTrackKind.Original): TimedLyricsTrack {
         val content = qrcContent.find(text)?.groupValues?.get(1) ?: text
         if (!content.contains(qrcLine)) return parseLrcOrPlain(content, kind)
-        return TimedLyricsTrack(kind, parseDurationFormat(content, qrcLine, qrcWord, wordStartsAreRelative = false))
+        return TimedLyricsTrack(
+            kind,
+            parseDurationFormat(
+                content,
+                qrcLine,
+                qrcWord,
+                wordStartsAreRelative = false,
+                wordStartGroup = 2,
+                wordDurationGroup = 3,
+                wordTextGroup = 1,
+            ),
+        )
     }
 
     fun parseKrc(text: String, kind: LyricsTrackKind = LyricsTrackKind.Original): TimedLyricsTrack {
@@ -93,15 +105,18 @@ object LyricsTextParser {
         linePattern: Regex,
         wordPattern: Regex,
         wordStartsAreRelative: Boolean,
+        wordStartGroup: Int = 1,
+        wordDurationGroup: Int = 2,
+        wordTextGroup: Int = 3,
     ): List<TimedLyricsLine> = text.lineSequence().mapNotNull { raw ->
         val line = linePattern.find(raw.trim()) ?: return@mapNotNull null
         val start = line.groupValues[1].toLongOrNull() ?: return@mapNotNull null
         val duration = line.groupValues[2].toLongOrNull() ?: return@mapNotNull null
         val content = line.groupValues[3]
         val words = wordPattern.findAll(content).mapNotNull { match ->
-            val wordStart = match.groupValues.getOrNull(1)?.toLongOrNull() ?: return@mapNotNull null
-            val wordDuration = match.groupValues.getOrNull(2)?.toLongOrNull() ?: return@mapNotNull null
-            val wordText = match.groupValues.getOrNull(3).orEmpty()
+            val wordStart = match.groupValues.getOrNull(wordStartGroup)?.toLongOrNull() ?: return@mapNotNull null
+            val wordDuration = match.groupValues.getOrNull(wordDurationGroup)?.toLongOrNull() ?: return@mapNotNull null
+            val wordText = match.groupValues.getOrNull(wordTextGroup).orEmpty()
             if (wordText.isEmpty()) return@mapNotNull null
             val absoluteStart = if (wordStartsAreRelative) start + wordStart else wordStart
             TimedLyricsWord(absoluteStart, absoluteStart + wordDuration, wordText)

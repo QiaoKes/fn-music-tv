@@ -33,9 +33,14 @@ class LyricsCandidateScorer(
         val eligible = candidates.mapNotNull { scoreOne(request, it) }
         if (eligible.isEmpty()) return emptyList()
         return eligible.map { scored ->
-            val consensus = eligible.count { other ->
-                other.candidate.source != scored.candidate.source && sameRecording(scored.candidate, other.candidate)
-            } + 1
+            val consensus = eligible.asSequence()
+                .filter { other ->
+                    other.candidate.source != scored.candidate.source &&
+                        sameRecording(scored.candidate, other.candidate)
+                }
+                .map { it.candidate.source }
+                .distinct()
+                .count() + 1
             scored.copy(
                 score = (scored.score + (consensus - 1).coerceAtMost(2) * 1.5).coerceAtMost(100.0),
                 consensusCount = consensus,
