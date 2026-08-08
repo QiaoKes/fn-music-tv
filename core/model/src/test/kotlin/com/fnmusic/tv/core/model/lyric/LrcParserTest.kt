@@ -13,6 +13,8 @@ class LrcParserTest {
     @Test fun `groups multilingual lines at the same time`() {
         val timeline = LrcParser.parse("[00:10.00]Hello\n[00:10.00]你好")
         assertEquals(listOf("Hello", "你好"), timeline.lines.single().texts)
+        assertEquals("Hello", timeline.lines.single().original)
+        assertEquals("你好", timeline.lines.single().translation)
         assertEquals(0, timeline.activeIndex(10_100))
     }
 
@@ -27,6 +29,9 @@ class LrcParserTest {
 
         assertEquals(listOf(20_630L), timeline.lines.map { it.startMs })
         assertEquals("あな text", timeline.lines.single().texts.single())
+        assertEquals(25_840L, timeline.lines.single().endMs)
+        assertEquals(listOf("あ", "な ", "text"), timeline.lines.single().words.map { it.text })
+        assertEquals(listOf(20_630L, 20_810L, 20_970L), timeline.lines.single().words.map { it.startMs })
     }
 
     @Test fun `joins yrc metadata chunks and places untimed credits at the start`() {
