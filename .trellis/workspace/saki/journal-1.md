@@ -342,3 +342,24 @@ Added a standalone high-confidence lyrics matcher using QQ Music, Kugou and Nete
 ### Status
 
 [OK] **Completed**
+
+
+## Session 16: Lyrics quality selection and TV layout
+
+**Date**: 2026-08-08
+**Task**: Lyrics quality selection and TV layout
+**Branch**: `codex/lyrics-quality-layout`
+
+### Summary
+
+Select the richest lyrics across all online providers before FN fallback, preserve word and translation structure, stabilize TV lyric slots, verify RTRT and line transitions on an Android TV emulator, and release version 1.0.3.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d698af9` | (see git log) |
+
+### Status
+
+[OK] **Completed**
