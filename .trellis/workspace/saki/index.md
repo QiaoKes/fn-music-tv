@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 14
-- **Last Active**: 2026-08-07
+- **Total Sessions**: 15
+- **Last Active**: 2026-08-08
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~321 | Active |
+| `journal-1.md` | ~344 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 15 | 2026-08-08 | Ship third-party lyrics matching v1.0.2 | `48ce472`, `31f27c4`, `c51f980` | `feature-lyrics-saki` |
 | 14 | 2026-08-07 | Archive remaining Trellis tasks | - | `fix-relogin-saki` |
 | 13 | 2026-08-07 | Release 1.0.1 login recovery and TV controls | `d091835` | `fix-relogin-saki` |
 | 12 | 2026-08-03 | Release 1.0.0 favorites and queue | `505e129`, `1eaba0c`, `3bb58ba` | `feature-favorite-saki` |
