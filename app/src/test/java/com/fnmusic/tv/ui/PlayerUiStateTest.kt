@@ -177,10 +177,49 @@ class PlayerUiStateTest {
         assertEquals(0..2, playerLyricWindow(lineCount = 3, activeIndex = 1))
     }
 
-    @Test fun `poster lyric keeps current line in the second slot at boundaries`() {
-        assertEquals(listOf(null, 0, 1), posterLyricIndices(lineCount = 4, activeIndex = -1))
-        assertEquals(listOf(null, 0, 1), posterLyricIndices(lineCount = 4, activeIndex = 0))
-        assertEquals(listOf(2, 3, null), posterLyricIndices(lineCount = 4, activeIndex = 3))
+    @Test fun `lyrics show only current and next lines at timeline boundaries`() {
+        assertEquals(listOf(null, null), currentAndNextLyricIndices(lineCount = 0, activeIndex = -1))
+        assertEquals(listOf(null, 0), currentAndNextLyricIndices(lineCount = 4, activeIndex = -1))
+        assertEquals(listOf(0, 1), currentAndNextLyricIndices(lineCount = 4, activeIndex = 0))
+        assertEquals(listOf(3, null), currentAndNextLyricIndices(lineCount = 4, activeIndex = 3))
+    }
+
+    @Test fun `lyric position advances between controller snapshots only while playing`() {
+        assertEquals(
+            1_125L,
+            interpolatedLyricPosition(
+                anchorPositionMs = 1_000L,
+                anchorObservedAtMs = 2_000L,
+                frameObservedAtMs = 2_125L,
+                durationMs = 10_000L,
+                isPlaying = true,
+            ),
+        )
+        assertEquals(
+            1_000L,
+            interpolatedLyricPosition(
+                anchorPositionMs = 1_000L,
+                anchorObservedAtMs = 2_000L,
+                frameObservedAtMs = 2_125L,
+                durationMs = 10_000L,
+                isPlaying = false,
+            ),
+        )
+    }
+
+    @Test fun `lyric position clamps backward frames and track duration`() {
+        assertEquals(
+            1_000L,
+            interpolatedLyricPosition(1_000L, 2_000L, 1_900L, 10_000L, true),
+        )
+        assertEquals(
+            10_000L,
+            interpolatedLyricPosition(9_900L, 2_000L, 2_500L, 10_000L, true),
+        )
+        assertEquals(
+            100L,
+            interpolatedLyricPosition(-100L, 2_000L, 2_100L, 0L, true),
+        )
     }
 
     @Test fun `progress fraction handles invalid duration and clamps endpoints`() {

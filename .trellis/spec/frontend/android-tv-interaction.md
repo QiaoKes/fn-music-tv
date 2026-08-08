@@ -291,6 +291,16 @@ interface AuthenticatedAppActions {
   averaging with no saturation reward or minimum saturation, cap OKLab chroma at 0.09, constrain
   lightness and preserve at least 4.8:1 primary-text contrast. Fade the artwork into that single
   panel hue; the far edge may only mix in a small amount of the app background.
+- Poster and cover modes render exactly two lyric regions: the current line and the next line. Do
+  not keep the previous line or outgoing lyric content composed. Both regions may show at most two
+  original-text lines and two translation lines; the next region is smaller, muted, and separated
+  from the current region by fixed vertical space. Romanization remains available in the lyric
+  model/cache but is never rendered in the TV player.
+- Word-timed highlighting extrapolates a lyric-local position from the latest playback snapshot and
+  `SystemClock.uptimeMillis()` on each display frame while playing. Re-anchor when the snapshot,
+  duration, playback state, or complete `NowPlayingIdentity` changes; paused rendering uses the
+  exact snapshot. Keep the global playback progress ticker at 250 ms and never mix frame-clock
+  nanoseconds with uptime milliseconds.
 - `Ready` renders the resource; `Absent` is a valid terminal fallback; only
   `RetryableFailure` exposes retry. A retry reloads only failed resources and remains bound to the
   same identity. Missing `coverId` may be enriched from full metadata, which creates a new revision
@@ -438,6 +448,9 @@ interface AuthenticatedAppActions {
 | Poster edge palette is empty | Generate the single panel color from the complete-artwork palette |
 | Poster complete-artwork palette is empty | Use the fixed restrained brand-neutral panel fallback |
 | Current lyrics is Loading during a track switch | Keep the prior same-namespace renderable lyric state; do not flash loading/absent copy |
+| Timed lyrics has an active line | Render that line plus the next line only; omit previous and romanization rows |
+| Playback is running between 250 ms progress snapshots | Extrapolate lyric position from the latest uptime anchor on display frames, clamped to duration |
+| Playback is paused or seeking publishes a new snapshot | Stop extrapolation and render/re-anchor from the exact snapshot position |
 | Metadata/artwork/lyrics is validly absent | Publish fallback/`Absent`; do not show retry |
 | One or more current resources exhaust retryable failure | Show one retry action bound to the current revision |
 | Focused retry action succeeds and disappears | Hand focus to progress before removal; Down reaches play/pause |
@@ -500,6 +513,10 @@ interface AuthenticatedAppActions {
   only A rev 3 metadata, artwork, and lyrics.
 - Good: switch A -> B, keep A's decoded cover and lyrics only while B is Loading, then replace each
   independently as B reaches its current terminal state without showing a placeholder frame.
+- Good: render current original plus translation, leave a stable gap, then render the smaller muted
+  next original plus translation in both poster and cover modes without a previous or romanization row.
+- Good: anchor at 1,000 ms at uptime 2,000 ms and render a frame at uptime 2,125 ms as 1,125 ms while
+  playing; keep it at 1,000 ms while paused and clamp it to the known track duration.
 - Good: a violet subject occupies less area than a pale neutral backdrop; Palette quantization plus
   scoring selects the representative violet hue and maps it to a dark readable background.
 - Good: a mostly gray poster with a small red edge accent stays neutral or subtly warm; the artwork
@@ -528,6 +545,11 @@ interface AuthenticatedAppActions {
 - Bad: keying artwork only by cover ID; two songs sharing a cover can reuse a failed or stale attempt.
 - Bad: clearing decoded artwork or renderable lyrics merely because the new exact identity first
   projects `Loading`; this creates a visible placeholder flash even though a stable visual exists.
+- Bad: composing previous/current/next plus original/translation/romanization in one lyric panel;
+  long multilingual lines collide and make the active lyric hard to scan on a TV.
+- Bad: driving word highlighting directly from the global 250 ms snapshot, or subtracting
+  `System.nanoTime()`/frame nanoseconds from `SystemClock.uptimeMillis()`; the first visibly steps and
+  the second combines unrelated time bases.
 - Bad: generating missing-artwork ambience from title/artist hashes; the background is unrelated to
   the image and can jump to a misleading hue between tracks.
 - Bad: selecting one highly saturated poster swatch, forcing a minimum saturation, and painting it
@@ -613,6 +635,12 @@ interface AuthenticatedAppActions {
   OKLab chroma is at most 0.09, and primary-text contrast is at least 4.8:1.
 - Player visual transition tests: `Loading` retains only prior `Ready`/`Absent` visuals; current
   `Ready`, `Absent`, and `RetryableFailure` replace immediately. A namespace change retains nothing.
+- Player lyric projection tests: assert empty, before-first, first, and final timeline boundaries
+  yield only current/next slots. Position tests assert playing extrapolation, paused stability,
+  backward-time clamping, negative-position clamping, and duration clamping.
+- Player lyric device test: inspect poster and cover modes at 1920x1080 and 1280x720; assert only
+  current/next groups appear, original and translation remain separated and readable, romanization
+  is absent, and word highlighting advances smoothly without shifting either region.
 - Player device test: assert the normal icon-only graph reaches all transports, mode, and queue;
   no visible mode/queue labels exist; content descriptions identify all four modes and the queue;
   four activations complete the mode cycle.
@@ -838,6 +866,21 @@ val decoded by produceState<DecodedPlayerArtwork?>(null, request?.key, request?.
     val current = request ?: return@produceState // keep the existing value while Loading
     value = withContext(Dispatchers.Default) { decodeAndExtractAmbience(current) }
 }
+```
+
+```kotlin
+// Wrong: word highlighting visibly jumps with the app-wide 250 ms progress ticker.
+LyricLine(positionMs = playbackProgress.positionMs)
+
+// Correct: keep the controller cadence and project only the lyric clock on display frames.
+val elapsedMs = (SystemClock.uptimeMillis() - anchor.observedAtMs).coerceAtLeast(0L)
+val projectedMs = anchor.positionMs + elapsedMs
+val lyricPositionMs = if (anchor.durationMs > 0L) {
+    projectedMs.coerceAtMost(anchor.durationMs)
+} else {
+    projectedMs
+}
+LyricLine(positionMs = lyricPositionMs)
 ```
 
 ```kotlin
