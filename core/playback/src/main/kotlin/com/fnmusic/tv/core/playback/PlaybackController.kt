@@ -636,11 +636,14 @@ class PlaybackController(
         if (index !in 0 until player.mediaItemCount || current.mediaId != track.guid.value) return
         val old = current.mediaMetadata
         val coverId = track.coverId ?: old.extras?.getString(COVER_ID_KEY)
+        val durationMs = track.durationMs ?: old.extras
+            ?.takeIf { it.containsKey(DECLARED_DURATION_MS_KEY) }
+            ?.getLong(DECLARED_DURATION_MS_KEY)
         val updatedMetadata = old.buildUpon()
             .setTitle(track.title.ifBlank { old.title })
             .setArtist(track.artistName ?: old.artist)
             .setAlbumTitle(track.albumName ?: old.albumTitle)
-            .setExtras(mediaExtras(track.audioFormat ?: old.extras?.getString(AUDIO_FORMAT_KEY), coverId))
+            .setExtras(mediaExtras(track.audioFormat ?: old.extras?.getString(AUDIO_FORMAT_KEY), coverId, durationMs))
             .build()
         val oldKey = presentationKey(current)
         val updated = current.buildUpon().setMediaMetadata(updatedMetadata).build()
@@ -755,6 +758,8 @@ class PlaybackController(
         val artist = captured?.artist.orEmpty()
         val audioFormat = captured?.audioFormat.orEmpty()
         val coverId = captured?.coverId
+        val album = captured?.album
+        val declaredDurationMs = captured?.durationMs
         val identity = if (mediaId.isNotBlank()) {
             currentNamespace?.let { namespace ->
                 NowPlayingIdentity(
@@ -765,6 +770,8 @@ class PlaybackController(
                     artist = artist,
                     audioFormat = audioFormat,
                     coverId = coverId,
+                    album = album,
+                    durationMs = declaredDurationMs,
                 )
             }
         } else {
@@ -1099,7 +1106,7 @@ class PlaybackController(
                 .setArtist(playback.track.artistName)
                 .setAlbumTitle(playback.track.albumName)
                 .setArtworkUri(playback.artworkUrl?.let(Uri::parse))
-                .setExtras(mediaExtras(playback.track.audioFormat, playback.track.coverId))
+                .setExtras(mediaExtras(playback.track.audioFormat, playback.track.coverId, playback.track.durationMs))
                 .build(),
         )
         .build()
@@ -1244,9 +1251,10 @@ class PlaybackController(
         return snapshot.shuffleOrder.takeIf { restoreShuffle }
     }
 
-    private fun mediaExtras(audioFormat: String?, coverId: String?): Bundle = Bundle().apply {
+    private fun mediaExtras(audioFormat: String?, coverId: String?, durationMs: Long?): Bundle = Bundle().apply {
         audioFormat?.takeIf(String::isNotBlank)?.let { putString(AUDIO_FORMAT_KEY, it) }
         coverId?.takeIf(String::isNotBlank)?.let { putString(COVER_ID_KEY, it) }
+        durationMs?.takeIf { it > 0L }?.let { putLong(DECLARED_DURATION_MS_KEY, it) }
     }
 
 
@@ -1258,6 +1266,8 @@ class PlaybackController(
             artist = captured.artist,
             audioFormat = captured.audioFormat,
             coverId = captured.coverId,
+            album = captured.album,
+            durationMs = captured.durationMs,
         )
     }
 
@@ -1274,6 +1284,8 @@ class PlaybackController(
         val artist: String,
         val audioFormat: String,
         val coverId: String?,
+        val album: String?,
+        val durationMs: Long?,
     )
 
     private data class RoamExitTransition(
@@ -1296,3 +1308,4 @@ class PlaybackController(
 
 const val AUDIO_FORMAT_KEY = "com.fnmusic.tv.AUDIO_FORMAT"
 const val COVER_ID_KEY = "com.fnmusic.tv.COVER_ID"
+const val DECLARED_DURATION_MS_KEY = "com.fnmusic.tv.DECLARED_DURATION_MS"

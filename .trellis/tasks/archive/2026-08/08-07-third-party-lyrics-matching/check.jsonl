@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/android-tv-interaction.md", "reason": "Verify original-plus-translation display and preserve TV focus/layout contracts."}
+{"file": ".trellis/spec/backend/android-client-contracts.md", "reason": "Verify provider isolation, cache identity, cancellation, errors, and Android client behavior."}
+{"file": ".trellis/tasks/08-07-third-party-lyrics-matching/research/lddc-portability.md", "reason": "Verify the implementation remains faithful to the pinned upstream behavior and attribution requirements."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify end-to-end metadata, state, retry, and stale-result behavior across layers."}

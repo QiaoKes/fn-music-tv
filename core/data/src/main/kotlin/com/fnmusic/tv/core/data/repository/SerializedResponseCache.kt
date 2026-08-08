@@ -47,12 +47,17 @@ internal class SerializedResponseCache(
 
     suspend fun getOrFetch(
         key: ResponseCacheKey,
+        isRetainedValid: (String) -> Boolean = { true },
         persist: suspend (String) -> Unit = {},
         fetch: suspend () -> String,
     ): String {
         var created = false
         val flight = mutex.withLock {
-            entries[key]?.let { return it.payload }
+            entries[key]?.let { entry ->
+                if (isRetainedValid(entry.payload)) return entry.payload
+                entries.remove(key)
+                retainedBytes -= entry.sizeBytes
+            }
             val generation = generationOf(key.namespace)
             flights[key]?.takeIf { it.generation == generation }?.also {
                 it.waiters += 1

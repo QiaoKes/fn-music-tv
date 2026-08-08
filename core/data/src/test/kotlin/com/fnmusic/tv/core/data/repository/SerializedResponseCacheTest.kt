@@ -160,6 +160,20 @@ class SerializedResponseCacheTest {
         assertEquals("recovered", cache.getOrFetch(key) { "recovered" })
     }
 
+    @Test fun `invalid retained payload is removed and fetched again`() = runBlocking {
+        val cache = SerializedResponseCache(1024, scope)
+        val key = ResponseCacheKey("n", "matched-lyrics", "track:fingerprint")
+        cache.getOrFetch(key) { "expired" }
+
+        val value = cache.getOrFetch(
+            key = key,
+            isRetainedValid = { it != "expired" },
+        ) { "fresh" }
+
+        assertEquals("fresh", value)
+        assertEquals("fresh", cache.getOrFetch(key) { error("fresh value should be retained") })
+    }
+
     @Test fun `namespace invalidation rejects a late non cancellable result`() = runBlocking {
         val cache = SerializedResponseCache(1024, scope)
         val key = ResponseCacheKey("old", "index", "playlists")
