@@ -19,6 +19,13 @@ enum class LyricsSourceId { QqMusic, Kugou, Netease }
 enum class LyricsTrackKind { Original, Translation, Romanization }
 
 @Serializable
+enum class LyricsContentQuality(internal val rank: Int) {
+    Basic(0),
+    Translated(1),
+    WordTimed(2),
+}
+
+@Serializable
 data class LyricsCandidate(
     val source: LyricsSourceId,
     val remoteId: String,
@@ -72,6 +79,7 @@ data class MatchedLyrics(
     val original: TimedLyricsTrack,
     val translation: TimedLyricsTrack? = null,
     val romanization: TimedLyricsTrack? = null,
+    val quality: LyricsContentQuality = LyricsContentQuality.Basic,
 )
 
 sealed interface LyricsMatchResult {

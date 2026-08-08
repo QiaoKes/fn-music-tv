@@ -11,7 +11,6 @@ data class LyricsMatchPolicy(
     val minimumScore: Double = 80.0,
     val minimumTitleScore: Double = 50.0,
     val maximumDurationDeltaMs: Long = 4_000L,
-    val qualityTieWindow: Double = 5.0,
     val sourceOrder: List<LyricsSourceId> = listOf(
         LyricsSourceId.QqMusic,
         LyricsSourceId.Kugou,
@@ -24,6 +23,7 @@ data class ScoredLyricsCandidate(
     val score: Double,
     val titleScore: Double,
     val consensusCount: Int,
+    val metadataScore: Double = score,
 )
 
 class LyricsCandidateScorer(

@@ -3,6 +3,7 @@ package com.fnmusic.tv.core.data.repository
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.fnmusic.tv.core.data.local.AppDatabase
+import com.fnmusic.tv.core.data.local.CachedMatchedLyricEntity
 import com.fnmusic.tv.core.data.local.LocalStore
 import com.fnmusic.tv.core.lyrics.LyricsCandidate
 import com.fnmusic.tv.core.lyrics.LyricsMatchResult
@@ -96,7 +97,30 @@ class OnlineLyricsResolverTest {
         assertEquals(1, calls.get())
     }
 
-    @Test fun `word-timed original without translation maps to one display line`() = runBlocking {
+    @Test fun `cache entries without an explicit schema version are rematched`() = runBlocking {
+        val initial = resolver { LyricsMatchResult.Found(matchedLyrics()) }
+        assertTrue(initial.resolve(track()) != null)
+        val cached = localStore.matchedLyric("server:user", "track") ?: error("expected persisted lyrics")
+        localStore.saveMatchedLyric(
+            CachedMatchedLyricEntity(
+                namespace = cached.namespace,
+                trackGuid = cached.trackGuid,
+                payload = cached.payload.replace(Regex("\\\"schemaVersion\\\":\\d+,?"), ""),
+                accessedAt = cached.accessedAt,
+            ),
+        )
+        val rematches = AtomicInteger()
+
+        val refreshed = resolver {
+            rematches.incrementAndGet()
+            LyricsMatchResult.Found(matchedLyrics())
+        }.resolve(track())
+
+        assertTrue(refreshed != null)
+        assertEquals(1, rematches.get())
+    }
+
+    @Test fun `word timing and semantic sidecars survive online mapping`() = runBlocking {
         val original = TimedLyricsTrack(
             kind = LyricsTrackKind.Original,
             lines = listOf(
@@ -111,10 +135,41 @@ class OnlineLyricsResolverTest {
             ),
         )
         val lyrics = resolver {
+            LyricsMatchResult.Found(
+                matchedLyrics(
+                    original = original,
+                    translation = timedTrack(LyricsTrackKind.Translation, "Hello"),
+                    romanization = timedTrack(LyricsTrackKind.Romanization, "ni hao"),
+                ),
+            )
+        }.resolve(track()) ?: error("expected online lyrics")
+
+        val line = lyrics.timeline?.lines?.single() ?: error("expected timed line")
+        assertEquals(listOf("你好", "Hello", "ni hao"), line.texts)
+        assertEquals(listOf("你", "好"), line.words.map { it.text })
+        assertEquals(listOf(1_000L, 1_500L), line.words.map { it.startMs })
+        assertEquals(2_000L, line.endMs)
+    }
+
+    @Test fun `line timed lyrics do not synthesize word timing`() = runBlocking {
+        val original = TimedLyricsTrack(
+            kind = LyricsTrackKind.Original,
+            lines = listOf(
+                TimedLyricsLine(
+                    startMs = 1_000L,
+                    endMs = 2_000L,
+                    words = listOf(TimedLyricsWord(text = "whole line")),
+                ),
+            ),
+        )
+
+        val lyrics = resolver {
             LyricsMatchResult.Found(matchedLyrics(original = original, translation = null))
         }.resolve(track()) ?: error("expected online lyrics")
 
-        assertEquals(listOf("你好"), lyrics.timeline?.lines?.single()?.texts)
+        val line = lyrics.timeline?.lines?.single() ?: error("expected timed line")
+        assertEquals("whole line", line.original)
+        assertTrue(line.words.isEmpty())
     }
 
     @Test fun `expired negative cache immediately retries inside the same old bucket`() = runBlocking {
@@ -139,6 +194,18 @@ class OnlineLyricsResolverTest {
         val calls = AtomicInteger()
         val resolver = resolver {
             if (calls.incrementAndGet() == 1) LyricsMatchResult.InvalidResponse
+            else LyricsMatchResult.Found(matchedLyrics())
+        }
+
+        assertTrue(runCatching { resolver.resolve(track()) }.isFailure)
+        assertTrue(resolver.resolve(track()) != null)
+        assertEquals(2, calls.get())
+    }
+
+    @Test fun `network failure is not retained as a negative match`() = runBlocking {
+        val calls = AtomicInteger()
+        val resolver = resolver {
+            if (calls.incrementAndGet() == 1) LyricsMatchResult.NetworkFailure
             else LyricsMatchResult.Found(matchedLyrics())
         }
 
@@ -175,6 +242,7 @@ class OnlineLyricsResolverTest {
     private fun matchedLyrics(
         original: TimedLyricsTrack = timedTrack(LyricsTrackKind.Original, "原文"),
         translation: TimedLyricsTrack? = timedTrack(LyricsTrackKind.Translation, "translation"),
+        romanization: TimedLyricsTrack? = null,
     ) = MatchedLyrics(
         source = LyricsSourceId.QqMusic,
         candidate = LyricsCandidate(
@@ -188,6 +256,7 @@ class OnlineLyricsResolverTest {
         score = 100.0,
         original = original,
         translation = translation,
+        romanization = romanization,
     )
 
     private fun timedTrack(kind: LyricsTrackKind, text: String) = TimedLyricsTrack(

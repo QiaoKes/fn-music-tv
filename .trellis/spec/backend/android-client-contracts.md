@@ -114,6 +114,16 @@ data class PlaybackCredentials(
     val accessCodeHeader: String? = null,
     val relayMode: Boolean = false,
 )
+LyricsMatchCoordinator.match(request: LyricsMatchRequest): LyricsMatchResult
+enum class LyricsContentQuality { Basic, Translated, WordTimed }
+data class LyricLine(
+    val startMs: Long,
+    val endMs: Long?,
+    val original: String,
+    val translation: String?,
+    val romanization: String?,
+    val words: List<LyricWord>,
+)
 ```
 
 Room uses `AppDatabase` version 3 and exports JSON schemas. `MIGRATION_1_2` adds non-null
@@ -268,6 +278,31 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 - Cache settings and usage describe only global artwork bytes plus Room/index bytes. They never
   report audio bytes.
 
+### Online lyric selection and presentation
+
+- Metadata eligibility remains a hard gate. Search every enabled provider concurrently, keep each
+  search/fetch bounded by its source timeout, and wait for all provider terminal outcomes. A global
+  deadline or early aggregation window must not let the first plain result suppress a later richer
+  result.
+- Fetch at most three metadata-ranked candidates per provider, stopping at that provider's first
+  usable result. Compare the usable provider results by `WordTimed > Translated > Basic`, then word,
+  translation, and timed-line coverage, usable line count, metadata score, consensus, configured
+  provider order, and remote ID. Romanization is supplemental and never raises the quality tier.
+- Fall back to first-party FN lyrics only after online matching returns no usable result or a
+  terminal online failure. Disabling online matching bypasses every third-party call and goes
+  directly to FN lyrics. Caller cancellation is always rethrown and must not trigger fallback.
+- `MatchedLyricsEnvelope.schemaVersion` is a required, explicitly serialized integer. The metadata
+  fingerprint also includes `MATCH_PROTOCOL_VERSION`; change both when selection or projection
+  semantics change. A missing, old, or mismatched version is a cache miss, including old positive
+  and negative rows.
+- Preserve original word start/end times through `core:lyrics -> core:data -> core:model -> app`.
+  Translation and romanization remain separate nullable fields aligned once to an original line;
+  never replace the original word list with secondary text.
+- TV lyric views use fixed previous/current/next slots. Within a slot, render original,
+  translation, and romanization as separate rows with decreasing emphasis; current original words
+  may progressively highlight from playback position. Do not concatenate semantic rows into one
+  large `Text`, and do not cross-fade two complete slot layouts over each other.
+
 ### Playback, snapshot, and current presentation
 
 - `core:playback` owns the narrow `PlaybackSessionStore` and `PlaybackContentSource` capability
@@ -404,6 +439,11 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 | Remembered-session restore has a retryable transient failure | Retain all credentials, publish `Recovering`, and retry in-process with capped backoff |
 | HTTP/1.1 API request after an idle interval | Send `Connection: close`; use one fresh connection and no hidden retry |
 | HTTP/envelope 404/100005 | `AppException(NotFound)`, terminal; current artwork/lyrics `Absent`, metadata fallback |
+| All online lyric searches succeed with no eligible candidates | `LyricsMatchResult.NotFound`, then FN fallback |
+| At least one online result is usable and other providers fail | Select the richest usable result; do not fall back |
+| No online result is usable and a provider times out | `NetworkFailure`, then FN fallback after all providers finish |
+| Matched-lyric cache schema/protocol is missing or stale | Reject row and rematch; never decode with the current default |
+| Caller cancels lyric matching | Rethrow `CancellationException`; cancel children and do not request FN lyrics |
 | I/O, HTTP 408/429/5xx | `NetworkUnavailable`, retryable; current resources make at most 3 total attempts |
 | Redirect or other non-success HTTP status | `NetworkUnavailable`, terminal, one attempt |
 | Envelope code 0 with missing required data | `Empty`, terminal; nullable/current resource becomes `Absent` where allowed |
@@ -506,6 +546,10 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   `deviceId`, and authenticated requests carry the raw token.
 - Good: one NAS stores `alice` and `bob` as separate history entries; choosing either entry starts
   login immediately, while deleting one leaves the other's encrypted credentials intact.
+- Good: QQ returns a plain `RTRT` lyric first, Netease later returns word-timed bilingual content,
+  and the final selection is Netease only after all bounded provider work completes.
+- Good: the active lyric renders original text at primary size, translation below it at a smaller
+  size, romanization as tertiary text, and timed words brighten without resizing the slot.
 - Base: a network failure returns valid Room page/index/lyric data where permitted, persists it in
   the process LRU, and avoids another request while retained.
 - Base: a current artwork request receiving `503`, `429`, then valid bytes succeeds on its third and
@@ -542,6 +586,9 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   names every non-device task explicitly.
 - Bad: committing the release keystore/password, rebuilding with a different certificate, or
   changing only `VERSION_NAME` and expecting Android to accept an upgrade.
+- Bad: returning the first provider hit, imposing a three-second whole-match timeout, treating
+  romanization as translation, flattening secondary rows into words, or relying on a default-valued
+  schema field that the serializer omits.
 
 ## 6. Tests Required
 
@@ -594,6 +641,12 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   A -> B -> A stale rejection,
   missing-cover enrichment, selective manual retry, terminal `404`/empty fallback, and cancellation
   without a retryable UI error.
+- `LyricsMatchCoordinatorTest`: all-provider completion, per-source timeout bounds, cancellation,
+  maximum three fetches per provider, terminal error classification, and deterministic
+  `WordTimed > Translated > Basic` selection including the `RTRT` regression.
+- `OnlineLyricsResolverTest`/`LrcParserTest`: required cache schema invalidation, metadata protocol
+  fingerprinting, unique sidecar alignment, semantic row round trip, and original word start/end
+  preservation. Player UI projection tests assert fixed three-slot boundary behavior.
 - CI-equivalent local gate: all named workflow Gradle tasks must succeed and output four app APKs,
   two app Android-test APKs, and benchmark APKs.
 - Formal APK verification: `aapt dump badging` asserts package `com.fnmusic.tv`, the managed version
@@ -604,6 +657,25 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   macrobenchmark before replacing the checked-in profile.
 
 ## 7. Wrong vs Correct
+
+```kotlin
+// Wrong: the first acceptable provider wins, and a default schema field may be omitted on disk.
+return fetch(ranked.first())
+data class Envelope(val schemaVersion: Int = CURRENT_SCHEMA)
+
+// Correct: await bounded provider outcomes, compare fetched content, and persist an explicit version.
+val providerMatches = sources.map { async { fetchBestForProvider(it) } }.awaitAll()
+return providerMatches.maxWith(contentQualityComparator)
+data class Envelope(val schemaVersion: Int, val matched: MatchedLyrics?)
+```
+
+```kotlin
+// Wrong: destroys word timing and lets translated text compete for the same visual line.
+line.copy(words = listOf(original, translation).map { LyricWord(line.startMs, line.endMs, it) })
+
+// Correct: preserve timed original words and keep sidecars semantically separate.
+LyricLine(startMs, endMs, original, translation, romanization, originalWords)
+```
 
 ```kotlin
 // Wrong: every scheme without an explicit port is forced onto the legacy HTTP music port.

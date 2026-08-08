@@ -168,27 +168,19 @@ class PlayerUiStateTest {
     }
 
     @Test fun `lyric window keeps active line near the second slot`() {
-        assertEquals(3..6, playerLyricWindow(lineCount = 10, activeIndex = 4))
+        assertEquals(3..5, playerLyricWindow(lineCount = 10, activeIndex = 4))
     }
 
     @Test fun `lyric window remains full at timeline boundaries`() {
-        assertEquals(0..3, playerLyricWindow(lineCount = 10, activeIndex = -1))
-        assertEquals(6..9, playerLyricWindow(lineCount = 10, activeIndex = 9))
+        assertEquals(0..2, playerLyricWindow(lineCount = 10, activeIndex = -1))
+        assertEquals(7..9, playerLyricWindow(lineCount = 10, activeIndex = 9))
         assertEquals(0..2, playerLyricWindow(lineCount = 3, activeIndex = 1))
     }
 
     @Test fun `poster lyric keeps current line in the second slot at boundaries`() {
-        assertEquals(listOf(null, 0, 1, 2), posterLyricIndices(lineCount = 4, activeIndex = -1))
-        assertEquals(listOf(null, 0, 1, 2), posterLyricIndices(lineCount = 4, activeIndex = 0))
-        assertEquals(listOf(2, 3, null, null), posterLyricIndices(lineCount = 4, activeIndex = 3))
-    }
-
-    @Test fun `poster lyric supports single lines and deduplicates translations`() {
-        assertEquals(listOf("Plain lyric"), posterLyricTexts(listOf(" Plain lyric ")))
-        assertEquals(
-            listOf("Hello", "你好"),
-            posterLyricTexts(listOf("Hello", "你好", "Hello", "第三行")),
-        )
+        assertEquals(listOf(null, 0, 1), posterLyricIndices(lineCount = 4, activeIndex = -1))
+        assertEquals(listOf(null, 0, 1), posterLyricIndices(lineCount = 4, activeIndex = 0))
+        assertEquals(listOf(2, 3, null), posterLyricIndices(lineCount = 4, activeIndex = 3))
     }
 
     @Test fun `progress fraction handles invalid duration and clamps endpoints`() {

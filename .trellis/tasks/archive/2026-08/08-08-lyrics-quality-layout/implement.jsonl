@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/android-client-contracts.md","reason":"Preserve current resource, cache, cancellation, and repository fallback contracts."}
+{"file":".trellis/spec/frontend/android-tv-interaction.md","reason":"Keep the immersive player stable, bounded, and non-focusable while changing lyric layout."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"The lyric shape changes across core:lyrics, core:model, core:data, and app."}
+{"file":".trellis/tasks/08-08-lyrics-quality-layout/research/lyric-display-references.md","reason":"Apply the researched typed-line and secondary-row patterns without adding a foreign runtime component."}
