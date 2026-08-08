@@ -168,6 +168,12 @@ internal object PlaybackSnapshotCodec {
         .put("album", item.mediaMetadata.albumTitle?.toString())
         .put("format", item.mediaMetadata.extras?.getString(AUDIO_FORMAT_KEY))
         .put("coverId", item.mediaMetadata.extras?.getString(COVER_ID_KEY))
+        .put(
+            "durationMs",
+            item.mediaMetadata.extras
+                ?.takeIf { it.containsKey(DECLARED_DURATION_MS_KEY) }
+                ?.getLong(DECLARED_DURATION_MS_KEY),
+        )
         .put("art", item.mediaMetadata.artworkUri?.toString())
 
     private fun decodeMediaItem(value: JSONObject): MediaItem {
@@ -183,7 +189,13 @@ internal object PlaybackSnapshotCodec {
                     .setArtist(value.optNullableString("artist"))
                     .setAlbumTitle(value.optNullableString("album"))
                     .setArtworkUri(value.optNullableString("art")?.let(Uri::parse))
-                    .setExtras(mediaExtras(value.optNullableString("format"), value.optNullableString("coverId")))
+                    .setExtras(
+                        mediaExtras(
+                            value.optNullableString("format"),
+                            value.optNullableString("coverId"),
+                            value.optNullableLong("durationMs"),
+                        ),
+                    )
                     .build(),
             )
             .build()
@@ -330,9 +342,10 @@ internal object PlaybackSnapshotCodec {
         }
     }
 
-    private fun mediaExtras(audioFormat: String?, coverId: String?): Bundle = Bundle().apply {
+    private fun mediaExtras(audioFormat: String?, coverId: String?, durationMs: Long?): Bundle = Bundle().apply {
         audioFormat?.takeIf(String::isNotBlank)?.let { putString(AUDIO_FORMAT_KEY, it) }
         coverId?.takeIf(String::isNotBlank)?.let { putString(COVER_ID_KEY, it) }
+        durationMs?.takeIf { it > 0L }?.let { putLong(DECLARED_DURATION_MS_KEY, it) }
     }
 
     private fun isCompleteIdOrder(canonicalIds: List<String>, orderedIds: List<String>): Boolean =

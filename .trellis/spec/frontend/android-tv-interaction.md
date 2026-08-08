@@ -70,6 +70,8 @@ data class NowPlayingIdentity(
     val artist: String,
     val audioFormat: String,
     val coverId: String?,
+    val album: String?,
+    val durationMs: Long?,
 )
 
 sealed interface NowPlayingResourceState<out T> {

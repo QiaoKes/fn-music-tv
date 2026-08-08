@@ -34,6 +34,11 @@ import com.fnmusic.tv.core.model.lyric.LyricParser
 import com.fnmusic.tv.core.model.lyric.LyricTimeline
 import com.fnmusic.tv.core.model.playback.QueueSource
 import com.fnmusic.tv.core.model.preferences.CacheUsage
+import com.fnmusic.tv.core.lyrics.DefaultLyricsSources
+import com.fnmusic.tv.core.lyrics.LyricsMatchCoordinator
+import com.fnmusic.tv.core.lyrics.LyricsMatchRequest
+import com.fnmusic.tv.core.lyrics.LyricsMatchResult
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -170,6 +175,7 @@ class MusicRepository internal constructor(
     private val localStore: LocalStore,
     metadataCapacityBytes: Int,
     repositoryScope: CoroutineScope,
+    onlineLyricsMatcher: suspend (LyricsMatchRequest) -> LyricsMatchResult,
 ) {
     constructor(
         context: Context,
@@ -183,9 +189,16 @@ class MusicRepository internal constructor(
         localStore = localStore,
         metadataCapacityBytes = METADATA_CAPACITY_BYTES,
         repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        onlineLyricsMatcher = defaultOnlineLyricsMatcher(),
     )
 
     private val responses = SerializedResponseCache(metadataCapacityBytes, repositoryScope)
+    private val onlineLyricsResolver = OnlineLyricsResolver(
+        localStore = localStore,
+        responses = responses,
+        namespace = session::cacheNamespace,
+        matcher = onlineLyricsMatcher,
+    )
     private val favoriteMutationMutex = Mutex()
     private val _favoriteState = MutableStateFlow(FavoriteLibraryState())
     val favoriteState: StateFlow<FavoriteLibraryState> = _favoriteState.asStateFlow()
@@ -356,10 +369,19 @@ class MusicRepository internal constructor(
     suspend fun lyrics(trackGuid: String): Pair<LyricDocument?, LyricTimeline?> =
         decodeLyrics(lyricResponse(trackGuid))
 
-    suspend fun currentLyrics(trackGuid: String): CurrentResourceResult<CurrentLyrics> = currentResource {
+    private suspend fun firstPartyCurrentLyrics(trackGuid: String): CurrentResourceResult<CurrentLyrics> = currentResource {
         val (document, timeline) = withCurrentResourceRetry { lyrics(trackGuid) }
         document?.takeIf { it.content.isNotBlank() }?.let { CurrentLyrics(it, timeline) }
     }
+
+    suspend fun currentLyrics(
+        track: Track,
+        onlineMatchingEnabled: Boolean = preferences.state.value.onlineLyricsMatchingEnabled,
+    ): CurrentResourceResult<CurrentLyrics> = resolveLyricsWithFallback(
+        onlineMatchingEnabled = onlineMatchingEnabled,
+        online = { onlineLyricsResolver.resolve(track) },
+        firstParty = { firstPartyCurrentLyrics(track.guid.value) },
+    )
 
     suspend fun startRoam(): RoamWindow? {
         val namespace = session.cacheNamespace()
@@ -609,5 +631,31 @@ class MusicRepository internal constructor(
         const val PAGE_SIZE = 50
         const val FAVORITE_PAGE_SIZE = 50
         const val FAVORITE_SORT = "favoriteAt,desc"
+
+        fun defaultOnlineLyricsMatcher(): suspend (LyricsMatchRequest) -> LyricsMatchResult {
+            val client = okhttp3.OkHttpClient.Builder()
+                .retryOnConnectionFailure(false)
+                .connectTimeout(1_200L, TimeUnit.MILLISECONDS)
+                .readTimeout(1_800L, TimeUnit.MILLISECONDS)
+                .writeTimeout(1_800L, TimeUnit.MILLISECONDS)
+                .build()
+            val coordinator = LyricsMatchCoordinator(DefaultLyricsSources.create(client))
+            return coordinator::match
+        }
+    }
+}
+
+internal suspend fun resolveLyricsWithFallback(
+    onlineMatchingEnabled: Boolean,
+    online: suspend () -> CurrentLyrics?,
+    firstParty: suspend () -> CurrentResourceResult<CurrentLyrics>,
+): CurrentResourceResult<CurrentLyrics> {
+    if (!onlineMatchingEnabled) return firstParty()
+    return try {
+        online()?.let { CurrentResourceResult.Ready(it) } ?: firstParty()
+    } catch (cause: CancellationException) {
+        throw cause
+    } catch (_: Exception) {
+        firstParty()
     }
 }

@@ -11,6 +11,7 @@ enum class CacheBudget(val megabytes: Int) {
 data class AppPreferencesState(
     val playerStyle: PlayerStyle = PlayerStyle.Poster,
     val cacheBudget: CacheBudget = CacheBudget.Default,
+    val onlineLyricsMatchingEnabled: Boolean = true,
 )
 
 data class CacheUsage(
