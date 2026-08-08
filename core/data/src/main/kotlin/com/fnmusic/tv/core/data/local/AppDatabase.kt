@@ -20,6 +20,7 @@ data class AccountStateEntity(
     val frozenQueueJson: String? = null,
     val playerStyle: String? = null,
     val cacheBudget: String? = null,
+    val onlineLyricsMatchingEnabled: Boolean = true,
     val schemaRevision: Int = 1,
     val updatedAt: Long,
 )
@@ -37,6 +38,14 @@ data class CachedPageEntity(
 
 @Entity(tableName = "cache_lyric", primaryKeys = ["namespace", "trackGuid"])
 data class CachedLyricEntity(
+    val namespace: String,
+    val trackGuid: String,
+    val payload: String,
+    val accessedAt: Long,
+)
+
+@Entity(tableName = "cache_matched_lyric", primaryKeys = ["namespace", "trackGuid"])
+data class CachedMatchedLyricEntity(
     val namespace: String,
     val trackGuid: String,
     val payload: String,
@@ -71,8 +80,18 @@ interface AppDao {
     )
     suspend fun updatePlaybackSnapshot(namespace: String, snapshotJson: String?, updatedAt: Long)
 
-    @Query("UPDATE account_state SET playerStyle = :style, cacheBudget = :budget, updatedAt = :updatedAt WHERE namespace = :namespace")
-    suspend fun updateSettings(namespace: String, style: String, budget: String, updatedAt: Long)
+    @Query(
+        "UPDATE account_state SET playerStyle = :style, cacheBudget = :budget, " +
+            "onlineLyricsMatchingEnabled = :onlineLyricsMatchingEnabled, updatedAt = :updatedAt " +
+            "WHERE namespace = :namespace",
+    )
+    suspend fun updateSettings(
+        namespace: String,
+        style: String,
+        budget: String,
+        onlineLyricsMatchingEnabled: Boolean,
+        updatedAt: Long,
+    )
 
     @Upsert
     suspend fun upsertPage(entity: CachedPageEntity)
@@ -93,6 +112,15 @@ interface AppDao {
     suspend fun touchLyric(namespace: String, trackGuid: String, accessedAt: Long)
 
     @Upsert
+    suspend fun upsertMatchedLyric(entity: CachedMatchedLyricEntity)
+
+    @Query("SELECT * FROM cache_matched_lyric WHERE namespace = :namespace AND trackGuid = :trackGuid")
+    suspend fun matchedLyric(namespace: String, trackGuid: String): CachedMatchedLyricEntity?
+
+    @Query("UPDATE cache_matched_lyric SET accessedAt = :accessedAt WHERE namespace = :namespace AND trackGuid = :trackGuid")
+    suspend fun touchMatchedLyric(namespace: String, trackGuid: String, accessedAt: Long)
+
+    @Upsert
     suspend fun upsertIndex(entity: CachedIndexEntity)
 
     @Query("SELECT * FROM cache_index WHERE namespace = :namespace AND indexKey = :indexKey")
@@ -107,6 +135,9 @@ interface AppDao {
     @Query("SELECT COALESCE(SUM(length(payload)), 0) FROM cache_lyric")
     suspend fun lyricPayloadBytes(): Long
 
+    @Query("SELECT COALESCE(SUM(length(payload)), 0) FROM cache_matched_lyric")
+    suspend fun matchedLyricPayloadBytes(): Long
+
     @Query("SELECT COALESCE(SUM(length(payload)), 0) FROM cache_index")
     suspend fun indexPayloadBytes(): Long
 
@@ -115,6 +146,9 @@ interface AppDao {
 
     @Query("DELETE FROM cache_lyric WHERE rowid IN (SELECT rowid FROM cache_lyric ORDER BY accessedAt ASC LIMIT :count)")
     suspend fun evictOldestLyrics(count: Int): Int
+
+    @Query("DELETE FROM cache_matched_lyric WHERE rowid IN (SELECT rowid FROM cache_matched_lyric ORDER BY accessedAt ASC LIMIT :count)")
+    suspend fun evictOldestMatchedLyrics(count: Int): Int
 
     @Query("DELETE FROM cache_index WHERE rowid IN (SELECT rowid FROM cache_index ORDER BY accessedAt ASC LIMIT :count)")
     suspend fun evictOldestIndexes(count: Int): Int
@@ -125,6 +159,9 @@ interface AppDao {
     @Query("DELETE FROM cache_lyric WHERE namespace = :namespace")
     suspend fun deleteLyrics(namespace: String)
 
+    @Query("DELETE FROM cache_matched_lyric WHERE namespace = :namespace")
+    suspend fun deleteMatchedLyrics(namespace: String)
+
     @Query("DELETE FROM cache_index WHERE namespace = :namespace")
     suspend fun deleteIndexes(namespace: String)
 
@@ -134,6 +171,9 @@ interface AppDao {
     @Query("DELETE FROM cache_lyric")
     suspend fun deleteAllLyrics()
 
+    @Query("DELETE FROM cache_matched_lyric")
+    suspend fun deleteAllMatchedLyrics()
+
     @Query("DELETE FROM cache_index")
     suspend fun deleteAllIndexes()
 
@@ -142,8 +182,14 @@ interface AppDao {
 }
 
 @Database(
-    entities = [AccountStateEntity::class, CachedPageEntity::class, CachedLyricEntity::class, CachedIndexEntity::class],
-    version = 2,
+    entities = [
+        AccountStateEntity::class,
+        CachedPageEntity::class,
+        CachedLyricEntity::class,
+        CachedMatchedLyricEntity::class,
+        CachedIndexEntity::class,
+    ],
+    version = 3,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -160,9 +206,26 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE account_state ADD COLUMN " +
+                        "onlineLyricsMatchingEnabled INTEGER NOT NULL DEFAULT 1",
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS cache_matched_lyric (" +
+                        "namespace TEXT NOT NULL, " +
+                        "trackGuid TEXT NOT NULL, " +
+                        "payload TEXT NOT NULL, " +
+                        "accessedAt INTEGER NOT NULL, " +
+                        "PRIMARY KEY(namespace, trackGuid))",
+                )
+            }
+        }
+
         fun create(context: Context): AppDatabase = Room.databaseBuilder(context, AppDatabase::class.java, NAME)
             .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
-            .addMigrations(MIGRATION_1_2)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
             .addCallback(object : Callback() {
                 override fun onOpen(db: SupportSQLiteDatabase) {
                     val autoVacuum = db.query("PRAGMA auto_vacuum").use { cursor ->

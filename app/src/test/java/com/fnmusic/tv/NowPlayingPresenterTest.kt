@@ -392,6 +392,149 @@ class NowPlayingPresenterTest {
         }
     }
 
+    @Test
+    fun `online matching toggle reloads only lyrics with the new policy`() {
+        val identities = MutableStateFlow<NowPlayingIdentity?>(null)
+        val styles = MutableStateFlow(PlayerStyle.Cover)
+        val onlineMatching = MutableStateFlow(true)
+        val lyricRequests = PendingRequests<CurrentLyrics>()
+        val policies = mutableListOf<Boolean>()
+        val metadataCalls = AtomicInteger()
+        val artworkCalls = AtomicInteger()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val presenter = NowPlayingPresenter(
+            identities = identities,
+            playerStyles = styles,
+            currentTrackMetadata = {
+                metadataCalls.incrementAndGet()
+                CurrentResourceResult.Ready(track("A", "song", "cover-a"))
+            },
+            currentLyrics = { error("policy-aware request should be used") },
+            currentArtwork = { _, _ ->
+                artworkCalls.incrementAndGet()
+                CurrentResourceResult.Ready(byteArrayOf(1))
+            },
+            enrichCurrentItem = {},
+            applicationScope = scope,
+            onlineLyricsMatching = onlineMatching,
+            currentLyricsWithPolicy = { track, enabled ->
+                synchronized(policies) { policies += enabled }
+                lyricRequests.request(track.guid.value)
+            },
+        )
+
+        try {
+            presenter.start()
+            identities.value = identity("A", revision = 12L, coverId = "cover-a")
+            await { lyricRequests.size == 1 && metadataCalls.get() == 1 && artworkCalls.get() == 1 }
+
+            onlineMatching.value = false
+            await { lyricRequests.size == 2 }
+            lyricRequests[1].complete(CurrentResourceResult.Ready(currentLyrics("first party")))
+            await { presenter.state.value?.lyrics is NowPlayingResourceState.Ready<*> }
+
+            assertEquals(listOf(true, false), synchronized(policies) { policies.toList() })
+            assertEquals(1, metadataCalls.get())
+            assertEquals(1, artworkCalls.get())
+            assertEquals(
+                "first party",
+                ((presenter.state.value?.lyrics as NowPlayingResourceState.Ready).value).document.content,
+            )
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `richer metadata restarts a loading online lyric request once`() {
+        val identities = MutableStateFlow<NowPlayingIdentity?>(null)
+        val styles = MutableStateFlow(PlayerStyle.Cover)
+        val lyrics = PendingRequests<CurrentLyrics>()
+        val requestedTracks = mutableListOf<Track>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val presenter = NowPlayingPresenter(
+            identities = identities,
+            playerStyles = styles,
+            currentTrackMetadata = { CurrentResourceResult.Ready(track("A", "song", "cover-a")) },
+            currentLyrics = { error("policy-aware request should be used") },
+            currentArtwork = { _, _ -> CurrentResourceResult.Absent },
+            enrichCurrentItem = {},
+            applicationScope = scope,
+            currentLyricsWithPolicy = { track, _ ->
+                synchronized(requestedTracks) { requestedTracks += track }
+                lyrics.request(track.guid.value)
+            },
+        )
+
+        try {
+            presenter.start()
+            identities.value = identity(
+                mediaId = "A",
+                revision = 13L,
+                coverId = "cover-a",
+                album = null,
+                durationMs = null,
+            )
+            await { lyrics.size == 2 }
+
+            val tracks = synchronized(requestedTracks) { requestedTracks.toList() }
+            assertEquals(null, tracks[0].albumName)
+            assertEquals(null, tracks[0].durationMs)
+            assertEquals("album A", tracks[1].albumName)
+            assertEquals(1_000L, tracks[1].durationMs)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `enabling online matching reuses metadata enriched while disabled`() {
+        val identities = MutableStateFlow<NowPlayingIdentity?>(null)
+        val styles = MutableStateFlow(PlayerStyle.Cover)
+        val onlineMatching = MutableStateFlow(false)
+        val requestedTracks = mutableListOf<Track>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val presenter = NowPlayingPresenter(
+            identities = identities,
+            playerStyles = styles,
+            currentTrackMetadata = { CurrentResourceResult.Ready(track("A", "song", "cover-a")) },
+            currentLyrics = { error("policy-aware request should be used") },
+            currentArtwork = { _, _ -> CurrentResourceResult.Absent },
+            enrichCurrentItem = {},
+            applicationScope = scope,
+            onlineLyricsMatching = onlineMatching,
+            currentLyricsWithPolicy = { track, _ ->
+                synchronized(requestedTracks) { requestedTracks += track }
+                CurrentResourceResult.Absent
+            },
+        )
+
+        try {
+            presenter.start()
+            identities.value = identity(
+                mediaId = "A",
+                revision = 14L,
+                coverId = "cover-a",
+                album = null,
+                durationMs = null,
+            )
+            await {
+                synchronized(requestedTracks) { requestedTracks.size == 1 } &&
+                    presenter.state.value?.metadata is NowPlayingResourceState.Ready<*>
+            }
+
+            onlineMatching.value = true
+            await { synchronized(requestedTracks) { requestedTracks.size == 2 } }
+
+            val tracks = synchronized(requestedTracks) { requestedTracks.toList() }
+            assertEquals(null, tracks[0].albumName)
+            assertEquals("album A", tracks[1].albumName)
+            assertEquals(1_000L, tracks[1].durationMs)
+        } finally {
+            scope.cancel()
+        }
+    }
+
     private class PendingRequests<T> {
         private val requests = mutableListOf<PendingRequest<T>>()
 
@@ -423,12 +566,16 @@ class NowPlayingPresenterTest {
             revision: Long,
             coverId: String?,
             title: String = mediaId,
+            album: String? = "album $mediaId",
+            durationMs: Long? = 1_000L,
         ) = NowPlayingIdentity(
             namespace = "server:user",
             mediaId = mediaId,
             presentationRevision = revision,
             title = title,
             artist = "artist $mediaId",
+            album = album,
+            durationMs = durationMs,
             audioFormat = "FLAC",
             coverId = coverId,
         )

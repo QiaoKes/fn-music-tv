@@ -1,0 +1,236 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 3,
+    "identityHash": "ad093f682e27bf680ea59233fd94e7e7",
+    "entities": [
+      {
+        "tableName": "account_state",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`namespace` TEXT NOT NULL, `queueJson` TEXT, `frozenQueueJson` TEXT, `playerStyle` TEXT, `cacheBudget` TEXT, `onlineLyricsMatchingEnabled` INTEGER NOT NULL, `schemaRevision` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`namespace`))",
+        "fields": [
+          {
+            "fieldPath": "namespace",
+            "columnName": "namespace",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "queueJson",
+            "columnName": "queueJson",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "frozenQueueJson",
+            "columnName": "frozenQueueJson",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "playerStyle",
+            "columnName": "playerStyle",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "cacheBudget",
+            "columnName": "cacheBudget",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "onlineLyricsMatchingEnabled",
+            "columnName": "onlineLyricsMatchingEnabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "schemaRevision",
+            "columnName": "schemaRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "namespace"
+          ]
+        }
+      },
+      {
+        "tableName": "cache_page",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`namespace` TEXT NOT NULL, `sourceKey` TEXT NOT NULL, `page` INTEGER NOT NULL, `payload` TEXT NOT NULL, `total` INTEGER NOT NULL, `sort` TEXT NOT NULL, `accessedAt` INTEGER NOT NULL, PRIMARY KEY(`namespace`, `sourceKey`, `page`))",
+        "fields": [
+          {
+            "fieldPath": "namespace",
+            "columnName": "namespace",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceKey",
+            "columnName": "sourceKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "page",
+            "columnName": "page",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payload",
+            "columnName": "payload",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "total",
+            "columnName": "total",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sort",
+            "columnName": "sort",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accessedAt",
+            "columnName": "accessedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "namespace",
+            "sourceKey",
+            "page"
+          ]
+        }
+      },
+      {
+        "tableName": "cache_lyric",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`namespace` TEXT NOT NULL, `trackGuid` TEXT NOT NULL, `payload` TEXT NOT NULL, `accessedAt` INTEGER NOT NULL, PRIMARY KEY(`namespace`, `trackGuid`))",
+        "fields": [
+          {
+            "fieldPath": "namespace",
+            "columnName": "namespace",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "trackGuid",
+            "columnName": "trackGuid",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payload",
+            "columnName": "payload",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accessedAt",
+            "columnName": "accessedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "namespace",
+            "trackGuid"
+          ]
+        }
+      },
+      {
+        "tableName": "cache_matched_lyric",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`namespace` TEXT NOT NULL, `trackGuid` TEXT NOT NULL, `payload` TEXT NOT NULL, `accessedAt` INTEGER NOT NULL, PRIMARY KEY(`namespace`, `trackGuid`))",
+        "fields": [
+          {
+            "fieldPath": "namespace",
+            "columnName": "namespace",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "trackGuid",
+            "columnName": "trackGuid",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payload",
+            "columnName": "payload",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accessedAt",
+            "columnName": "accessedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "namespace",
+            "trackGuid"
+          ]
+        }
+      },
+      {
+        "tableName": "cache_index",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`namespace` TEXT NOT NULL, `indexKey` TEXT NOT NULL, `payload` TEXT NOT NULL, `accessedAt` INTEGER NOT NULL, PRIMARY KEY(`namespace`, `indexKey`))",
+        "fields": [
+          {
+            "fieldPath": "namespace",
+            "columnName": "namespace",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "indexKey",
+            "columnName": "indexKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payload",
+            "columnName": "payload",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accessedAt",
+            "columnName": "accessedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "namespace",
+            "indexKey"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'ad093f682e27bf680ea59233fd94e7e7')"
+    ]
+  }
+}

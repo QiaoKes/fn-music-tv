@@ -319,3 +319,26 @@ Archived the completed Bootstrap Guidelines and poster color harmony tasks after
 ### Status
 
 [OK] **Completed**
+
+
+## Session 15: Ship third-party lyrics matching v1.0.2
+
+**Date**: 2026-08-08
+**Task**: Ship third-party lyrics matching v1.0.2
+**Branch**: `feature-lyrics-saki`
+
+### Summary
+
+Added a standalone high-confidence lyrics matcher using QQ Music, Kugou and Netease; persisted matches, retained FN fallback and a default-on setting, rendered original plus translation, removed LRCLIB for latency, bumped 1.0.2, refreshed the home preview, passed the full quality gate, and verified the APK on the Android TV emulator.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `48ce472` | (see git log) |
+| `31f27c4` | (see git log) |
+| `c51f980` | (see git log) |
+
+### Status
+
+[OK] **Completed**
