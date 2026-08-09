@@ -1,93 +1,36 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.fnmusic.tv.core.lyrics
 
+import com.mocharealm.accompanist.lyrics.core.model.SyncedLyrics
+import com.mocharealm.accompanist.lyrics.core.model.karaoke.KaraokeLine
+
 internal data class LyricsContentQualityProjection(
     val quality: LyricsContentQuality,
     val wordTimedCoverage: Double,
     val translationCoverage: Double,
-    val timedLineCoverage: Double,
     val usableLineCount: Int,
 )
 
 internal object LyricsContentQualityEvaluator {
-    fun evaluate(lyrics: SourceLyrics): LyricsContentQualityProjection {
-        val originalLines = lyrics.original.lines.filter { it.text.isNotBlank() }
-        if (originalLines.isEmpty()) {
-            return LyricsContentQualityProjection(
-                quality = LyricsContentQuality.Basic,
-                wordTimedCoverage = 0.0,
-                translationCoverage = 0.0,
-                timedLineCoverage = 0.0,
-                usableLineCount = 0,
-            )
+    fun evaluate(lyrics: SyncedLyrics): LyricsContentQualityProjection {
+        val lines = lyrics.lines.filter { it.lyricText().isNotBlank() }
+        if (lines.isEmpty()) {
+            return LyricsContentQualityProjection(LyricsContentQuality.Basic, 0.0, 0.0, 0)
         }
-
-        val wordTimedLineCount = originalLines.count { line ->
-            line.words.count { word ->
-                word.text.isNotBlank() &&
-                    word.startMs != null &&
-                    word.endMs != null &&
-                    word.endMs > word.startMs
-            } >= MIN_TIMED_WORDS_PER_LINE
+        val wordTimedLines = lines.count { line ->
+            line is KaraokeLine && line.syllables.count { it.content.isNotBlank() && it.end > it.start } >= 2
         }
-        val translatedLineCount = countAlignedTranslations(originalLines, lyrics.translation)
+        val translatedLines = lines.count { !it.translationText().isNullOrBlank() }
         val quality = when {
-            wordTimedLineCount > 0 -> LyricsContentQuality.WordTimed
-            translatedLineCount > 0 -> LyricsContentQuality.Translated
+            wordTimedLines > 0 -> LyricsContentQuality.WordTimed
+            translatedLines > 0 -> LyricsContentQuality.Translated
             else -> LyricsContentQuality.Basic
         }
         return LyricsContentQualityProjection(
             quality = quality,
-            wordTimedCoverage = wordTimedLineCount.toDouble() / originalLines.size,
-            translationCoverage = translatedLineCount.toDouble() / originalLines.size,
-            timedLineCoverage = originalLines.count { it.startMs != null }.toDouble() / originalLines.size,
-            usableLineCount = originalLines.size,
+            wordTimedCoverage = wordTimedLines.toDouble() / lines.size,
+            translationCoverage = translatedLines.toDouble() / lines.size,
+            usableLineCount = lines.size,
         )
     }
-
-    private fun countAlignedTranslations(
-        originalLines: List<TimedLyricsLine>,
-        translation: TimedLyricsTrack?,
-    ): Int {
-        val translationLines = translation?.lines?.filter { it.text.isNotBlank() }.orEmpty()
-        if (translationLines.isEmpty()) return 0
-
-        val available = translationLines.indices.toMutableSet()
-        return originalLines.mapIndexedNotNull { originalIndex, original ->
-            val matchIndex = if (original.startMs != null) {
-                available.asSequence()
-                    .filter { index ->
-                        translationLines[index].startMs != null &&
-                            normalizeLine(translationLines[index].text) != normalizeLine(original.text)
-                    }
-                    .minWithOrNull(
-                        compareBy<Int> { index ->
-                            kotlin.math.abs(translationLines[index].startMs!! - original.startMs)
-                        }.thenBy { it },
-                    )
-                    ?.takeIf { index ->
-                        kotlin.math.abs(translationLines[index].startMs!! - original.startMs) <=
-                            MAX_ALIGNMENT_DELTA_MS
-                    }
-            } else {
-                originalIndex.takeIf { index ->
-                    index in available &&
-                        translationLines[index].startMs == null &&
-                        normalizeLine(translationLines[index].text) != normalizeLine(original.text)
-                } ?: available.firstOrNull { index ->
-                    translationLines[index].startMs == null &&
-                        normalizeLine(translationLines[index].text) != normalizeLine(original.text)
-                }
-            }
-            val translated = matchIndex?.let(translationLines::get) ?: return@mapIndexedNotNull null
-            available.remove(matchIndex)
-            translated
-        }.size
-    }
-
-    private fun normalizeLine(value: String): String = LyricsCandidateScorer.normalize(value)
-        .replace(" ", "")
-
-    private const val MIN_TIMED_WORDS_PER_LINE = 2
-    private const val MAX_ALIGNMENT_DELTA_MS = 1_500L
 }

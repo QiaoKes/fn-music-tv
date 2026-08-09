@@ -4,6 +4,5 @@
     <application
         android:networkSecurityConfig="@xml/network_security_config"
         android:usesCleartextTraffic="true"
-        tools:replace="android:networkSecurityConfig,android:usesCleartextTraffic"
-        tools:targetApi="24" />
+        tools:replace="android:networkSecurityConfig,android:usesCleartextTraffic" />
 </manifest>

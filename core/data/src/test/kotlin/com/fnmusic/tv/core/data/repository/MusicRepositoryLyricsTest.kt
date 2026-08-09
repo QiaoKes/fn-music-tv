@@ -3,7 +3,7 @@ package com.fnmusic.tv.core.data.repository
 import com.fnmusic.tv.core.data.api.LyricDto
 import com.fnmusic.tv.core.data.api.LyricListDto
 import com.fnmusic.tv.core.model.LyricDocument
-import com.fnmusic.tv.core.model.lyric.LyricTimeline
+import com.fnmusic.tv.core.lyrics.lyricText
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
@@ -26,12 +26,12 @@ class MusicRepositoryLyricsTest {
             preferred = "yrc",
         )
 
-        val (document, timeline) = decodeLyrics(response)
+        val (document, syncedLyrics) = decodeLyrics(response)
 
         assertFalse(document!!.isLrc)
-        assertNotNull(timeline)
-        assertEquals(20_630L, timeline!!.lines.single().startMs)
-        assertEquals("あな", timeline.lines.single().texts.single())
+        assertNotNull(syncedLyrics)
+        assertEquals(20_630, syncedLyrics!!.lines.single().start)
+        assertEquals("あな", syncedLyrics.lines.single().lyricText())
     }
 
     @Test fun `online lyrics win while misses and failures fall back to first party`() = runBlocking {
@@ -68,6 +68,6 @@ class MusicRepositoryLyricsTest {
 
     private fun currentLyrics(content: String) = CurrentLyrics(
         document = LyricDocument("lyric", content, false, 0L),
-        timeline = null as LyricTimeline?,
+        syncedLyrics = null,
     )
 }

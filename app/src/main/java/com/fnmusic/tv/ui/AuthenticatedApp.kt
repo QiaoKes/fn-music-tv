@@ -127,7 +127,6 @@ import com.fnmusic.tv.core.model.Page
 import com.fnmusic.tv.core.model.PlayerStyle
 import com.fnmusic.tv.core.model.Playlist
 import com.fnmusic.tv.core.model.Track
-import com.fnmusic.tv.core.model.lyric.LyricTimeline
 import com.fnmusic.tv.core.model.playback.QueueSource
 import com.fnmusic.tv.core.model.playback.QueueKind
 import com.fnmusic.tv.core.model.playback.PlayMode

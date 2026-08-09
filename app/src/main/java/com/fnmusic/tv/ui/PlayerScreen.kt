@@ -16,6 +16,7 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -48,6 +49,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -62,12 +64,12 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.RectangleShape
@@ -88,19 +90,15 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.PlatformTextStyle
-import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.TextLayoutResult
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -125,8 +123,6 @@ import com.fnmusic.tv.core.model.Page
 import com.fnmusic.tv.core.model.PlayerStyle
 import com.fnmusic.tv.core.model.Playlist
 import com.fnmusic.tv.core.model.Track
-import com.fnmusic.tv.core.model.lyric.LyricTimeline
-import com.fnmusic.tv.core.model.lyric.LyricLine
 import com.fnmusic.tv.core.model.playback.QueueSource
 import com.fnmusic.tv.core.model.playback.QueueKind
 import com.fnmusic.tv.core.model.playback.PlayMode
@@ -138,6 +134,9 @@ import com.fnmusic.tv.core.model.playback.QueuePageSegment
 import com.fnmusic.tv.core.model.playback.boundedQueueWindow
 import com.fnmusic.tv.core.playback.PlaybackUiState
 import com.fnmusic.tv.core.playback.PlaybackProgressState
+import com.mocharealm.accompanist.lyrics.core.model.SyncedLyrics
+import com.mocharealm.accompanist.lyrics.ui.composable.lyrics.KaraokeBreathingDotsDefaults
+import com.mocharealm.accompanist.lyrics.ui.composable.lyrics.KaraokeLyricsView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -163,8 +162,8 @@ internal data class DecodedPlayerArtwork(
 )
 
 internal class PlayerVisualContinuity {
-    val lyrics = PlayerVisualResourceContinuity<CurrentLyrics>()
-    val artwork = PlayerVisualResourceContinuity<DecodedPlayerArtwork>()
+    val lyrics = PlayerVisualResourceContinuity<CurrentLyrics>(PlayerVisualRetentionScope.SameMedia)
+    val artwork = PlayerVisualResourceContinuity<DecodedPlayerArtwork>(PlayerVisualRetentionScope.SameNamespace)
 }
 
 private data class ExtractedArtworkColors(
@@ -256,8 +255,8 @@ internal fun ImmersivePlayer(
         is NowPlayingResourceState.Ready -> state.value
         else -> null
     }
-    val timeline = currentLyrics?.timeline
-    val staticLyric = currentLyrics?.document?.takeUnless { it.isLrc }?.content
+    val syncedLyrics = currentLyrics?.syncedLyrics
+    val staticLyric = currentLyrics?.document?.content?.takeIf { syncedLyrics == null }
     val lyricsLoading = displayedLyrics is NowPlayingResourceState.Loading
     val lyricsFailed = displayedLyrics is NowPlayingResourceState.RetryableFailure
     val favoriteLibraryState by container.musicRepository.favoriteState.collectAsStateWithLifecycle()
@@ -377,6 +376,7 @@ internal fun ImmersivePlayer(
         }
         PlayerMainContent(
             poster = poster,
+            controlsVisible = controlsVisible,
             artworkBitmap = artworkBitmap,
             placeholderAccent = ambienceColor,
             posterPanelColor = posterPanelColor,
@@ -385,7 +385,7 @@ internal fun ImmersivePlayer(
             audioFormat = audioFormat,
             isPlaying = playback.isPlaying,
             lyricIdentity = playback.nowPlayingIdentity,
-            lyricTimeline = timeline,
+            syncedLyrics = syncedLyrics,
             playbackProgress = playbackProgress,
             staticLyric = staticLyric,
             lyricsLoading = lyricsLoading,
@@ -599,6 +599,7 @@ private fun PlayerPosterBackdrop(targetColor: Color, modifier: Modifier = Modifi
 @Composable
 private fun PlayerMainContent(
     poster: Boolean,
+    controlsVisible: Boolean,
     artworkBitmap: Bitmap?,
     placeholderAccent: Color,
     posterPanelColor: Color,
@@ -607,7 +608,7 @@ private fun PlayerMainContent(
     audioFormat: String,
     isPlaying: Boolean,
     lyricIdentity: NowPlayingIdentity?,
-    lyricTimeline: LyricTimeline?,
+    syncedLyrics: SyncedLyrics?,
     playbackProgress: State<PlaybackProgressState>,
     staticLyric: String?,
     lyricsLoading: Boolean,
@@ -671,7 +672,7 @@ private fun PlayerMainContent(
                 audioFormat = audioFormat,
                 isPlaying = isPlaying,
                 lyricIdentity = lyricIdentity,
-                lyricTimeline = lyricTimeline,
+                syncedLyrics = syncedLyrics,
                 playbackProgress = playbackProgress,
                 staticLyric = staticLyric,
                 lyricsLoading = lyricsLoading,
@@ -691,7 +692,13 @@ private fun PlayerMainContent(
                 onStatusInteraction = onStatusInteraction,
                 poster = true,
                 modifier = Modifier.fillMaxWidth(0.46f).fillMaxHeight().align(Alignment.CenterEnd)
-                    .padding(start = 10.dp, end = 40.dp, top = 64.dp, bottom = 132.dp),
+                    .padding(
+                        start = 10.dp,
+                        end = 40.dp,
+                        top = 64.dp,
+                        bottom = if (controlsVisible) 132.dp else 48.dp,
+                    ),
+                controlsVisible = controlsVisible,
             )
         }
     } else {
@@ -709,7 +716,7 @@ private fun PlayerMainContent(
                 audioFormat = audioFormat,
                 isPlaying = isPlaying,
                 lyricIdentity = lyricIdentity,
-                lyricTimeline = lyricTimeline,
+                syncedLyrics = syncedLyrics,
                 playbackProgress = playbackProgress,
                 staticLyric = staticLyric,
                 lyricsLoading = lyricsLoading,
@@ -729,7 +736,13 @@ private fun PlayerMainContent(
                 onStatusInteraction = onStatusInteraction,
                 poster = false,
                 modifier = Modifier.weight(0.51f).fillMaxHeight()
-                    .padding(start = 26.dp, end = 44.dp, top = 30.dp, bottom = 132.dp),
+                    .padding(
+                        start = 26.dp,
+                        end = 44.dp,
+                        top = 30.dp,
+                        bottom = if (controlsVisible) 132.dp else 48.dp,
+                    ),
+                controlsVisible = controlsVisible,
             )
         }
     }
@@ -742,7 +755,7 @@ private fun PlayerDetails(
     audioFormat: String,
     isPlaying: Boolean,
     lyricIdentity: NowPlayingIdentity?,
-    lyricTimeline: LyricTimeline?,
+    syncedLyrics: SyncedLyrics?,
     playbackProgress: State<PlaybackProgressState>,
     staticLyric: String?,
     lyricsLoading: Boolean,
@@ -761,6 +774,7 @@ private fun PlayerDetails(
     statusRetryReturnFocus: FocusRequester,
     onStatusInteraction: () -> Unit,
     poster: Boolean,
+    controlsVisible: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier) {
@@ -793,12 +807,17 @@ private fun PlayerDetails(
             isPlaying = isPlaying,
             identity = lyricIdentity,
         ) { positionMs ->
-            val lyricLines = lyricTimeline?.lines.orEmpty()
-            val activeLyricIndex = lyricTimeline?.activeIndex(positionMs) ?: -1
-            if (poster) {
-                PosterLyrics(lyricLines, activeLyricIndex, positionMs, staticLyric, lyricsLoading, lyricsFailed)
-            } else {
-                PlayerLyrics(lyricLines, activeLyricIndex, positionMs, staticLyric, lyricsLoading, lyricsFailed)
+            key(lyricIdentity?.namespace, lyricIdentity?.mediaId, syncedLyrics) {
+                TvLyrics(
+                    lyrics = syncedLyrics,
+                    positionMs = positionMs,
+                    staticLyric = staticLyric,
+                    loading = lyricsLoading,
+                    failed = lyricsFailed,
+                    poster = poster,
+                    controlsVisible = controlsVisible,
+                    modifier = Modifier.weight(1f),
+                )
             }
         }
         val status = playerStatus(
@@ -991,176 +1010,104 @@ private fun DiscArtwork(
 }
 
 @Composable
-private fun PosterLyrics(
-    lyricLines: List<LyricLine>,
-    activeIndex: Int,
+internal fun TvLyrics(
+    lyrics: SyncedLyrics?,
     positionMs: Long,
     staticLyric: String?,
     loading: Boolean,
     failed: Boolean,
+    poster: Boolean,
+    modifier: Modifier = Modifier,
+    controlsVisible: Boolean = false,
 ) {
-    Box(Modifier.fillMaxWidth().height(286.dp), contentAlignment = Alignment.TopStart) {
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(defaultLyricsViewportHeight(poster, controlsVisible))
+            .focusProperties {
+                canFocus = false
+                onEnter = { cancelFocusChange() }
+            }
+            .focusGroup(),
+        contentAlignment = Alignment.CenterStart,
+    ) {
         when {
-            lyricLines.isNotEmpty() -> PosterLyricSlots(lyricLines, activeIndex, positionMs)
+            lyrics != null && lyrics.lines.isNotEmpty() -> {
+                val listState = rememberLazyListState()
+                val positionState = rememberUpdatedState(positionMs.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt())
+                val currentPosition = remember { { positionState.value } }
+                androidx.compose.runtime.CompositionLocalProvider(
+                    androidx.compose.material3.LocalTextStyle provides TextStyle(
+                        color = FnColors.Text,
+                        fontSize = if (poster) 20.sp else 23.sp,
+                        lineHeight = if (poster) 24.sp else 27.sp,
+                    ),
+                ) {
+                    KaraokeLyricsView(
+                        listState = listState,
+                        lyrics = lyrics,
+                        currentPosition = currentPosition,
+                        onLineClicked = {},
+                        onLinePressed = {},
+                        modifier = Modifier.fillMaxSize().focusProperties { canFocus = false },
+                        normalLineTextStyle = TextStyle(
+                            color = FnColors.Text,
+                            fontSize = if (poster) 24.sp else 27.sp,
+                            lineHeight = if (poster) 29.sp else 32.sp,
+                            fontWeight = FontWeight.Bold,
+                        ),
+                        accompanimentLineTextStyle = TextStyle(
+                            color = FnColors.Text,
+                            fontSize = if (poster) 19.sp else 21.sp,
+                            lineHeight = if (poster) 23.sp else 25.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                        textColor = FnColors.Text,
+                        blendMode = BlendMode.SrcOver,
+                        useBlurEffect = false,
+                        showTranslation = true,
+                        showPhonetic = false,
+                        offset = if (poster) 42.dp else 48.dp,
+                        keepAliveZone = 0.dp,
+                        breathingDotsDefaults = KaraokeBreathingDotsDefaults(
+                            number = 1,
+                            size = 0.dp,
+                            margin = 0.dp,
+                        ),
+                    )
+                }
+            }
             !staticLyric.isNullOrBlank() -> Text(
                 staticLyric,
-                fontSize = 22.sp,
-                lineHeight = 28.sp,
+                fontSize = if (poster) 22.sp else 24.sp,
+                lineHeight = if (poster) 28.sp else 31.sp,
                 maxLines = 8,
                 overflow = TextOverflow.Clip,
             )
-            loading -> Text("歌词加载中", color = FnColors.Text.copy(alpha = 0.4f), fontSize = 20.sp)
-            failed -> Text("歌词暂时无法加载", color = FnColors.Text.copy(alpha = 0.4f), fontSize = 20.sp)
-            else -> Text("纯音乐或暂无歌词", color = FnColors.Text.copy(alpha = 0.4f), fontSize = 20.sp)
-        }
-    }
-}
-
-@Composable
-private fun PosterLyricSlots(
-    lyricLines: List<LyricLine>,
-    activeIndex: Int,
-    positionMs: Long,
-) {
-    val indices = currentAndNextLyricIndices(lyricLines.size, activeIndex)
-    val topOffsets = listOf(10.dp, 184.dp)
-    val heights = listOf(142.dp, 92.dp)
-    val windowAlpha = rememberLyricWindowAlpha(activeIndex)
-    Box(Modifier.fillMaxSize().graphicsLayer { alpha = windowAlpha }) {
-        indices.forEachIndexed { slot, index ->
-            if (index != null) {
-                val current = index == activeIndex
-                val alpha = when {
-                    current -> 1f
-                    else -> 0.42f
-                }
-                LyricDisplayLine(
-                    line = lyricLines[index],
-                    current = current,
-                    alpha = alpha,
-                    positionMs = positionMs,
-                    poster = true,
-                    modifier = Modifier.fillMaxWidth().align(Alignment.TopStart)
-                        .padding(top = topOffsets[slot]).height(heights[slot]),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun rememberLyricWindowAlpha(activeIndex: Int): Float {
-    val alpha = remember { Animatable(1f) }
-    LaunchedEffect(activeIndex) {
-        alpha.snapTo(0.72f)
-        alpha.animateTo(1f, tween(durationMillis = 140))
-    }
-    return alpha.value
-}
-
-@Composable
-private fun LyricDisplayLine(
-    line: LyricLine,
-    current: Boolean,
-    alpha: Float,
-    positionMs: Long,
-    poster: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier.clipToBounds().padding(end = 8.dp),
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Text(
-            text = if (current) highlightedLyricText(line, positionMs) else buildAnnotatedString { append(line.original) },
-            color = FnColors.Text.copy(alpha = alpha),
-            fontSize = if (current) (if (poster) 24.sp else 26.sp) else 18.sp,
-            lineHeight = if (current) (if (poster) 30.sp else 31.sp) else 22.sp,
-            fontWeight = if (current) FontWeight.Bold else FontWeight.SemiBold,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            softWrap = true,
-        )
-        line.translation?.takeIf(String::isNotBlank)?.let { translation ->
-            Spacer(Modifier.height(if (current) 4.dp else 2.dp))
-            Text(
-                translation,
-                color = FnColors.Text.copy(alpha = if (current) 0.76f else alpha * 0.82f),
-                fontSize = if (current) (if (poster) 16.sp else 18.sp) else 14.sp,
-                lineHeight = if (current) (if (poster) 20.sp else 22.sp) else 17.sp,
-                fontWeight = if (current) FontWeight.Medium else FontWeight.Normal,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+            loading -> Text(
+                "歌词加载中",
+                color = FnColors.Text.copy(alpha = 0.4f),
+                fontSize = if (poster) 20.sp else 26.sp,
+            )
+            failed -> Text(
+                "歌词暂时无法加载",
+                color = FnColors.Text.copy(alpha = 0.4f),
+                fontSize = if (poster) 20.sp else 26.sp,
+            )
+            else -> Text(
+                "纯音乐或暂无歌词",
+                color = FnColors.Text.copy(alpha = 0.4f),
+                fontSize = if (poster) 20.sp else 26.sp,
             )
         }
     }
 }
 
-private fun highlightedLyricText(line: LyricLine, positionMs: Long) = buildAnnotatedString {
-    val timedWords = line.words.takeIf { words ->
-        words.isNotEmpty() &&
-            words.joinToString(separator = "", transform = com.fnmusic.tv.core.model.lyric.LyricWord::text)
-                .trim() == line.original.trim()
-    }
-    if (timedWords == null) {
-        append(line.original)
-        return@buildAnnotatedString
-    }
-    timedWords.forEach { word ->
-        val progress = when {
-            positionMs <= word.startMs -> 0f
-            positionMs >= word.endMs || word.endMs <= word.startMs -> 1f
-            else -> (positionMs - word.startMs).toFloat() / (word.endMs - word.startMs).toFloat()
-        }
-        withStyle(SpanStyle(color = FnColors.Text.copy(alpha = 0.38f + progress * 0.62f))) {
-            append(word.text)
-        }
-    }
-}
-
-@Composable
-private fun PlayerLyrics(
-    lyricLines: List<LyricLine>,
-    activeIndex: Int,
-    positionMs: Long,
-    staticLyric: String?,
-    loading: Boolean,
-    failed: Boolean,
-) {
-    Box(Modifier.fillMaxWidth().height(256.dp), contentAlignment = Alignment.CenterStart) {
-        when {
-            lyricLines.isNotEmpty() -> {
-                val indices = currentAndNextLyricIndices(lyricLines.size, activeIndex)
-                val topOffsets = listOf(0.dp, 166.dp)
-                val heights = listOf(132.dp, 90.dp)
-                val windowAlpha = rememberLyricWindowAlpha(activeIndex)
-                Box(Modifier.fillMaxSize().graphicsLayer { alpha = windowAlpha }) {
-                    indices.forEachIndexed { slot, index ->
-                        Box(
-                            Modifier.fillMaxWidth().align(Alignment.TopStart)
-                                .padding(top = topOffsets[slot]).height(heights[slot]).clipToBounds(),
-                            contentAlignment = Alignment.CenterStart,
-                        ) {
-                            if (index == null) return@Box
-                            val current = index == activeIndex
-                            LyricDisplayLine(
-                                line = lyricLines[index],
-                                current = current,
-                                alpha = if (current) 1f else 0.46f,
-                                positionMs = positionMs,
-                                poster = false,
-                                modifier = Modifier.fillMaxSize(),
-                            )
-                        }
-                    }
-                }
-            }
-            !staticLyric.isNullOrBlank() -> Text(staticLyric, fontSize = 24.sp, lineHeight = 31.sp, maxLines = 8, overflow = TextOverflow.Clip)
-            loading -> Text("歌词加载中", color = FnColors.Muted, fontSize = 26.sp)
-            failed -> Text("歌词暂时无法加载", color = FnColors.Muted, fontSize = 26.sp)
-            else -> Text("纯音乐或暂无歌词", color = FnColors.Muted, fontSize = 26.sp)
-        }
-    }
+private fun defaultLyricsViewportHeight(poster: Boolean, controlsVisible: Boolean) = when {
+    controlsVisible && poster -> 240.dp
+    controlsVisible -> 264.dp
+    poster -> 300.dp
+    else -> 288.dp
 }
 
 private data class LyricPositionAnchor(
@@ -2246,12 +2193,6 @@ internal fun posterSurfaceColor(color: Color): Color {
     return toneMapPosterColor(colorToOklab(color))
 }
 
-internal fun currentAndNextLyricIndices(lineCount: Int, activeIndex: Int): List<Int?> = when {
-    lineCount <= 0 -> listOf(null, null)
-    activeIndex < 0 -> listOf(null, 0)
-    else -> listOf(activeIndex, activeIndex + 1).map { it.takeIf { index -> index in 0 until lineCount } }
-}
-
 internal fun interpolatedLyricPosition(
     anchorPositionMs: Long,
     anchorObservedAtMs: Long,
@@ -2267,14 +2208,6 @@ internal fun interpolatedLyricPosition(
     }
     val positionMs = basePositionMs + elapsedMs
     return if (durationMs > 0L) positionMs.coerceAtMost(durationMs) else positionMs
-}
-
-internal fun playerLyricWindow(lineCount: Int, activeIndex: Int, visibleCount: Int = 3): IntRange {
-    if (lineCount <= 0 || visibleCount <= 0) return IntRange.EMPTY
-    val count = minOf(lineCount, visibleCount)
-    val safeActive = activeIndex.coerceIn(0, lineCount - 1)
-    val start = (safeActive - 1).coerceIn(0, lineCount - count)
-    return start until start + count
 }
 
 internal fun playerProgressFraction(positionMs: Long, durationMs: Long): Float =

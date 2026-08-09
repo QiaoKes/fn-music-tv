@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.fnmusic.tv.core.lyrics
 
+import com.mocharealm.accompanist.lyrics.core.model.SyncedLyrics
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -14,9 +15,6 @@ data class LyricsMatchRequest(
 
 @Serializable
 enum class LyricsSourceId { QqMusic, Kugou, Netease }
-
-@Serializable
-enum class LyricsTrackKind { Original, Translation, Romanization }
 
 @Serializable
 enum class LyricsContentQuality(internal val rank: Int) {
@@ -39,46 +37,11 @@ data class LyricsCandidate(
     val instrumental: Boolean = false,
 )
 
-@Serializable
-data class TimedLyricsWord(
-    val startMs: Long? = null,
-    val endMs: Long? = null,
-    val text: String,
-)
-
-@Serializable
-data class TimedLyricsLine(
-    val startMs: Long? = null,
-    val endMs: Long? = null,
-    val words: List<TimedLyricsWord>,
-) {
-    val text: String get() = words.joinToString(separator = "", transform = TimedLyricsWord::text).trim()
-}
-
-@Serializable
-data class TimedLyricsTrack(
-    val kind: LyricsTrackKind,
-    val lines: List<TimedLyricsLine>,
-) {
-    val isTimed: Boolean get() = lines.any { it.startMs != null }
-    val isNotEmpty: Boolean get() = lines.any { it.text.isNotBlank() }
-}
-
-@Serializable
-data class SourceLyrics(
-    val original: TimedLyricsTrack,
-    val translation: TimedLyricsTrack? = null,
-    val romanization: TimedLyricsTrack? = null,
-)
-
-@Serializable
 data class MatchedLyrics(
     val source: LyricsSourceId,
     val candidate: LyricsCandidate,
     val score: Double,
-    val original: TimedLyricsTrack,
-    val translation: TimedLyricsTrack? = null,
-    val romanization: TimedLyricsTrack? = null,
+    val lyrics: SyncedLyrics,
     val quality: LyricsContentQuality = LyricsContentQuality.Basic,
 )
 
@@ -97,7 +60,7 @@ data class LyricsSearchQuery(
 interface LyricsSource {
     val id: LyricsSourceId
     suspend fun search(query: LyricsSearchQuery): List<LyricsCandidate>
-    suspend fun fetch(candidate: LyricsCandidate): SourceLyrics
+    suspend fun fetch(candidate: LyricsCandidate): SyncedLyrics
 }
 
 class LyricsTransportException(

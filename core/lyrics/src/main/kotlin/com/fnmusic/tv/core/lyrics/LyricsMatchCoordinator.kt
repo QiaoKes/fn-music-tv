@@ -40,10 +40,10 @@ class LyricsMatchCoordinator(
                 )
                 .take(MAX_FETCH_ATTEMPTS_PER_SOURCE)
                 .toList()
-            async { fetchSource(source, sourceCandidates) }
+            async { fetchSource(source, sourceCandidates, request) }
         }.awaitAll()
 
-        val matches = fetchOutcomes.mapNotNull(FetchOutcome::match)
+        val matches = fetchOutcomes.flatMap(FetchOutcome::matches)
         if (matches.isNotEmpty()) {
             val selected = matches.sortedWith(contentComparator()).first()
             return@supervisorScope LyricsMatchResult.Found(
@@ -51,9 +51,7 @@ class LyricsMatchCoordinator(
                     source = selected.scored.candidate.source,
                     candidate = selected.scored.candidate,
                     score = selected.scored.score,
-                    original = selected.lyrics.original,
-                    translation = selected.lyrics.translation,
-                    romanization = selected.lyrics.romanization,
+                    lyrics = selected.lyrics,
                     quality = selected.content.quality,
                 ),
             )
@@ -87,24 +85,32 @@ class LyricsMatchCoordinator(
     private suspend fun fetchSource(
         source: LyricsSource,
         candidates: List<ScoredLyricsCandidate>,
+        request: LyricsMatchRequest,
     ): FetchOutcome {
         if (candidates.isEmpty()) return FetchOutcome()
 
         var failure: FailureKind? = null
+        val matches = mutableListOf<ProviderMatch>()
         candidates.forEach { scored ->
             try {
                 val lyrics = withTimeoutOrNull(sourceTimeoutMs) { source.fetch(scored.candidate) }
                     ?: throw LyricsTransportException("${source.id} lyrics timed out")
-                if (!lyrics.original.isNotEmpty) {
+                if (!lyrics.hasUsableLines()) {
                     failure = FailureKind.InvalidResponse
                     return@forEach
                 }
-                return FetchOutcome(
-                    match = ProviderMatch(
-                        scored = scored,
-                        lyrics = lyrics,
-                        content = LyricsContentQualityEvaluator.evaluate(lyrics),
-                    ),
+                val rawContent = LyricsContentQualityEvaluator.evaluate(lyrics)
+                val durationDeltaMs = knownDurationDelta(request.durationMs, scored.candidate.durationMs)
+                val wordEligible = durationDeltaMs != null &&
+                    durationDeltaMs <= policy.maximumWordTimingDeltaMs &&
+                    rawContent.wordTimedCoverage > 0.0
+                val eligibleLyrics = if (wordEligible) lyrics else lyrics.withoutWordTiming()
+                matches += ProviderMatch(
+                    scored = scored,
+                    lyrics = eligibleLyrics,
+                    content = LyricsContentQualityEvaluator.evaluate(eligibleLyrics),
+                    durationDeltaMs = durationDeltaMs,
+                    wordEligible = wordEligible,
                 )
             } catch (cause: CancellationException) {
                 throw cause
@@ -112,19 +118,26 @@ class LyricsMatchCoordinator(
                 failure = failure.combine(cause.toFailureKind())
             }
         }
-        return FetchOutcome(failure = failure ?: FailureKind.InvalidResponse)
+        return FetchOutcome(
+            matches = matches,
+            failure = failure ?: if (matches.isEmpty()) FailureKind.InvalidResponse else null,
+        )
     }
 
     private fun contentComparator(): Comparator<ProviderMatch> =
-        compareByDescending<ProviderMatch> { it.content.quality.rank }
-            .thenByDescending { it.content.wordTimedCoverage }
+        compareByDescending<ProviderMatch> { it.content.translationCoverage > 0.0 }
             .thenByDescending { it.content.translationCoverage }
-            .thenByDescending { it.content.timedLineCoverage }
-            .thenByDescending { it.content.usableLineCount }
-            .thenByDescending { it.scored.metadataScore }
-            .thenByDescending { it.scored.consensusCount }
+            .thenByDescending { it.wordEligible }
+            .thenBy { it.durationDeltaMs ?: Long.MAX_VALUE }
             .thenBy { sourceOrderIndex(it.scored.candidate.source) }
             .thenBy { it.scored.candidate.remoteId }
+
+    private fun knownDurationDelta(left: Long?, right: Long?): Long? =
+        if (left != null && left > 0L && right != null && right > 0L) {
+            kotlin.math.abs(left - right)
+        } else {
+            null
+        }
 
     private fun classifyFailure(
         searchOutcomes: List<SearchOutcome>,
@@ -165,14 +178,16 @@ class LyricsMatchCoordinator(
     )
 
     private data class FetchOutcome(
-        val match: ProviderMatch? = null,
+        val matches: List<ProviderMatch> = emptyList(),
         val failure: FailureKind? = null,
     )
 
     private data class ProviderMatch(
         val scored: ScoredLyricsCandidate,
-        val lyrics: SourceLyrics,
+        val lyrics: com.mocharealm.accompanist.lyrics.core.model.SyncedLyrics,
         val content: LyricsContentQualityProjection,
+        val durationDeltaMs: Long?,
+        val wordEligible: Boolean,
     )
 
     private enum class FailureKind { NetworkFailure, InvalidResponse }

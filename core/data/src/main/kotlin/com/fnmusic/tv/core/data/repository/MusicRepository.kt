@@ -30,14 +30,15 @@ import com.fnmusic.tv.core.model.Playlist
 import com.fnmusic.tv.core.model.RoamWindow
 import com.fnmusic.tv.core.model.SharedLibrary
 import com.fnmusic.tv.core.model.Track
-import com.fnmusic.tv.core.model.lyric.LyricParser
-import com.fnmusic.tv.core.model.lyric.LyricTimeline
 import com.fnmusic.tv.core.model.playback.QueueSource
 import com.fnmusic.tv.core.model.preferences.CacheUsage
 import com.fnmusic.tv.core.lyrics.DefaultLyricsSources
 import com.fnmusic.tv.core.lyrics.LyricsMatchCoordinator
 import com.fnmusic.tv.core.lyrics.LyricsMatchRequest
 import com.fnmusic.tv.core.lyrics.LyricsMatchResult
+import com.fnmusic.tv.core.lyrics.hasUsableLines
+import com.fnmusic.tv.core.lyrics.parseLyrics
+import com.mocharealm.accompanist.lyrics.core.model.SyncedLyrics
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -114,13 +115,13 @@ internal fun FavoriteLibraryState.rollback(
     error = error,
 )
 
-internal fun decodeLyrics(response: LyricListDto): Pair<LyricDocument?, LyricTimeline?> {
+internal fun decodeLyrics(response: LyricListDto): Pair<LyricDocument?, SyncedLyrics?> {
     val selected = response.list.firstOrNull { it.guid == response.preferred }
         ?: response.list.firstOrNull { it.isLRC }
         ?: response.list.firstOrNull()
     val document = selected?.toDomain()
-    val timeline = document?.let { LyricParser.parse(it.content) }?.takeIf { it.lines.isNotEmpty() }
-    return document to timeline
+    val syncedLyrics = document?.let { parseLyrics(it.content) }?.takeIf(SyncedLyrics::hasUsableLines)
+    return document to syncedLyrics
 }
 
 internal fun isValidArtworkBytes(bytes: ByteArray): Boolean = isValidArtworkBytes(
@@ -366,12 +367,12 @@ class MusicRepository internal constructor(
             .toList()
     }
 
-    suspend fun lyrics(trackGuid: String): Pair<LyricDocument?, LyricTimeline?> =
+    suspend fun lyrics(trackGuid: String): Pair<LyricDocument?, SyncedLyrics?> =
         decodeLyrics(lyricResponse(trackGuid))
 
     private suspend fun firstPartyCurrentLyrics(trackGuid: String): CurrentResourceResult<CurrentLyrics> = currentResource {
-        val (document, timeline) = withCurrentResourceRetry { lyrics(trackGuid) }
-        document?.takeIf { it.content.isNotBlank() }?.let { CurrentLyrics(it, timeline) }
+        val (document, syncedLyrics) = withCurrentResourceRetry { lyrics(trackGuid) }
+        document?.takeIf { it.content.isNotBlank() }?.let { CurrentLyrics(it, syncedLyrics) }
     }
 
     suspend fun currentLyrics(

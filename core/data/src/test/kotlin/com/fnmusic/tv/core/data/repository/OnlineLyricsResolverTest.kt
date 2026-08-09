@@ -8,13 +8,15 @@ import com.fnmusic.tv.core.data.local.LocalStore
 import com.fnmusic.tv.core.lyrics.LyricsCandidate
 import com.fnmusic.tv.core.lyrics.LyricsMatchResult
 import com.fnmusic.tv.core.lyrics.LyricsSourceId
-import com.fnmusic.tv.core.lyrics.LyricsTrackKind
 import com.fnmusic.tv.core.lyrics.MatchedLyrics
-import com.fnmusic.tv.core.lyrics.TimedLyricsLine
-import com.fnmusic.tv.core.lyrics.TimedLyricsTrack
-import com.fnmusic.tv.core.lyrics.TimedLyricsWord
+import com.fnmusic.tv.core.lyrics.lyricText
+import com.fnmusic.tv.core.lyrics.parseLyrics
+import com.fnmusic.tv.core.lyrics.translationText
 import com.fnmusic.tv.core.model.Track
 import com.fnmusic.tv.core.model.TrackGuid
+import com.mocharealm.accompanist.lyrics.core.model.SyncedLyrics
+import com.mocharealm.accompanist.lyrics.core.model.karaoke.KaraokeLine
+import com.mocharealm.accompanist.lyrics.core.model.synced.SyncedLine
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -56,12 +58,15 @@ class OnlineLyricsResolverTest {
         }
 
         val initial = first.resolve(track()) ?: error("expected online lyrics")
-        assertEquals(listOf("原文", "translation"), initial.timeline?.lines?.single()?.texts)
+        val initialLine = initial.syncedLyrics?.lines?.single() ?: error("expected synced line")
+        assertEquals("原文", initialLine.lyricText())
+        assertEquals("translation", initialLine.translationText())
         assertEquals(1, calls.get())
 
         val afterMemoryRestart = resolver { error("persisted match should avoid a new search") }
             .resolve(track()) ?: error("expected cached online lyrics")
         assertEquals(initial.document.content, afterMemoryRestart.document.content)
+        assertEquals("translation", afterMemoryRestart.syncedLyrics?.lines?.single()?.translationText())
         assertEquals(1, calls.get())
     }
 
@@ -120,56 +125,80 @@ class OnlineLyricsResolverTest {
         assertEquals(1, rematches.get())
     }
 
-    @Test fun `word timing and semantic sidecars survive online mapping`() = runBlocking {
-        val original = TimedLyricsTrack(
-            kind = LyricsTrackKind.Original,
-            lines = listOf(
-                TimedLyricsLine(
-                    startMs = 1_000L,
-                    endMs = 2_000L,
-                    words = listOf(
-                        TimedLyricsWord(1_000L, 1_500L, "你"),
-                        TimedLyricsWord(1_500L, 2_000L, "好"),
-                    ),
+    @Test fun `cache entries from the previous match protocol are rematched`() = runBlocking {
+        val initial = resolver { LyricsMatchResult.Found(matchedLyrics()) }
+        assertTrue(initial.resolve(track()) != null)
+        val cached = localStore.matchedLyric("server:user", "track") ?: error("expected persisted lyrics")
+        localStore.saveMatchedLyric(
+            cached.copy(payload = cached.payload.replace(Regex("\\\"schemaVersion\\\":\\d+"), "\"schemaVersion\":3")),
+        )
+        val rematches = AtomicInteger()
+
+        val refreshed = resolver {
+            rematches.incrementAndGet()
+            LyricsMatchResult.Found(matchedLyrics())
+        }.resolve(track())
+
+        assertTrue(refreshed != null)
+        assertEquals(1, rematches.get())
+    }
+
+    @Test fun `cache entries with a stale metadata protocol fingerprint are rematched`() = runBlocking {
+        val initial = resolver { LyricsMatchResult.Found(matchedLyrics()) }
+        assertTrue(initial.resolve(track()) != null)
+        val cached = localStore.matchedLyric("server:user", "track") ?: error("expected persisted lyrics")
+        localStore.saveMatchedLyric(
+            cached.copy(
+                payload = cached.payload.replace(
+                    Regex("\\\"fingerprint\\\":\\\"[^\\\"]+\\\""),
+                    "\"fingerprint\":\"previous-protocol\"",
                 ),
             ),
         )
-        val lyrics = resolver {
-            LyricsMatchResult.Found(
-                matchedLyrics(
-                    original = original,
-                    translation = timedTrack(LyricsTrackKind.Translation, "Hello"),
-                    romanization = timedTrack(LyricsTrackKind.Romanization, "ni hao"),
-                ),
-            )
-        }.resolve(track()) ?: error("expected online lyrics")
+        val rematches = AtomicInteger()
 
-        val line = lyrics.timeline?.lines?.single() ?: error("expected timed line")
-        assertEquals(listOf("你好", "Hello", "ni hao"), line.texts)
-        assertEquals(listOf("你", "好"), line.words.map { it.text })
-        assertEquals(listOf(1_000L, 1_500L), line.words.map { it.startMs })
-        assertEquals(2_000L, line.endMs)
+        val refreshed = resolver {
+            rematches.incrementAndGet()
+            LyricsMatchResult.Found(matchedLyrics())
+        }.resolve(track())
+
+        assertTrue(refreshed != null)
+        assertEquals(1, rematches.get())
+    }
+
+    @Test fun `word timing and semantic sidecars survive cache restart`() = runBlocking {
+        val original = "[1000,1000](1000,500,0)你(1500,500,0)好"
+        val matched = matchedLyrics(
+            parseLyrics(
+                original = original,
+                translation = "[00:01.00]Hello",
+                phonetic = "[00:01.00]ni hao",
+            ),
+        )
+
+        resolver { LyricsMatchResult.Found(matched) }.resolve(track())
+            ?: error("expected online lyrics")
+        val restored = resolver { error("cache should be used") }.resolve(track())
+            ?: error("expected cached lyrics")
+        val line = restored.syncedLyrics?.lines?.single() as? KaraokeLine.MainKaraokeLine
+            ?: error("expected karaoke line")
+
+        assertEquals("你好", line.lyricText())
+        assertEquals("Hello", line.translation)
+        assertEquals("ni hao", line.phonetic)
+        assertEquals(listOf("你", "好"), line.syllables.map { it.content })
+        assertEquals(listOf(1_000, 1_500), line.syllables.map { it.start })
+        assertEquals(2_000, line.end)
     }
 
     @Test fun `line timed lyrics do not synthesize word timing`() = runBlocking {
-        val original = TimedLyricsTrack(
-            kind = LyricsTrackKind.Original,
-            lines = listOf(
-                TimedLyricsLine(
-                    startMs = 1_000L,
-                    endMs = 2_000L,
-                    words = listOf(TimedLyricsWord(text = "whole line")),
-                ),
-            ),
-        )
-
         val lyrics = resolver {
-            LyricsMatchResult.Found(matchedLyrics(original = original, translation = null))
+            LyricsMatchResult.Found(matchedLyrics(parseLyrics("[00:01.00]whole line")))
         }.resolve(track()) ?: error("expected online lyrics")
 
-        val line = lyrics.timeline?.lines?.single() ?: error("expected timed line")
-        assertEquals("whole line", line.original)
-        assertTrue(line.words.isEmpty())
+        val line = lyrics.syncedLyrics?.lines?.single()
+        assertTrue(line is SyncedLine)
+        assertEquals("whole line", line?.lyricText())
     }
 
     @Test fun `expired negative cache immediately retries inside the same old bucket`() = runBlocking {
@@ -240,9 +269,10 @@ class OnlineLyricsResolverTest {
     )
 
     private fun matchedLyrics(
-        original: TimedLyricsTrack = timedTrack(LyricsTrackKind.Original, "原文"),
-        translation: TimedLyricsTrack? = timedTrack(LyricsTrackKind.Translation, "translation"),
-        romanization: TimedLyricsTrack? = null,
+        lyrics: SyncedLyrics = parseLyrics(
+            original = "[00:01.00]原文",
+            translation = "[00:01.00]translation",
+        ),
     ) = MatchedLyrics(
         source = LyricsSourceId.QqMusic,
         candidate = LyricsCandidate(
@@ -254,19 +284,6 @@ class OnlineLyricsResolverTest {
             durationMs = 180_000L,
         ),
         score = 100.0,
-        original = original,
-        translation = translation,
-        romanization = romanization,
-    )
-
-    private fun timedTrack(kind: LyricsTrackKind, text: String) = TimedLyricsTrack(
-        kind = kind,
-        lines = listOf(
-            TimedLyricsLine(
-                startMs = 1_000L,
-                endMs = 2_000L,
-                words = listOf(TimedLyricsWord(1_000L, 2_000L, text)),
-            ),
-        ),
+        lyrics = lyrics,
     )
 }

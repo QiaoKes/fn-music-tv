@@ -33,7 +33,7 @@ android {
 
     defaultConfig {
         applicationId = "com.fnmusic.tv"
-        minSdk = 23
+        minSdk = 29
         targetSdk = 36
         versionCode = managedVersionCode
         versionName = managedVersionName
@@ -131,6 +131,7 @@ baselineProfile {
 
 dependencies {
     implementation(project(":core:model"))
+    implementation(project(":core:lyrics"))
     implementation(project(":core:data"))
     implementation(project(":core:playback"))
     implementation(platform(libs.androidx.compose.bom))
@@ -140,7 +141,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.compose.foundation)
     implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.tv.material)
+    implementation(libs.accompanist.lyrics.ui)
     baselineProfile(project(":baselineprofile"))
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)

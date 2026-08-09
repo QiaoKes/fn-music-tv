@@ -4,7 +4,7 @@ import com.fnmusic.tv.core.data.api.isRetryableRequestFailure
 import com.fnmusic.tv.core.model.AppError
 import com.fnmusic.tv.core.model.AppException
 import com.fnmusic.tv.core.model.LyricDocument
-import com.fnmusic.tv.core.model.lyric.LyricTimeline
+import com.mocharealm.accompanist.lyrics.core.model.SyncedLyrics
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 
@@ -19,7 +19,7 @@ sealed interface CurrentResourceResult<out T> {
 
 data class CurrentLyrics(
     val document: LyricDocument,
-    val timeline: LyricTimeline?,
+    val syncedLyrics: SyncedLyrics?,
 )
 
 internal suspend fun <T> withCurrentResourceRetry(
