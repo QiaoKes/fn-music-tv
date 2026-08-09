@@ -83,24 +83,24 @@ reference consolidation using neutral public maintenance language.
 
 ## Acceptance Criteria
 
-- [ ] `git grep` and a full retained-history scan find no approved private replacement target.
-- [ ] Current tests use only reserved or synthetic hostname fixtures.
-- [ ] The GitHub `release` environment contains both required secrets and permits deployment only
+- [x] `git grep` and a full retained-history scan find no approved private replacement target.
+- [x] Current tests use only reserved or synthetic hostname fixtures.
+- [x] The GitHub `release` environment contains both required secrets and permits deployment only
       from `main`.
-- [ ] A release build succeeds with the environment secrets and fails safely without them.
-- [ ] Debug/unit-test builds succeed without access to GitHub Secrets.
-- [ ] Decompressed APK contents and ordinary DEX/JADX string inspection do not contain either
+- [x] A release build succeeds with the environment secrets and fails safely without them.
+- [x] Debug/unit-test builds succeed without access to GitHub Secrets.
+- [x] Decompressed APK contents and ordinary DEX/JADX string inspection do not contain either
       plaintext production value.
-- [ ] Existing connection-signing tests pass with non-production fixtures, and an FNID smoke test
+- [x] Existing connection-signing tests pass with non-production fixtures, and an FNID smoke test
       succeeds against the existing upstream service.
-- [ ] `git ls-remote --heads origin` returns only `refs/heads/main`.
-- [ ] No retained branch or tag reaches a Git object containing an approved private replacement
+- [x] `git ls-remote --heads origin` returns only `refs/heads/main`.
+- [x] No retained branch or tag reaches a Git object containing an approved private replacement
       target.
-- [ ] Superseded release APK/checksum assets, Actions artifacts, and build caches are
+- [x] Superseded release APK/checksum assets, Actions artifacts, and build caches are
       removed; release notes and clean rewritten tags remain available where practical.
-- [ ] Public commit messages, tag annotations, workflow names, and release notes use neutral
+- [x] Public commit messages, tag annotations, workflow names, and release notes use neutral
       maintenance language and do not identify the cleanup target.
-- [ ] The worktree is clean and the rewritten remote state is independently re-cloned and verified.
+- [x] The worktree is clean and the rewritten remote state is independently re-cloned and verified.
 
 ## Out of Scope
 
