@@ -32,24 +32,24 @@
 ## 4. Rewrite and consolidate repository references
 
 - [x] Freeze writes and create the encrypted offline recovery bundle and reference inventory.
-- [ ] Install/verify `git-filter-repo >= 2.47` and rewrite a fresh mirror clone using a protected
+- [x] Install/verify `git-filter-repo >= 2.47` and rewrite a fresh mirror clone using a protected
       temporary replacement file.
-- [ ] Remove every non-main head from the rewritten mirror and verify affected tags are clean.
-- [ ] Force-update `main` and rewritten tags using expected old object IDs; delete all remote
+- [x] Remove every non-main head from the rewritten mirror and verify affected tags are clean.
+- [x] Force-update `main` and rewritten tags using expected old object IDs; delete all remote
       non-main heads.
-- [ ] Delete all local non-main branches after remote verification.
-- [ ] Remove affected Release APK/checksum assets, Actions artifacts, and all relevant Gradle caches.
-- [ ] Privately request GitHub removal of remaining read-only PR/cached references if necessary.
+- [x] Delete all local non-main branches after remote verification.
+- [x] Remove affected Release APK/checksum assets, Actions artifacts, and all relevant Gradle caches.
+- [x] Privately request GitHub removal of remaining read-only PR/cached references if necessary.
 
 ## 5. Final verification
 
-- [ ] Fresh-clone the rewritten repository and scan every retained Git object against the approved
+- [x] Fresh-clone the rewritten repository and scan every retained Git object against the approved
       private replacement set.
-- [ ] Confirm the remote exposes only `main` and clean retained tags.
-- [ ] Confirm release notes remain, removed package assets are unavailable, and no relevant Actions
+- [x] Confirm the remote exposes only `main` and clean retained tags.
+- [x] Confirm release notes remain, removed package assets are unavailable, and no relevant Actions
       artifact or cache remains.
-- [ ] Confirm new CI packaging succeeds and its logs contain no protected value or derived plaintext.
-- [ ] Run the Trellis quality gate, update applicable specs, record the maintenance mapping privately,
+- [x] Confirm new CI packaging succeeds and its logs contain no protected value or derived plaintext.
+- [x] Run the Trellis quality gate, update applicable specs, record the maintenance mapping privately,
       and archive the task.
 
 ## Validation commands
