@@ -53,7 +53,7 @@
 fn-music-tv-<version>-universal.apk
 ```
 
-通用包包含 `arm64-v8a`、`armeabi-v7a`、`x86` 与 `x86_64`，支持 Android 6.0 及以上
+通用包包含 `arm64-v8a`、`armeabi-v7a`、`x86` 与 `x86_64`，支持 Android 10.0 及以上
 系统。下载后可通过 U 盘、文件管理器或 ADB 安装：
 
 ```sh
@@ -154,7 +154,7 @@ baselineprofile/ 基准配置生成模块
 
 ## 兼容性说明
 
-- 通用侧载包可安装在 Android 6.0 及以上的普通安卓车机，使用横屏触控界面运行；当前尚未在
+- 通用侧载包可安装在 Android 10 及以上的普通安卓车机，使用横屏触控界面运行；当前尚未在
   具体车机上实测，低分辨率屏幕、方向盘按键和车机音频策略可能因设备而异。
 - 车机侧载运行不等同于 Android Auto、CarPlay 或经过车厂认证的 Android Automotive 应用；
   Android Automotive OS 是否允许安装和启动普通 APK 取决于车厂系统限制。请勿在驾驶过程中操作。
@@ -164,6 +164,8 @@ baselineprofile/ 基准配置生成模块
 
 ## 特别感谢
 
+- [Accompanist Lyrics Core](https://github.com/6xingyv/Accompanist-Lyrics) 提供 YRC、KRC 等同步歌词格式的解析与统一歌词模型。
+- [Accompanist Lyrics UI](https://github.com/6xingyv/Accompanist) 提供逐字高亮、双语展示与自动滚动歌词组件。
 - [LDDC](https://github.com/chenmozhijin/LDDC) 提供了多歌词源检索、匹配策略与歌词格式处理方面的实现参考。
 - AndroidX、Compose for TV 与 Media3 等开源项目为本项目提供了基础能力。
 

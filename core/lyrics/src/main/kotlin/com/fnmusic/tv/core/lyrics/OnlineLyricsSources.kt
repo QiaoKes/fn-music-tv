@@ -1,26 +1,33 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Provider request and response behavior is derived from LDDC,
-// https://github.com/chenmozhijin/LDDC, commit 1ffa0e25426e654376e5d55d854b135ae601f43b.
+// Provider request, transport decoding, and fallback behavior is derived from LDDC.
 package com.fnmusic.tv.core.lyrics
 
+import com.mocharealm.accompanist.lyrics.core.model.SyncedLyrics
+import java.io.ByteArrayInputStream
 import java.util.Base64
+import java.util.zip.InflaterInputStream
+import javax.crypto.Cipher
+import javax.crypto.spec.SecretKeySpec
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
 
 object DefaultLyricsSources {
     fun create(client: OkHttpClient): List<LyricsSource> {
         val http = OkHttpLyricsHttpClient(client)
         return listOf(
+            NeteaseLyricsSource(http),
             QqMusicLyricsSource(http),
             KugouLyricsSource(http),
-            NeteaseLyricsSource(http),
         )
     }
 }
@@ -42,13 +49,15 @@ class QqMusicLyricsSource(
             val song = item.asObject() ?: return@mapNotNull null
             val remoteId = song.stringAt("songid") ?: return@mapNotNull null
             val mediaId = song.stringAt("songmid") ?: return@mapNotNull null
-            val title = decodeHtml(song.stringAt("songname").orEmpty()).takeIf(String::isNotBlank) ?: return@mapNotNull null
+            val title = decodeHtml(song.stringAt("songname").orEmpty()).takeIf(String::isNotBlank)
+                ?: return@mapNotNull null
             LyricsCandidate(
                 source = id,
                 remoteId = remoteId,
                 mediaId = mediaId,
                 title = title,
-                artists = song.arrayAt("singer").orEmpty().mapNotNull { it.asObject()?.stringAt("name")?.let(::decodeHtml) },
+                artists = song.arrayAt("singer").orEmpty()
+                    .mapNotNull { it.asObject()?.stringAt("name")?.let(::decodeHtml) },
                 album = song.stringAt("albumname")?.let(::decodeHtml),
                 durationMs = song.longAt("interval")?.times(1_000L),
                 instrumental = song.longAt("pure") == 1L,
@@ -56,7 +65,61 @@ class QqMusicLyricsSource(
         }
     }
 
-    override suspend fun fetch(candidate: LyricsCandidate): SourceLyrics {
+    override suspend fun fetch(candidate: LyricsCandidate): SyncedLyrics = try {
+        fetchNativeQrc(candidate)
+    } catch (cause: CancellationException) {
+        throw cause
+    } catch (_: Exception) {
+        fetchLrc(candidate)
+    }
+
+    private suspend fun fetchNativeQrc(candidate: LyricsCandidate): SyncedLyrics {
+        val songId = candidate.remoteId.toLongOrNull()
+            ?: throw LyricsPayloadException("QQ candidate has no numeric song ID")
+        val body = buildJsonObject {
+            put("comm", buildJsonObject {
+                put("ct", 19)
+                put("cv", 2111)
+                put("uin", "0")
+            })
+            put("request", buildJsonObject {
+                put("module", "music.musichallSong.PlayLyricInfo")
+                put("method", "GetPlayLyricInfo")
+                put("param", buildJsonObject {
+                    put("albumName", encodeBase64(candidate.album.orEmpty()))
+                    put("crypt", 1)
+                    put("ct", 19)
+                    put("cv", 2111)
+                    put("interval", (candidate.durationMs ?: 0L) / 1_000L)
+                    put("lrc_t", 0)
+                    put("qrc", 1)
+                    put("qrc_t", 0)
+                    put("roma", 1)
+                    put("roma_t", 0)
+                    put("singerName", encodeBase64(candidate.artists.joinToString(" / ")))
+                    put("songID", songId)
+                    put("songName", encodeBase64(candidate.title))
+                    put("trans", 1)
+                    put("trans_t", 0)
+                    put("type", 0)
+                })
+            })
+        }.toString()
+        val root = parseObject(http.post(QQ_MUSICU_URL, body, QQ_NATIVE_HEADERS))
+        val data = root.objectAt("request")?.objectAt("data")
+            ?: throw LyricsPayloadException("QQ QRC response has no data")
+        val original = decodeQqNativeField(data.stringAt("lyric"))
+        if (original.isBlank()) throw LyricsPayloadException("QQ QRC lyrics are empty")
+        val translation = data.stringAt("trans")?.takeIf(String::isNotBlank)?.let { encrypted ->
+            runCatching { decodeQqNativeField(encrypted) }.getOrNull()
+        }
+        val phonetic = data.stringAt("roma")?.takeIf(String::isNotBlank)?.let { encrypted ->
+            runCatching { decodeQqNativeField(encrypted) }.getOrNull()
+        }
+        return parseLyrics(original, translation, phonetic).requireUsable("QQ QRC")
+    }
+
+    private suspend fun fetchLrc(candidate: LyricsCandidate): SyncedLyrics {
         val mediaId = candidate.mediaId ?: throw LyricsPayloadException("QQ candidate has no media ID")
         val root = parseObject(
             http.get(
@@ -65,21 +128,18 @@ class QqMusicLyricsSource(
                 QQ_HEADERS,
             ),
         )
-        val originalText = decodeLyricField(root.stringAt("lyric"))
-        val translationText = decodeLyricField(root.stringAt("trans"))
-        val original = LyricsTextParser.parseLrcOrPlain(decodeHtml(originalText), LyricsTrackKind.Original)
-        if (!original.isNotEmpty) throw LyricsPayloadException("QQ lyrics are empty")
-        return SourceLyrics(
-            original = original,
-            translation = translationText.takeIf(String::isNotBlank)
-                ?.let(::decodeHtml)
-                ?.let { LyricsTextParser.parseLrcOrPlain(it, LyricsTrackKind.Translation) }
-                ?.takeIf(TimedLyricsTrack::isNotEmpty),
-        )
+        val original = decodeHtml(decodeLyricField(root.stringAt("lyric")))
+        val translation = decodeHtml(decodeLyricField(root.stringAt("trans")))
+        return parseLyrics(original, translation).requireUsable("QQ LRC")
     }
 
     private companion object {
+        const val QQ_MUSICU_URL = "https://u.y.qq.com/cgi-bin/musicu.fcg"
         val QQ_HEADERS = mapOf("Referer" to "https://y.qq.com/")
+        val QQ_NATIVE_HEADERS = mapOf(
+            "Cookie" to "tmeLoginType=-1;",
+            "User-Agent" to "okhttp/3.14.9",
+        )
     }
 }
 
@@ -114,7 +174,7 @@ class NeteaseLyricsSource(
         }
     }
 
-    override suspend fun fetch(candidate: LyricsCandidate): SourceLyrics {
+    override suspend fun fetch(candidate: LyricsCandidate): SyncedLyrics {
         val root = parseObject(
             http.get(
                 "https://music.163.com/api/song/lyric",
@@ -124,19 +184,10 @@ class NeteaseLyricsSource(
         )
         val yrc = root.objectAt("yrc")?.stringAt("lyric").orEmpty()
         val lrc = root.objectAt("lrc")?.stringAt("lyric").orEmpty()
-        val original = if (yrc.isNotBlank()) LyricsTextParser.parseYrc(yrc) else LyricsTextParser.parseLrcOrPlain(lrc, LyricsTrackKind.Original)
-        if (!original.isNotEmpty) throw LyricsPayloadException("Netease lyrics are empty")
-        return SourceLyrics(
-            original = original,
-            translation = root.objectAt("tlyric")?.stringAt("lyric")
-                ?.takeIf(String::isNotBlank)
-                ?.let { LyricsTextParser.parseLrcOrPlain(it, LyricsTrackKind.Translation) }
-                ?.takeIf(TimedLyricsTrack::isNotEmpty),
-            romanization = root.objectAt("romalrc")?.stringAt("lyric")
-                ?.takeIf(String::isNotBlank)
-                ?.let { LyricsTextParser.parseLrcOrPlain(it, LyricsTrackKind.Romanization) }
-                ?.takeIf(TimedLyricsTrack::isNotEmpty),
-        )
+        val original = yrc.ifBlank { lrc }
+        val translation = root.objectAt("tlyric")?.stringAt("lyric")
+        val phonetic = root.objectAt("romalrc")?.stringAt("lyric")
+        return parseLyrics(original, translation, phonetic).requireUsable("Netease lyrics")
     }
 
     private companion object {
@@ -166,13 +217,15 @@ class KugouLyricsSource(
         return root.objectAt("data")?.arrayAt("lists").orEmpty().mapNotNull { item ->
             val song = item.asObject() ?: return@mapNotNull null
             val remoteId = song.stringAt("ID") ?: return@mapNotNull null
-            val title = song.stringAt("SongName")?.let(::stripMarkup)?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+            val title = song.stringAt("SongName")?.let(::stripMarkup)?.takeIf(String::isNotBlank)
+                ?: return@mapNotNull null
             val durationSeconds = song.longAt("Duration") ?: song.longAt("SQDuration") ?: song.longAt("HQDuration")
             LyricsCandidate(
                 source = id,
                 remoteId = remoteId,
                 title = title,
-                artists = song.stringAt("SingerName").orEmpty().split("、", "/", "&").map(String::trim).filter(String::isNotBlank),
+                artists = song.stringAt("SingerName").orEmpty().split("、", "/", "&")
+                    .map(String::trim).filter(String::isNotBlank),
                 album = song.stringAt("AlbumName")?.let(::stripMarkup),
                 durationMs = durationSeconds?.times(1_000L),
                 fileHash = song.stringAt("FileHash") ?: song.stringAt("SQFileHash") ?: song.stringAt("HQFileHash"),
@@ -180,7 +233,18 @@ class KugouLyricsSource(
         }
     }
 
-    override suspend fun fetch(candidate: LyricsCandidate): SourceLyrics {
+    override suspend fun fetch(candidate: LyricsCandidate): SyncedLyrics {
+        val lyricCandidate = findLyricCandidate(candidate)
+        return try {
+            download(lyricCandidate, "krc").requireUsable("Kugou KRC")
+        } catch (cause: CancellationException) {
+            throw cause
+        } catch (_: Exception) {
+            download(lyricCandidate, "lrc").requireUsable("Kugou LRC")
+        }
+    }
+
+    private suspend fun findLyricCandidate(candidate: LyricsCandidate): JsonObject {
         val search = parseObject(
             http.get(
                 "https://lyrics.kugou.com/search",
@@ -194,7 +258,7 @@ class KugouLyricsSource(
                 },
             ),
         )
-        val lyricCandidate = search.arrayAt("candidates").orEmpty()
+        return search.arrayAt("candidates").orEmpty()
             .mapNotNull(JsonElement::asObject)
             .filter { it.stringAt("id") != null && it.stringAt("accesskey") != null }
             .minWithOrNull(
@@ -204,22 +268,29 @@ class KugouLyricsSource(
                     else kotlin.math.abs(duration - candidate.durationMs)
                 }.thenByDescending { it.longAt("score") ?: 0L },
             ) ?: throw LyricsPayloadException("Kugou returned no lyric candidates")
+    }
+
+    private suspend fun download(candidate: JsonObject, format: String): SyncedLyrics {
         val body = parseObject(
             http.get(
                 "https://lyrics.kugou.com/download",
                 mapOf(
                     "ver" to "1",
                     "client" to "pc",
-                    "id" to lyricCandidate.stringAt("id")!!,
-                    "accesskey" to lyricCandidate.stringAt("accesskey")!!,
-                    "fmt" to "lrc",
+                    "id" to candidate.stringAt("id")!!,
+                    "accesskey" to candidate.stringAt("accesskey")!!,
+                    "fmt" to format,
                     "charset" to "utf8",
                 ),
             ),
         )
-        val decoded = decodeBase64(body.stringAt("content").orEmpty())
-        if (decoded.isBlank()) throw LyricsPayloadException("Kugou lyrics are empty")
-        return LyricsTextParser.parseMultiTrackLrc(decoded)
+        val encoded = body.stringAt("content").orEmpty()
+        if (encoded.isBlank()) throw LyricsPayloadException("Kugou lyrics are empty")
+        val decoded = when {
+            format == "krc" && body.longAt("contenttype") != 2L -> decryptKrc(encoded)
+            else -> decodeBase64(encoded)
+        }
+        return parseLyrics(decoded)
     }
 }
 
@@ -237,14 +308,59 @@ private fun JsonObject.arrayAt(name: String): JsonArray? = get(name) as? JsonArr
 private fun JsonObject.stringAt(name: String): String? = (get(name) as? JsonPrimitive)?.contentOrNull
 private fun JsonObject.longAt(name: String): Long? = (get(name) as? JsonPrimitive)?.longOrNull
 
+private fun SyncedLyrics.requireUsable(label: String): SyncedLyrics =
+    takeIf(SyncedLyrics::hasUsableLines) ?: throw LyricsPayloadException("$label are empty")
+
 private fun decodeLyricField(value: String?): String {
     val raw = value.orEmpty()
     if (raw.isBlank() || raw.contains('[')) return raw
     return runCatching { decodeBase64(raw) }.getOrDefault(raw)
 }
 
-private fun decodeBase64(value: String): String = try {
-    Base64.getDecoder().decode(value).toString(Charsets.UTF_8)
+private fun decodeQqNativeField(value: String?): String {
+    val raw = value.orEmpty()
+    if (raw.isBlank()) return ""
+    return if (raw.length % 2 == 0 && raw.all(Char::isHexDigit)) decryptQrc(raw) else decodeLyricField(raw)
+}
+
+private fun Char.isHexDigit(): Boolean = this in '0'..'9' || this in 'a'..'f' || this in 'A'..'F'
+
+private fun decryptQrc(value: String): String = try {
+    val encrypted = value.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+    val cipher = Cipher.getInstance("DESede/ECB/NoPadding")
+    cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(QRC_KEY, "DESede"))
+    inflate(cipher.doFinal(encrypted))
+} catch (cause: Exception) {
+    throw LyricsPayloadException("Invalid QQ QRC payload", cause)
+}
+
+private fun decryptKrc(value: String): String = try {
+    val encoded = decodeBase64Bytes(value)
+    if (encoded.size < KRC_HEADER.size || !encoded.copyOfRange(0, KRC_HEADER.size).contentEquals(KRC_HEADER)) {
+        throw LyricsPayloadException("Invalid Kugou KRC header")
+    }
+    val encrypted = encoded.copyOfRange(KRC_HEADER.size, encoded.size)
+    val decoded = ByteArray(encrypted.size) { index ->
+        (encrypted[index].toInt() xor KRC_KEY[index % KRC_KEY.size].toInt()).toByte()
+    }
+    inflate(decoded)
+} catch (cause: LyricsPayloadException) {
+    throw cause
+} catch (cause: Exception) {
+    throw LyricsPayloadException("Invalid Kugou KRC payload", cause)
+}
+
+private fun inflate(value: ByteArray): String = InflaterInputStream(ByteArrayInputStream(value)).use { stream ->
+    stream.readBytes().toString(Charsets.UTF_8)
+}
+
+private fun encodeBase64(value: String): String =
+    Base64.getEncoder().encodeToString(value.toByteArray(Charsets.UTF_8))
+
+private fun decodeBase64(value: String): String = decodeBase64Bytes(value).toString(Charsets.UTF_8)
+
+private fun decodeBase64Bytes(value: String): ByteArray = try {
+    Base64.getDecoder().decode(value)
 } catch (cause: IllegalArgumentException) {
     throw LyricsPayloadException("Invalid base64 lyric payload", cause)
 }
@@ -260,3 +376,10 @@ private fun decodeHtml(value: String): String = value
     }
 
 private fun stripMarkup(value: String): String = decodeHtml(value.replace(Regex("<[^>]+>"), "")).trim()
+
+private val QRC_KEY = "!@#)(*$%123ZXC!@!@#)(NHL".toByteArray(Charsets.US_ASCII)
+private val KRC_HEADER = byteArrayOf('k'.code.toByte(), 'r'.code.toByte(), 'c'.code.toByte(), '1'.code.toByte())
+private val KRC_KEY = byteArrayOf(
+    0x40, 0x47, 0x61, 0x77, 0x5e, 0x32, 0x74, 0x47,
+    0x51, 0x36, 0x31, 0x2d, 0xce.toByte(), 0xd2.toByte(), 0x6e, 0x69,
+)

@@ -4,17 +4,23 @@ package com.fnmusic.tv.core.data.repository
 import com.fnmusic.tv.core.data.api.ApiDecoder
 import com.fnmusic.tv.core.data.local.CachedMatchedLyricEntity
 import com.fnmusic.tv.core.data.local.LocalStore
+import com.fnmusic.tv.core.lyrics.LyricsCandidate
+import com.fnmusic.tv.core.lyrics.LyricsCandidateScorer
+import com.fnmusic.tv.core.lyrics.LyricsContentQuality
 import com.fnmusic.tv.core.lyrics.LyricsMatchRequest
 import com.fnmusic.tv.core.lyrics.LyricsMatchResult
-import com.fnmusic.tv.core.lyrics.LyricsCandidateScorer
+import com.fnmusic.tv.core.lyrics.LyricsSourceId
 import com.fnmusic.tv.core.lyrics.MatchedLyrics
-import com.fnmusic.tv.core.lyrics.TimedLyricsLine
-import com.fnmusic.tv.core.lyrics.TimedLyricsTrack
+import com.fnmusic.tv.core.lyrics.lyricText
+import com.fnmusic.tv.core.lyrics.translationText
 import com.fnmusic.tv.core.model.LyricDocument
 import com.fnmusic.tv.core.model.Track
-import com.fnmusic.tv.core.model.lyric.LyricLine
-import com.fnmusic.tv.core.model.lyric.LyricTimeline
-import com.fnmusic.tv.core.model.lyric.LyricWord
+import com.mocharealm.accompanist.lyrics.core.model.ISyncedLine
+import com.mocharealm.accompanist.lyrics.core.model.SyncedLyrics
+import com.mocharealm.accompanist.lyrics.core.model.karaoke.KaraokeAlignment
+import com.mocharealm.accompanist.lyrics.core.model.karaoke.KaraokeLine
+import com.mocharealm.accompanist.lyrics.core.model.karaoke.KaraokeSyllable
+import com.mocharealm.accompanist.lyrics.core.model.synced.SyncedLine
 import java.security.MessageDigest
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
@@ -40,9 +46,7 @@ internal class OnlineLyricsResolver(
         var shouldPersist = false
         val payload = responses.getOrFetch(
             key = key,
-            isRetainedValid = { encoded ->
-                encoded.decodeEnvelope()?.accepts(fingerprint, now()) == true
-            },
+            isRetainedValid = { encoded -> encoded.decodeEnvelope()?.accepts(fingerprint, now()) == true },
             persist = { encoded ->
                 if (shouldPersist) {
                     try {
@@ -72,7 +76,7 @@ internal class OnlineLyricsResolver(
                     is LyricsMatchResult.Found -> MatchedLyricsEnvelope(
                         schemaVersion = MATCHED_LYRICS_SCHEMA_VERSION,
                         fingerprint = fingerprint,
-                        matched = result.lyrics,
+                        matched = result.lyrics.toCache(),
                         expiresAtMs = Long.MAX_VALUE,
                     )
                     LyricsMatchResult.NotFound -> MatchedLyricsEnvelope(
@@ -104,7 +108,7 @@ internal class OnlineLyricsResolver(
             expiresAtMs > timeMs
 
     private companion object {
-        const val MATCHED_LYRICS_SCHEMA_VERSION = 2
+        const val MATCHED_LYRICS_SCHEMA_VERSION = 4
         const val NEGATIVE_CACHE_TTL_MS = 5 * 60 * 1_000L
     }
 
@@ -112,7 +116,7 @@ internal class OnlineLyricsResolver(
     private data class MatchedLyricsEnvelope(
         val schemaVersion: Int,
         val fingerprint: String,
-        val matched: MatchedLyrics?,
+        val matched: CachedMatchedLyrics?,
         val expiresAtMs: Long,
     )
 }
@@ -141,96 +145,131 @@ private fun Track.lyricsFingerprint(): String {
         .joinToString("") { "%02x".format(it) }
 }
 
-private fun MatchedLyrics.toCurrentLyrics(trackGuid: String): CurrentLyrics {
-    val originalLines = original.lines.filter { it.startMs != null && it.text.isNotBlank() }
-    val translatedLines = alignSidecar(originalLines, translation)
-    val romanizedLines = alignSidecar(originalLines, romanization)
-    val timedLines = originalLines.mapIndexed { index, line ->
-        val startMs = requireNotNull(line.startMs)
-        val endMs = line.endMs ?: originalLines.getOrNull(index + 1)?.startMs
-        val translated = translatedLines[index]
-        val romanized = romanizedLines[index]
-        LyricLine(
-            startMs = startMs,
-            endMs = endMs,
-            original = line.text,
-            translation = translated.takeUnless { sameLyricText(it, line.text) },
-            romanization = romanized
-                .takeUnless { sameLyricText(it, line.text) || sameLyricText(it, translated) },
-            words = line.words.mapNotNull { word ->
-                val text = word.text.takeIf(String::isNotEmpty) ?: return@mapNotNull null
-                val wordStart = word.startMs ?: return@mapNotNull null
-                val wordEnd = word.endMs?.takeIf { it > wordStart } ?: return@mapNotNull null
-                LyricWord(wordStart, wordEnd, text)
-            },
-        )
-    }
-        .filter { it.original.isNotBlank() }
-    val timeline = timedLines.takeIf(List<LyricLine>::isNotEmpty)?.let(::LyricTimeline)
-    val content = if (timeline != null) {
-        timeline.lines.joinToString("\n") { line ->
-            line.texts.joinToString("\n") { text -> "${line.startMs.toLrcTimestamp()}$text" }
-        }
-    } else {
-        staticText(original, translation, romanization)
+@Serializable
+private data class CachedMatchedLyrics(
+    val source: LyricsSourceId,
+    val candidate: LyricsCandidate,
+    val score: Double,
+    val quality: LyricsContentQuality,
+    val lines: List<CachedLyricsLine>,
+)
+
+@Serializable
+private data class CachedLyricsLine(
+    val kind: CachedLineKind,
+    val start: Int,
+    val end: Int,
+    val content: String,
+    val translation: String? = null,
+    val phonetic: String? = null,
+    val alignment: String? = null,
+    val syllables: List<CachedSyllable> = emptyList(),
+    val accompaniment: List<CachedLyricsLine> = emptyList(),
+)
+
+@Serializable
+private data class CachedSyllable(
+    val content: String,
+    val start: Int,
+    val end: Int,
+    val phonetic: String? = null,
+)
+
+@Serializable
+private enum class CachedLineKind { Synced, KaraokeMain, KaraokeAccompaniment }
+
+private fun MatchedLyrics.toCache() = CachedMatchedLyrics(
+    source = source,
+    candidate = candidate,
+    score = score,
+    quality = quality,
+    lines = lyrics.lines.mapNotNull(ISyncedLine::toCache),
+)
+
+private fun ISyncedLine.toCache(): CachedLyricsLine? = when (this) {
+    is SyncedLine -> CachedLyricsLine(
+        kind = CachedLineKind.Synced,
+        start = start,
+        end = end,
+        content = content,
+        translation = translation,
+    )
+    is KaraokeLine.MainKaraokeLine -> CachedLyricsLine(
+        kind = CachedLineKind.KaraokeMain,
+        start = start,
+        end = end,
+        content = lyricText(),
+        translation = translation,
+        phonetic = phonetic,
+        alignment = alignment.name,
+        syllables = syllables.map(KaraokeSyllable::toCache),
+        accompaniment = accompanimentLines.orEmpty().mapNotNull(ISyncedLine::toCache),
+    )
+    is KaraokeLine.AccompanimentKaraokeLine -> CachedLyricsLine(
+        kind = CachedLineKind.KaraokeAccompaniment,
+        start = start,
+        end = end,
+        content = lyricText(),
+        translation = translation,
+        phonetic = phonetic,
+        alignment = alignment.name,
+        syllables = syllables.map(KaraokeSyllable::toCache),
+    )
+    else -> null
+}
+
+private fun KaraokeSyllable.toCache() = CachedSyllable(content, start, end, phonetic)
+
+private fun CachedMatchedLyrics.toCurrentLyrics(trackGuid: String): CurrentLyrics {
+    val synced = SyncedLyrics(lines.mapNotNull(CachedLyricsLine::toSdk))
+    val content = synced.lines.joinToString("\n") { line ->
+        listOfNotNull(line.lyricText(), line.translationText()).filter(String::isNotBlank).joinToString("\n")
     }
     return CurrentLyrics(
         document = LyricDocument(
             guid = "online:$trackGuid:${source.name}:${candidate.remoteId}",
             content = content,
-            isLrc = timeline != null,
+            isLrc = false,
             offsetMs = 0,
         ),
-        timeline = timeline,
+        syncedLyrics = synced,
     )
 }
 
-private fun alignSidecar(
-    originalLines: List<TimedLyricsLine>,
-    sidecar: TimedLyricsTrack?,
-): Map<Int, String> {
-    val sidecarLines = sidecar?.lines
-        ?.filter { it.startMs != null && it.text.isNotBlank() }
-        .orEmpty()
-    val available = sidecarLines.indices.toMutableSet()
-    return buildMap {
-        originalLines.forEachIndexed { originalIndex, original ->
-            val originalStart = original.startMs ?: return@forEachIndexed
-            val matchIndex = available.minWithOrNull(
-                compareBy<Int> { index -> kotlin.math.abs(requireNotNull(sidecarLines[index].startMs) - originalStart) }
-                    .thenBy { it },
-            ) ?: return@forEachIndexed
-            val matched = sidecarLines[matchIndex]
-            if (kotlin.math.abs(requireNotNull(matched.startMs) - originalStart) <= MAX_ALIGNMENT_DELTA_MS) {
-                put(originalIndex, matched.text.trim())
-                available.remove(matchIndex)
-            }
-        }
+private fun CachedLyricsLine.toSdk(): ISyncedLine? {
+    if (end < start) return null
+    if (kind == CachedLineKind.Synced) {
+        return content.takeIf(String::isNotBlank)?.let { SyncedLine(it, translation, start, end) }
+    }
+    val restoredSyllables = syllables.mapNotNull(CachedSyllable::toSdk)
+    if (restoredSyllables.isEmpty()) return null
+    val restoredAlignment = runCatching { KaraokeAlignment.valueOf(alignment.orEmpty()) }
+        .getOrDefault(KaraokeAlignment.Unspecified)
+    return when (kind) {
+        CachedLineKind.KaraokeMain -> KaraokeLine.MainKaraokeLine(
+            syllables = restoredSyllables,
+            translation = translation,
+            alignment = restoredAlignment,
+            start = start,
+            end = end,
+            phonetic = phonetic,
+            accompanimentLines = accompaniment.mapNotNull {
+                it.toSdk() as? KaraokeLine.AccompanimentKaraokeLine
+            },
+        )
+        CachedLineKind.KaraokeAccompaniment -> KaraokeLine.AccompanimentKaraokeLine(
+            syllables = restoredSyllables,
+            translation = translation,
+            alignment = restoredAlignment,
+            start = start,
+            end = end,
+            phonetic = phonetic,
+        )
+        CachedLineKind.Synced -> null
     }
 }
 
-private fun sameLyricText(first: String?, second: String?): Boolean {
-    if (first.isNullOrBlank() || second.isNullOrBlank()) return false
-    return first.replace(Regex("[（(][^）)]*[）)]|\\s+"), "").trim() ==
-        second.replace(Regex("[（(][^）)]*[）)]|\\s+"), "").trim()
-}
+private fun CachedSyllable.toSdk(): KaraokeSyllable? =
+    takeIf { end >= start }?.let { KaraokeSyllable(content, start, end, phonetic) }
 
-private fun staticText(
-    original: TimedLyricsTrack,
-    translation: TimedLyricsTrack?,
-    romanization: TimedLyricsTrack?,
-): String = buildList {
-    addAll(original.lines.map { it.text }.filter(String::isNotBlank))
-    translation?.lines?.map { it.text }?.filter(String::isNotBlank)?.let(::addAll)
-    romanization?.lines?.map { it.text }?.filter(String::isNotBlank)?.let(::addAll)
-}.distinct().joinToString("\n")
-
-private fun Long.toLrcTimestamp(): String {
-    val minutes = this / 60_000L
-    val seconds = (this % 60_000L) / 1_000L
-    val millis = this % 1_000L
-    return "[%02d:%02d.%03d]".format(minutes, seconds, millis)
-}
-
-private const val MATCH_PROTOCOL_VERSION = "lddc-2"
-private const val MAX_ALIGNMENT_DELTA_MS = 1_500L
+private const val MATCH_PROTOCOL_VERSION = "lyrics-sdk-4"

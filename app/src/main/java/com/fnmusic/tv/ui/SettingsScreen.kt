@@ -2,7 +2,6 @@ package com.fnmusic.tv.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -129,7 +128,7 @@ internal fun SettingsScreen(container: AuthenticatedAppDependencies) {
 }
 
 @Composable
-private fun SettingsCheckbox(
+internal fun SettingsCheckbox(
     label: String,
     selected: Boolean,
     onClick: () -> Unit,
@@ -146,7 +145,6 @@ private fun SettingsCheckbox(
                 if (focused) FnColors.Coral else Color(0xFF454A50),
                 RoundedCornerShape(6.dp),
             )
-            .focusable()
             .toggleable(
                 value = selected,
                 role = Role.Checkbox,
