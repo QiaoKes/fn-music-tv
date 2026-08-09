@@ -6,8 +6,11 @@ import kotlinx.coroutines.runBlocking
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -32,7 +35,11 @@ class ConnectionResolverTest {
                 ).build(),
             )
             server.enqueue(MockResponse.Builder().code(204).build())
-            val resolver = ConnectionResolver(OkHttpClient(), server.url("api/v1/fn/con").toString())
+            val resolver = ConnectionResolver(
+                client = OkHttpClient(),
+                fnLookupUrl = server.url("api/v1/fn/con").toString(),
+                fnConnectSigner = testSigner(),
+            )
 
             val target = resolver.resolve("sample123", useHttps = true)
 
@@ -40,7 +47,78 @@ class ConnectionResolverTest {
             assertTrue(!target.relayMode)
             val lookup = server.takeRequest()
             assertEquals("POST", lookup.method)
-            assertNotNull(lookup.headers["authx"])
+            assertEquals(
+                "nonce=123456&timestamp=1700000000000&sign=49870382dce6ff180806efc57273f8bf",
+                lookup.headers["authx"],
+            )
+        }
+    }
+
+    @Test fun `signer clears temporary credential bytes after use`() {
+        val prefix = "test-prefix".toByteArray()
+        val apiKey = "test-key".toByteArray()
+        val credentials = object : FnConnectCredentials {
+            override val isConfigured = true
+            override fun authxPrefix(): ByteArray = prefix
+            override fun apiKey(): ByteArray = apiKey
+        }
+
+        val header = FnConnectSigner(
+            credentials = credentials,
+            nonceProvider = { "123456" },
+            timestampProvider = { "1700000000000" },
+        ).authx("/api/v1/fn/con", """{"fnId":"sample123"}""")
+
+        assertNotNull(header)
+        assertTrue(prefix.all { it == 0.toByte() })
+        assertTrue(apiKey.all { it == 0.toByte() })
+    }
+
+    @Test fun `unconfigured signer produces no header`() {
+        val credentials = object : FnConnectCredentials {
+            override val isConfigured = false
+            override fun authxPrefix(): ByteArray = error("must not be read")
+            override fun apiKey(): ByteArray = error("must not be read")
+        }
+
+        assertNull(FnConnectSigner(credentials).authx("/api/v1/fn/con", "{}"))
+    }
+
+    @Test fun `signer clears prefix when api key loading fails`() {
+        val prefix = "test-prefix".toByteArray()
+        val credentials = object : FnConnectCredentials {
+            override val isConfigured = true
+            override fun authxPrefix(): ByteArray = prefix
+            override fun apiKey(): ByteArray = error("unreadable")
+        }
+
+        assertTrue(runCatching { FnConnectSigner(credentials).authx("/api/v1/fn/con", "{}") }.isFailure)
+        assertTrue(prefix.all { it == 0.toByte() })
+    }
+
+    @Test fun `generated credentials match the build environment`() {
+        val expectedPrefix = System.getenv("FN_CONNECT_AUTHX_PREFIX")
+        val expectedApiKey = System.getenv("FN_CONNECT_API_KEY")
+        if (expectedPrefix == null && expectedApiKey == null) {
+            assertFalse(GeneratedFnConnectCredentials.isConfigured)
+            return
+        }
+
+        assertNotNull(expectedPrefix)
+        assertNotNull(expectedApiKey)
+        assertTrue(GeneratedFnConnectCredentials.isConfigured)
+        val expectedPrefixBytes = expectedPrefix!!.toByteArray()
+        val expectedApiKeyBytes = expectedApiKey!!.toByteArray()
+        val actualPrefix = GeneratedFnConnectCredentials.authxPrefix()
+        val actualApiKey = GeneratedFnConnectCredentials.apiKey()
+        try {
+            assertArrayEquals(expectedPrefixBytes, actualPrefix)
+            assertArrayEquals(expectedApiKeyBytes, actualApiKey)
+        } finally {
+            expectedPrefixBytes.fill(0)
+            expectedApiKeyBytes.fill(0)
+            actualPrefix.fill(0)
+            actualApiKey.fill(0)
         }
     }
 
@@ -83,4 +161,14 @@ class ConnectionResolverTest {
             assertEquals("app", request.headers["x-access-source"])
         }
     }
+
+    private fun testSigner(): FnConnectSigner = FnConnectSigner(
+        credentials = object : FnConnectCredentials {
+            override val isConfigured = true
+            override fun authxPrefix(): ByteArray = "test-prefix".toByteArray()
+            override fun apiKey(): ByteArray = "test-key".toByteArray()
+        },
+        nonceProvider = { "123456" },
+        timestampProvider = { "1700000000000" },
+    )
 }

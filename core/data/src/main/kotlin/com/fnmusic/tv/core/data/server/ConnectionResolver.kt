@@ -4,11 +4,9 @@ import android.util.Base64
 import com.fnmusic.tv.core.model.AppError
 import com.fnmusic.tv.core.model.AppException
 import java.io.IOException
-import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlin.random.Random
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -63,10 +61,16 @@ data class ConnectionAccess(
     }
 }
 
-class ConnectionResolver(
+class ConnectionResolver internal constructor(
     private val client: OkHttpClient,
-    private val fnLookupUrl: String = FN_LOOKUP_URL,
+    private val fnLookupUrl: String,
+    private val fnConnectSigner: FnConnectSigner,
 ) {
+    constructor(
+        client: OkHttpClient,
+        fnLookupUrl: String = FN_LOOKUP_URL,
+    ) : this(client, fnLookupUrl, FnConnectSigner())
+
     suspend fun resolve(input: String, useHttps: Boolean): ConnectionTarget {
         val trimmed = input.trim()
         if (!isFnId(trimmed)) {
@@ -121,7 +125,11 @@ class ConnectionResolver(
         val body = "{\"fnId\":${Json.encodeToString(fnId)}}"
         val request = Request.Builder()
             .url(fnLookupUrl)
-            .header("authx", authx(FN_LOOKUP_PATH, body))
+            .header(
+                "authx",
+                fnConnectSigner.authx(FN_LOOKUP_PATH, body)
+                    ?: throw AppException(AppError.FnIdUnavailable),
+            )
             .post(body.toRequestBody(JSON_MEDIA_TYPE))
             .build()
         val response = client.newCall(request).await()
@@ -175,13 +183,6 @@ class ConnectionResolver(
         value.toHttpUrlOrNull()?.let { add(ProbeCandidate(it, relayMode)) }
     }
 
-    private fun authx(path: String, body: String): String {
-        val nonce = Random.nextInt(100000, 1000000).toString()
-        val timestamp = System.currentTimeMillis().toString()
-        val raw = listOf(AUTHX_PREFIX, path, nonce, timestamp, body.md5(), API_KEY).joinToString("_")
-        return "nonce=$nonce&timestamp=$timestamp&sign=${raw.md5()}"
-    }
-
     companion object {
         fun isFnId(value: String): Boolean = FN_ID.matches(value.trim())
 
@@ -192,8 +193,6 @@ class ConnectionResolver(
         private const val FN_LOOKUP_URL = "https://5ddd.com$FN_LOOKUP_PATH"
         private const val DEFAULT_HTTP_PORT = 5666
         private const val DEFAULT_HTTPS_PORT = 5667
-        private const val AUTHX_PREFIX = "REMOVED"
-        private const val API_KEY = "REMOVED"
         private val JSON_MEDIA_TYPE = "application/json".toMediaType()
     }
 }
@@ -213,10 +212,6 @@ private fun JsonObject.int(name: String): Int? = this[name]?.jsonPrimitive?.intO
 
 private fun JsonObject.strings(name: String): List<String> =
     (this[name] as? JsonArray)?.mapNotNull { runCatching { it.jsonPrimitive.content }.getOrNull() }.orEmpty()
-
-private fun String.md5(): String = MessageDigest.getInstance("MD5")
-    .digest(toByteArray(Charsets.UTF_8))
-    .joinToString("") { "%02x".format(it) }
 
 private suspend fun Call.await(): Response = suspendCancellableCoroutine { continuation ->
     continuation.invokeOnCancellation { cancel() }

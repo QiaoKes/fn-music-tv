@@ -41,6 +41,7 @@ ConnectionResolver.verifyAccessCode(
     target: ConnectionTarget,
     accessCode: String,
 ): ConnectionAccess
+FnConnectSigner.authx(path: String, body: String): String?
 SessionRepository.restore()
 data class ApiEnvelope<T>(val code: Int, val msg: String = "", val data: T? = null)
 
@@ -151,6 +152,16 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   FNID. Resolve it through the signed FN Connect lookup, then concurrently probe internal IPv4,
   public IPv6, public IPv4, and HTTPS relay candidates in that priority order. IP candidates try
   HTTP before HTTPS; relay requests carry `Cookie: mode=relay`.
+- FN Connect signing configuration enters Release builds only through the paired
+  `FN_CONNECT_AUTHX_PREFIX` and `FN_CONNECT_API_KEY` environment variables. A non-cacheable Gradle
+  task emits randomized encrypted byte payloads below `core/data/build/generated`; tracked source,
+  Android resources, manifests, `BuildConfig` strings, workflow arguments, and logs never contain
+  the plaintext values. Debug and test compilation may use an explicitly unconfigured generated
+  provider, while Release compilation fails closed when either variable is absent.
+- The generated decoder is static-analysis resistance, not a trust boundary: it reconstructs
+  temporary byte arrays only for the existing MD5 request-signing input, and the signer clears those
+  arrays in `finally`. The request path, nonce range, millisecond timestamp, body digest, separators,
+  and `authx` header format remain byte-for-byte compatible with the upstream protocol.
 - Probe `/access_code_verify` at the origin before the music API. Encode a supplied security code
   once as base64 UTF-8 and attach `x-access-code` plus `x-access-source: app` to login,
   authenticated API, artwork, and Media3 audio requests. Security codes are zero-filled at the UI
@@ -417,7 +428,8 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 - Media3 unstable APIs require `androidx.annotation.OptIn(UnstableApi::class)` at the implementation
   boundary so lint accepts usage without making callers opt in.
 - CI has one packaging responsibility: on `main`, restore the fixed signing identity from protected
-  repository secrets, build the signed sideload Release APK, and verify package, version, signer,
+  repository secrets, read connection-signing values from the branch-restricted `release`
+  environment, build the signed sideload Release APK without Gradle caching, and verify package, version, signer,
   minimum/target SDK, and all four supported ABIs. Upload exactly one universal APK plus its SHA-256
   checksum as a 14-day workflow artifact. Unit tests, lint, store/test APKs, and benchmark variants
   remain explicit local gates rather than CI packaging work.

@@ -16,6 +16,7 @@ jobs:
   package:
     name: Build signed universal APK
     runs-on: ubuntu-latest
+    environment: release
     timeout-minutes: 30
 
     steps:
@@ -70,8 +71,10 @@ jobs:
         with:
           packages: platform-tools platforms;android-36 build-tools;36.0.0
 
-      - name: Restore Gradle build cache
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-disabled: true
 
       - name: Restore release signing identity
         id: signing
@@ -90,9 +93,21 @@ jobs:
 
       - name: Build signed universal APK
         env:
+          FN_CONNECT_API_KEY: ${{ secrets.FN_CONNECT_API_KEY }}
+          FN_CONNECT_AUTHX_PREFIX: ${{ secrets.FN_CONNECT_AUTHX_PREFIX }}
           FN_MUSIC_RELEASE_PASSWORD: ${{ secrets.FN_MUSIC_RELEASE_PASSWORD }}
         run: |
+          set -euo pipefail
+          test -n "$FN_CONNECT_API_KEY"
+          test -n "$FN_CONNECT_AUTHX_PREFIX"
+          echo "::add-mask::$FN_CONNECT_API_KEY"
+          echo "::add-mask::$FN_CONNECT_AUTHX_PREFIX"
+          if git grep -F -q -- "$FN_CONNECT_API_KEY" || git grep -F -q -- "$FN_CONNECT_AUTHX_PREFIX"; then
+            echo "::error::Tracked source contains plaintext release connection configuration."
+            exit 1
+          fi
           ./gradlew --no-daemon --stacktrace \
+            --no-build-cache \
             -PfnMusicReleaseStoreFile="${{ steps.signing.outputs.keystore }}" \
             :app:assembleSideloadRelease
 
@@ -100,12 +115,24 @@ jobs:
         id: artifact
         shell: bash
         env:
+          FN_CONNECT_API_KEY: ${{ secrets.FN_CONNECT_API_KEY }}
+          FN_CONNECT_AUTHX_PREFIX: ${{ secrets.FN_CONNECT_AUTHX_PREFIX }}
           VERSION_CODE: ${{ steps.version.outputs.code }}
           VERSION_NAME: ${{ steps.version.outputs.name }}
         run: |
           set -euo pipefail
+          echo "::add-mask::$FN_CONNECT_API_KEY"
+          echo "::add-mask::$FN_CONNECT_AUTHX_PREFIX"
           source_apk="app/build/outputs/apk/sideload/release/fn-music-tv-$VERSION_NAME-sideload-release.apk"
           test -f "$source_apk"
+
+          scan_dir="$(mktemp -d "$RUNNER_TEMP/apk-plaintext-scan.XXXXXX")"
+          unzip -q "$source_apk" -d "$scan_dir"
+          if grep -R -a -F -q -- "$FN_CONNECT_API_KEY" "$scan_dir" || \
+             grep -R -a -F -q -- "$FN_CONNECT_AUTHX_PREFIX" "$scan_dir"; then
+            echo "::error::Release package contains plaintext connection configuration."
+            exit 1
+          fi
 
           aapt="$ANDROID_HOME/build-tools/36.0.0/aapt"
           apksigner="$ANDROID_HOME/build-tools/36.0.0/apksigner"

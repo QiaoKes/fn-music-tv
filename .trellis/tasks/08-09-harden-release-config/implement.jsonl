@@ -1,0 +1,3 @@
+{"file":".trellis/spec/backend/index.md","reason":"Backend guideline index for the Android data and build-pipeline scope."}
+{"file":".trellis/spec/backend/android-client-contracts.md","reason":"Active contracts for FNID resolution, credentials, release signing, and CI packaging."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Required guidance for changing shared configuration and introducing a signer boundary."}
