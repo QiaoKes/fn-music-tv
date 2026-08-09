@@ -1,0 +1,3 @@
+{"file":".trellis/spec/backend/index.md","reason":"Backend guideline index for review scope."}
+{"file":".trellis/spec/backend/android-client-contracts.md","reason":"Verify protocol, credential, release, and CI contracts remain intact."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Check configuration ownership, duplication, and boundary consistency."}
