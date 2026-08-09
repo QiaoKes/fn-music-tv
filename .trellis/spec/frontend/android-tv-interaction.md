@@ -225,6 +225,11 @@ interface AuthenticatedAppActions {
 - Keep Remember Login and HTTPS in one row as real `Modifier.toggleable` checkbox targets with
   `Role.Checkbox`, a visible square check mark, stable content descriptions `保持登录` and `HTTPS`,
   and explicit D-pad neighbors. Do not simulate them with `ON`/`OFF` text in generic buttons.
+- Settings and login checkboxes use `Modifier.toggleable` as their single focus and activation
+  target. Do not prepend a separate `focusable()` node: the D-pad may focus that outer node while
+  Center activation remains owned by the inner toggleable node, producing focus with no action.
+  Device tests that request checkbox focus must first request `InputMode.Keyboard`; a Compose test
+  starts in touch mode and may correctly reject focus for a system-defined TV focus target.
 - History and password visibility are 52dp icon-only buttons. Use familiar recent-history and eye
   glyphs, preserve content descriptions `历史` and `显示或隐藏密码`, and do not place `历史`,
   `显示密码`, or `隐藏密码` inside the buttons.
@@ -271,10 +276,11 @@ interface AuthenticatedAppActions {
   presentation token and player style are still current. Late A or B completions in an A -> B -> A
   sequence must never replace the newest A revision.
 - Presenter publication and UI transition ownership are separate. The presenter still publishes
-  only the exact current identity. While the new current resource is `Loading`, the player may keep
-  the previous same-namespace `Ready`/`Absent` lyric visual and previous decoded artwork. Replace it
-  immediately when the current resource reaches `Ready`, `Absent`, or `RetryableFailure`; never feed
-  a retained visual back into the presenter or treat it as current resource state.
+  only the exact current identity. While new artwork is `Loading`, the player may keep the previous
+  same-namespace decoded artwork. Lyrics may only retain a `Ready`/`Absent` visual when namespace and
+  `mediaId` both still match; a different song must never display or scroll the previous song's
+  lyrics. Replace retained visuals immediately when the current resource reaches `Ready`, `Absent`,
+  or `RetryableFailure`; never feed one back into the presenter or treat it as current resource state.
 - The visual-continuity owner is remembered at the authenticated-session route host, not inside the
   player route. Leaving the player and selecting another song must reuse the same continuity state;
   disposing and recreating `ImmersivePlayer` cannot clear the last renderable lyric or decoded artwork.
@@ -291,11 +297,20 @@ interface AuthenticatedAppActions {
   averaging with no saturation reward or minimum saturation, cap OKLab chroma at 0.09, constrain
   lightness and preserve at least 4.8:1 primary-text contrast. Fade the artwork into that single
   panel hue; the far edge may only mix in a small amount of the app background.
-- Poster and cover modes render exactly two lyric regions: the current line and the next line. Do
-  not keep the previous line or outgoing lyric content composed. Both regions may show at most two
-  original-text lines and two translation lines; the next region is smaller, muted, and separated
-  from the current region by fixed vertical space. Romanization remains available in the lyric
-  model/cache but is never rendered in the TV player.
+- Poster and cover modes render one Accompanist `KaraokeLyricsView` backed by `SyncedLyrics`.
+  It keeps multiple nearby lines in a compact vertically scrolling list, progressively highlights
+  eligible karaoke syllables, shows translation directly below its source line, and hides phonetic
+  rows. The lyric surface is display-only and must not enter the D-pad focus graph.
+- Keep translation text only one typography step below source text. When the 124 dp control overlay
+  is hidden, reclaim its reserved lower space for the lyric viewport; shrink the viewport before the
+  controls appear. Place the active-line anchor above the vertical midpoint so more upcoming lines
+  remain visible without overlapping playback controls.
+- Key the SDK lyric subtree by the owning namespace/media ID and displayed `SyncedLyrics`. A song or
+  lyric-resource replacement must create a fresh `LazyListState`; retaining an index from the prior
+  timeline can place the new song on an unrelated row even when both time axes are valid.
+- The TV player does not render Accompanist's intro/interlude breathing dots. Disable their drawing
+  with zero dot size and margin; `Color.Transparent` is not a valid off switch because the SDK
+  replaces the supplied alpha with its animation alpha and exposes transparent black as dark dots.
 - Word-timed highlighting extrapolates a lyric-local position from the latest playback snapshot and
   `SystemClock.uptimeMillis()` on each display frame while playing. Re-anchor when the snapshot,
   duration, playback state, or complete `NowPlayingIdentity` changes; paused rendering uses the
@@ -435,6 +450,7 @@ interface AuthenticatedAppActions {
 | HTTP is selected without another login error | Show the unencrypted-LAN warning in the same slot |
 | Login is rendered on any landscape device | Use the same centered form tree; no device-specific alternate UI |
 | Remember Login or HTTPS is activated by touch/Center | Toggle its `ToggleableState` and keep a valid focus target |
+| Settings checkbox receives one Center key cycle or one pointer tap | Toggle once through the same callback; never focus a separate non-activating node |
 | History/password side action is rendered | Show the 52dp familiar icon only and retain its exact content description |
 | Physical pointer taps an enabled Login action | Invoke its command exactly once; Login clears the submitted password and starts submission |
 | Physical pointer taps a disabled Login action | Do not invoke its command or create a focus target |
@@ -447,8 +463,8 @@ interface AuthenticatedAppActions {
 | Poster right-edge palette differs sharply from the complete-artwork palette | Reduce edge influence toward zero and keep the panel anchored to the complete artwork |
 | Poster edge palette is empty | Generate the single panel color from the complete-artwork palette |
 | Poster complete-artwork palette is empty | Use the fixed restrained brand-neutral panel fallback |
-| Current lyrics is Loading during a track switch | Keep the prior same-namespace renderable lyric state; do not flash loading/absent copy |
-| Timed lyrics has an active line | Render that line plus the next line only; omit previous and romanization rows |
+| Current lyrics is Loading during a track switch | Clear the prior song's lyric visual; retain only when namespace and media ID still match |
+| Timed lyrics has an active line | Auto-scroll the SDK list to that line, keep nearby context visible, show translation, and omit phonetic rows |
 | Playback is running between 250 ms progress snapshots | Extrapolate lyric position from the latest uptime anchor on display frames, clamped to duration |
 | Playback is paused or seeking publishes a new snapshot | Stop extrapolation and render/re-anchor from the exact snapshot position |
 | Metadata/artwork/lyrics is validly absent | Publish fallback/`Absent`; do not show retry |
@@ -511,10 +527,13 @@ interface AuthenticatedAppActions {
   name and signer are unchanged while the version code increases.
 - Good: switch A(rev 1) -> B(rev 2) -> A(rev 3), complete requests in reverse order, and display
   only A rev 3 metadata, artwork, and lyrics.
-- Good: switch A -> B, keep A's decoded cover and lyrics only while B is Loading, then replace each
-  independently as B reaches its current terminal state without showing a placeholder frame.
-- Good: render current original plus translation, leave a stable gap, then render the smaller muted
-  next original plus translation in both poster and cover modes without a previous or romanization row.
+- Good: switch A -> B, keep A's decoded cover while B is Loading but clear A's lyrics immediately;
+  B's lyric list starts from B's own timeline and current playback position.
+- Good: render several nearby lyric lines in both poster and cover modes, keep each translation
+  tightly grouped with its source, and smoothly move the active line as playback advances without
+  showing phonetic rows or stealing remote focus.
+- Good: focus the online-lyrics checkbox through D-pad navigation, press Center once, and observe one
+  preference change; a pointer tap invokes the same callback once.
 - Good: anchor at 1,000 ms at uptime 2,000 ms and render a frame at uptime 2,125 ms as 1,125 ms while
   playing; keep it at 1,000 ms while paused and clamp it to the known track duration.
 - Good: a violet subject occupies less area than a pale neutral backdrop; Palette quantization plus
@@ -543,10 +562,12 @@ interface AuthenticatedAppActions {
   its independent delete button never invokes login.
 - Base: a paused track changes its state treatment without changing the now-playing pill bounds.
 - Bad: keying artwork only by cover ID; two songs sharing a cover can reuse a failed or stale attempt.
-- Bad: clearing decoded artwork or renderable lyrics merely because the new exact identity first
-  projects `Loading`; this creates a visible placeholder flash even though a stable visual exists.
-- Bad: composing previous/current/next plus original/translation/romanization in one lyric panel;
-  long multilingual lines collide and make the active lyric hard to scan on a TV.
+- Bad: clearing decoded artwork merely because the same-namespace next identity first projects
+  `Loading`; this creates a visible background flash even though a stable visual exists.
+- Bad: retaining lyrics by namespace alone or reusing a `LazyListState` across media IDs; the new
+  playback clock then drives the previous text or an unrelated row index.
+- Bad: retaining a custom two-line/three-slot lyric projection beside the SDK list, or making SDK
+  line click targets reachable by D-pad; duplicate UI paths drift and steal focus from playback controls.
 - Bad: driving word highlighting directly from the global 250 ms snapshot, or subtracting
   `System.nanoTime()`/frame nanoseconds from `SystemClock.uptimeMillis()`; the first visibly steps and
   the second combines unrelated time bases.
@@ -578,6 +599,8 @@ interface AuthenticatedAppActions {
   profile selection, copying reference-image colors, or nesting each history row in another card.
 - Bad: testing Login with semantics `performClick()` only; it bypasses the physical pointer path
   that previously failed on TV Material buttons inside the scrollable form.
+- Bad: chaining `focusable().toggleable(...)` on one checkbox row; this creates two focus owners and
+  may leave Center attached to a node other than the visibly focused one.
 - Bad: renaming the launcher label but leaving old branding in loading, login, top bar, banner,
   baseline-profile selectors, or README; changing `applicationId` during this visual rebrand.
 - Bad: copying physical-pixel prototype measurements directly as dp at 320 dpi and doubling the
@@ -606,6 +629,9 @@ interface AuthenticatedAppActions {
 - Login option test: activate Remember Login through semantics/touch and assert its
   `ToggleableState` changes from On to Off. D-pad traversal must still reach Remember Login and
   HTTPS in the declared order.
+- Settings checkbox device test: switch the Compose input mode to `InputMode.Keyboard`, request the
+  toggleable node's focus, press Center, and assert Off -> On with exactly one callback. Inject one
+  physical tap and assert On -> Off with exactly one additional callback.
 - Login history Compose/device test: assert account plus `server (protocol)` lines, selected project
   color treatment, independent row/delete focus targets, one direct-login callback on selection,
   no login callback on delete, clear-all behavior, and `已保存密码` without digest exposure.
@@ -633,14 +659,15 @@ interface AuthenticatedAppActions {
 - Poster panel color tests: a divergent right-edge accent stays closer to the complete-artwork
   result than a related edge correction, neutral artwork stays neutral, a warm cover remains warm,
   OKLab chroma is at most 0.09, and primary-text contrast is at least 4.8:1.
-- Player visual transition tests: `Loading` retains only prior `Ready`/`Absent` visuals; current
-  `Ready`, `Absent`, and `RetryableFailure` replace immediately. A namespace change retains nothing.
-- Player lyric projection tests: assert empty, before-first, first, and final timeline boundaries
-  yield only current/next slots. Position tests assert playing extrapolation, paused stability,
-  backward-time clamping, negative-position clamping, and duration clamping.
+- Player visual transition tests: artwork `Loading` may retain prior same-namespace `Ready`/`Absent`;
+  lyric `Loading` retains only the same namespace plus media ID across revisions. A media-ID change
+  rejects prior lyrics, a namespace change retains nothing, and current terminal states replace immediately.
+- Player lyric position tests assert playing extrapolation, paused stability, backward-time
+  clamping, negative-position clamping, and duration clamping.
 - Player lyric device test: inspect poster and cover modes at 1920x1080 and 1280x720; assert only
-  current/next groups appear, original and translation remain separated and readable, romanization
-  is absent, and word highlighting advances smoothly without shifting either region.
+  the SDK scrolling surface is present, nearby lines move when playback advances, original and
+  translation remain tightly grouped and readable, phonetic text is absent, and lyrics cannot take
+  remote focus.
 - Player device test: assert the normal icon-only graph reaches all transports, mode, and queue;
   no visible mode/queue labels exist; content descriptions identify all four modes and the queue;
   four activations complete the mode cycle.
@@ -686,6 +713,16 @@ interface AuthenticatedAppActions {
   direct logout/verification call; coordinator order tests cover switch-account and invalid auth.
 
 ## 7. Wrong vs Correct
+
+```kotlin
+// Wrong: the outer focus target can receive D-pad focus without owning checkbox activation.
+Modifier
+    .focusable()
+    .toggleable(value = selected, role = Role.Checkbox) { onToggle() }
+
+// Correct: toggleable is the only focus and activation target.
+Modifier.toggleable(value = selected, role = Role.Checkbox) { onToggle() }
+```
 
 ```kotlin
 // Wrong: revealing controls on key-down lets the matching key-up reach the newly focused button.
@@ -869,8 +906,8 @@ val decoded by produceState<DecodedPlayerArtwork?>(null, request?.key, request?.
 ```
 
 ```kotlin
-// Wrong: word highlighting visibly jumps with the app-wide 250 ms progress ticker.
-LyricLine(positionMs = playbackProgress.positionMs)
+// Wrong: a hand-written fixed-slot lyric renderer jumps with the app-wide 250 ms progress ticker.
+LegacyLyricSlots(positionMs = playbackProgress.positionMs)
 
 // Correct: keep the controller cadence and project only the lyric clock on display frames.
 val elapsedMs = (SystemClock.uptimeMillis() - anchor.observedAtMs).coerceAtLeast(0L)
@@ -880,7 +917,7 @@ val lyricPositionMs = if (anchor.durationMs > 0L) {
 } else {
     projectedMs
 }
-LyricLine(positionMs = lyricPositionMs)
+KaraokeLyricsView(lyrics = syncedLyrics, currentPosition = { lyricPositionMs.toInt() }, /* styles */)
 ```
 
 ```kotlin

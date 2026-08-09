@@ -117,13 +117,14 @@ data class PlaybackCredentials(
 )
 LyricsMatchCoordinator.match(request: LyricsMatchRequest): LyricsMatchResult
 enum class LyricsContentQuality { Basic, Translated, WordTimed }
-data class LyricLine(
-    val startMs: Long,
-    val endMs: Long?,
-    val original: String,
-    val translation: String?,
-    val romanization: String?,
-    val words: List<LyricWord>,
+fun parseLyrics(
+    original: String,
+    translation: String? = null,
+    phonetic: String? = null,
+): SyncedLyrics
+data class CurrentLyrics(
+    val document: LyricDocument,
+    val syncedLyrics: SyncedLyrics?,
 )
 ```
 
@@ -291,14 +292,27 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 
 ### Online lyric selection and presentation
 
+- `core:lyrics` uses Accompanist Lyrics Core as the only runtime lyric model and parser registry.
+  Parser order is QQ `QqQrcParser`, `NeteaseYrcParser`, `KugouKrcParser`, then
+  `EnhancedLrcParser`; the project owns only the narrow QRC parser because the SDK does not provide
+  one. Do not add a second LRC/YRC/KRC parser, timeline model, or app-layer conversion.
+- Provider order is Netease, QQ Music, then Kugou. Prefer each provider's native word format
+  (`yrc`, `qrc`, `krc`) and retain that provider's LRC endpoint only as a transport fallback.
+  Decryption/decompression is provider transport work; parsed output is always `SyncedLyrics`.
 - Metadata eligibility remains a hard gate. Search every enabled provider concurrently, keep each
   search/fetch bounded by its source timeout, and wait for all provider terminal outcomes. A global
   deadline or early aggregation window must not let the first plain result suppress a later richer
   result.
-- Fetch at most three metadata-ranked candidates per provider, stopping at that provider's first
-  usable result. Compare the usable provider results by `WordTimed > Translated > Basic`, then word,
-  translation, and timed-line coverage, usable line count, metadata score, consensus, configured
-  provider order, and remote ID. Romanization is supplemental and never raises the quality tier.
+- Fetch at most three metadata-ranked candidates per provider and rank every usable fetched result.
+  The deterministic content tuple is: any translation first, translation coverage second, eligible
+  word timing third, known duration delta ascending fourth, provider order fifth, and remote ID
+  last. Metadata scoring remains the pre-fetch eligibility gate; it does not override the fetched
+  content tuple. Phonetic/romanized text never raises the quality tier.
+- Word timing is eligible only when both local and provider durations are known, positive, and their
+  absolute difference is at most 2,000 ms. Unknown duration or a delta above 2,000 ms converts the
+  candidate to SDK `SyncedLine` values while preserving line timing and translation. Line-timed
+  candidates require a known delta of at most 5,000 ms when both durations are available; reject a
+  known larger delta and never display syllable highlighting that cannot be trusted to align.
 - Fall back to first-party FN lyrics only after online matching returns no usable result or a
   terminal online failure. Disabling online matching bypasses every third-party call and goes
   directly to FN lyrics. Caller cancellation is always rethrown and must not trigger fallback.
@@ -306,13 +320,16 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   fingerprint also includes `MATCH_PROTOCOL_VERSION`; change both when selection or projection
   semantics change. A missing, old, or mismatched version is a cache miss, including old positive
   and negative rows.
-- Preserve original word start/end times through `core:lyrics -> core:data -> core:model -> app`.
-  Translation and romanization remain separate nullable fields aligned once to an original line;
-  never replace the original word list with secondary text.
-- TV lyric views use fixed previous/current/next slots. Within a slot, render original,
-  translation, and romanization as separate rows with decreasing emphasis; current original words
-  may progressively highlight from playback position. Do not concatenate semantic rows into one
-  large `Text`, and do not cross-fade two complete slot layouts over each other.
+- Preserve SDK syllable start/end times and separate translation/phonetic fields through
+  `core:lyrics -> core:data -> app`. Persistence may use a private serializable DTO only at the
+  Room cache boundary and must restore the same `SyncedLine`/`KaraokeLine` semantics. There is no
+  public project-owned lyric timeline model.
+- Remove kana-only Japanese source readings in ASCII or full-width parentheses before display,
+  including annotations split across YRC syllables. Preserve ordinary Chinese/English parenthetical
+  content and keep phonetic sidecars available in the model while hiding them in the TV player.
+- TV lyric views use Accompanist Lyrics UI's `KaraokeLyricsView` for multi-line auto-scroll and word
+  highlighting. Both player styles show translations, hide phonetic rows, use compact typography,
+  disable blur, and keep the lyric surface out of the remote focus graph.
 
 ### Playback, snapshot, and current presentation
 
@@ -454,6 +471,12 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 | All online lyric searches succeed with no eligible candidates | `LyricsMatchResult.NotFound`, then FN fallback |
 | At least one online result is usable and other providers fail | Select the richest usable result; do not fall back |
 | No online result is usable and a provider times out | `NetworkFailure`, then FN fallback after all providers finish |
+| Word-timed candidate duration delta is exactly 2,000 ms | Keep karaoke syllable timing |
+| Word-timed candidate duration is unknown or delta exceeds 2,000 ms | Convert to line timing; preserve translation and disable word highlighting |
+| Line-timed candidate duration delta is exactly 5,000 ms | Keep it eligible for content ranking |
+| Candidate duration delta exceeds 5,000 ms | Reject it before final content ranking |
+| QRC/KRC native payload is corrupt | Reject that native fetch and try only the same provider's LRC fallback |
+| Source lyric contains `世(よ)` or `世（よ）` | Display `世`; preserve ordinary non-kana parentheses |
 | Matched-lyric cache schema/protocol is missing or stale | Reject row and rematch; never decode with the current default |
 | Caller cancels lyric matching | Rethrow `CancellationException`; cancel children and do not request FN lyrics |
 | I/O, HTTP 408/429/5xx | `NetworkUnavailable`, retryable; current resources make at most 3 total attempts |
@@ -560,8 +583,13 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   login immediately, while deleting one leaves the other's encrypted credentials intact.
 - Good: QQ returns a plain `RTRT` lyric first, Netease later returns word-timed bilingual content,
   and the final selection is Netease only after all bounded provider work completes.
-- Good: the active lyric renders original text at primary size, translation below it at a smaller
-  size, romanization as tertiary text, and timed words brighten without resizing the slot.
+- Good: a translated line-timed Netease result beats an untranslated word-timed QQ result; among
+  equally translated candidates, eligible word timing beats duration delta, then smaller delta
+  wins, then Netease/QQ/Kugou breaks an exact tie.
+- Good: the active lyric renders original text at primary size, translation directly below it, and
+  timed syllables brighten while the SDK list scrolls without exposing phonetic rows.
+- Base: a YRC result with unknown provider duration keeps synchronized line starts and translation
+  but becomes `SyncedLine`, so no misleading word highlight appears.
 - Base: a network failure returns valid Room page/index/lyric data where permitted, persists it in
   the process LRU, and avoids another request while retained.
 - Base: a current artwork request receiving `503`, `429`, then valid bytes succeeds on its third and
@@ -653,12 +681,15 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   A -> B -> A stale rejection,
   missing-cover enrichment, selective manual retry, terminal `404`/empty fallback, and cancellation
   without a retryable UI error.
+- `LyricsSdkTest`/`OnlineLyricsSourcesTest`: LRC/YRC/QRC/KRC fixtures, native provider transport and
+  LRC fallback, XML QRC extraction, word times, bilingual sidecars, corrupt input, and kana-only
+  parenthetical annotation removal with non-kana counterexamples.
 - `LyricsMatchCoordinatorTest`: all-provider completion, per-source timeout bounds, cancellation,
-  maximum three fetches per provider, terminal error classification, and deterministic
-  `WordTimed > Translated > Basic` selection including the `RTRT` regression.
-- `OnlineLyricsResolverTest`/`LrcParserTest`: required cache schema invalidation, metadata protocol
-  fingerprinting, unique sidecar alignment, semantic row round trip, and original word start/end
-  preservation. Player UI projection tests assert fixed three-slot boundary behavior.
+  all three candidate fetches per provider, terminal error classification, exact 2,000/5,000 ms boundaries,
+  unknown-duration downgrade, translation/delta/provider tie breaks, and the `RTRT` regression.
+- `OnlineLyricsResolverTest`: required cache schema invalidation, metadata protocol fingerprinting,
+  SDK `SyncedLine`/`KaraokeLine` round trip, sidecar preservation, and original syllable start/end
+  preservation. Player device tests assert compact bilingual spacing and auto-scroll.
 - CI-equivalent local gate: all named workflow Gradle tasks must succeed and output four app APKs,
   two app Android-test APKs, and benchmark APKs.
 - Formal APK verification: `aapt dump badging` asserts package `com.fnmusic.tv`, the managed version
@@ -682,11 +713,12 @@ data class Envelope(val schemaVersion: Int, val matched: MatchedLyrics?)
 ```
 
 ```kotlin
-// Wrong: destroys word timing and lets translated text compete for the same visual line.
-line.copy(words = listOf(original, translation).map { LyricWord(line.startMs, line.endMs, it) })
+// Wrong: parallel custom parsers and models drift from the SDK consumed by the player.
+val timeline = LegacyYrcParser.parse(raw).toLyricTimeline()
 
-// Correct: preserve timed original words and keep sidecars semantically separate.
-LyricLine(startMs, endMs, original, translation, romanization, originalWords)
+// Correct: provider transport unwraps bytes, then one registry returns the runtime SDK model.
+val lyrics: SyncedLyrics = parseLyrics(raw, translation, phonetic)
+val displayLyrics = if (durationDeltaMs <= 2_000L) lyrics else lyrics.withoutWordTiming()
 ```
 
 ```kotlin
