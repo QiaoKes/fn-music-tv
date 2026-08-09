@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 17
+- **Total Sessions**: 18
 - **Last Active**: 2026-08-09
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~386 | Active |
+| `journal-1.md` | ~408 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 18 | 2026-08-09 | Release configuration maintenance | `61d584f`, `000ff3d` | `main` |
 | 17 | 2026-08-09 | Smooth compact TV lyrics | `33ae74a` | `codex/smooth-compact-tv-lyrics` |
 | 16 | 2026-08-08 | Lyrics quality selection and TV layout | `d698af9` | `codex/lyrics-quality-layout` |
 | 15 | 2026-08-08 | Ship third-party lyrics matching v1.0.2 | `48ce472`, `31f27c4`, `c51f980` | `feature-lyrics-saki` |
