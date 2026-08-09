@@ -406,3 +406,26 @@ Externalized release configuration, added build-time payload protection and veri
 ### Status
 
 [OK] **Completed**
+
+
+## Session 19: Replace TV lyrics stack and release 1.0.5
+
+**Date**: 2026-08-10
+**Task**: Replace TV lyrics stack and release 1.0.5
+**Branch**: `feature-lyricsrecode-saki`
+
+### Summary
+
+Replaced legacy lyric parsing and UI with Accompanist Lyrics, added YRC/QRC/KRC provider support and translation-first matching with 2s/5s duration gates, fixed TV remote online-match activation and lyric scrolling/layout, documented contracts, and released version 1.0.5.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `129470c` | (see git log) |
+| `87fac0f` | (see git log) |
+| `61bfef4` | (see git log) |
+
+### Status
+
+[OK] **Completed**
