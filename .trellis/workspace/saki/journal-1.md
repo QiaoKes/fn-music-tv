@@ -384,3 +384,25 @@ Simplified TV lyrics to current and next groups, removed romanization rendering,
 ### Status
 
 [OK] **Completed**
+
+
+## Session 18: Release configuration maintenance
+
+**Date**: 2026-08-09
+**Task**: Release configuration maintenance
+**Branch**: `main`
+
+### Summary
+
+Externalized release configuration, added build-time payload protection and verification, consolidated repository references, and completed CI and package validation.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `61d584f` | (see git log) |
+| `000ff3d` | (see git log) |
+
+### Status
+
+[OK] **Completed**
