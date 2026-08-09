@@ -10,6 +10,7 @@ import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 
 interface LyricsHttpClient {
@@ -18,6 +19,12 @@ interface LyricsHttpClient {
         query: Map<String, String> = emptyMap(),
         headers: Map<String, String> = emptyMap(),
     ): String
+
+    suspend fun post(
+        url: String,
+        body: String,
+        headers: Map<String, String> = emptyMap(),
+    ): String = throw LyricsTransportException("Lyrics HTTP client does not support POST")
 }
 
 class OkHttpLyricsHttpClient(
@@ -32,7 +39,21 @@ class OkHttpLyricsHttpClient(
             .header("User-Agent", USER_AGENT)
             .apply { headers.forEach(::header) }
             .build()
-        return suspendCancellableCoroutine { continuation ->
+        return execute(request)
+    }
+
+    override suspend fun post(url: String, body: String, headers: Map<String, String>): String {
+        val request = Request.Builder().url(url)
+            .header("Accept", "application/json, text/plain, */*")
+            .header("Content-Type", "application/json")
+            .header("User-Agent", USER_AGENT)
+            .apply { headers.forEach(::header) }
+            .post(body.toRequestBody())
+            .build()
+        return execute(request)
+    }
+
+    private suspend fun execute(request: Request): String = suspendCancellableCoroutine { continuation ->
             val call = client.newCall(request)
             continuation.invokeOnCancellation { call.cancel() }
             call.enqueue(
@@ -56,7 +77,6 @@ class OkHttpLyricsHttpClient(
                 },
             )
         }
-    }
 
     private companion object {
         const val USER_AGENT = "FnMusicTV/0.1 (https://github.com/QiaoKes/fn-music-tv)"

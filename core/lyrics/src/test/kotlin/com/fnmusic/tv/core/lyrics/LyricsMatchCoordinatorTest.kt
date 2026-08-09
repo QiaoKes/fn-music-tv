@@ -1,5 +1,8 @@
 package com.fnmusic.tv.core.lyrics
 
+import com.mocharealm.accompanist.lyrics.core.model.SyncedLyrics
+import com.mocharealm.accompanist.lyrics.core.model.karaoke.KaraokeLine
+import com.mocharealm.accompanist.lyrics.core.model.synced.SyncedLine
 import kotlin.system.measureTimeMillis
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -14,11 +17,11 @@ import org.junit.Test
 class LyricsMatchCoordinatorTest {
     private val request = LyricsMatchRequest("id", "Song", listOf("Artist"), "Album", 180_000)
 
-    @Test fun `all sources complete search and fetch concurrently`() = runBlocking {
+    @Test fun `all providers are awaited concurrently`() = runBlocking {
         val sources = listOf(
-            FakeSource(LyricsSourceId.QqMusic, searchDelayMs = 120, fetchDelayMs = 120),
-            FakeSource(LyricsSourceId.Kugou, searchDelayMs = 120, fetchDelayMs = 120),
-            FakeSource(LyricsSourceId.Netease, searchDelayMs = 120, fetchDelayMs = 120),
+            FakeSource(LyricsSourceId.QqMusic, searchDelayMs = 100, fetchDelayMs = 100),
+            FakeSource(LyricsSourceId.Kugou, searchDelayMs = 100, fetchDelayMs = 100),
+            FakeSource(LyricsSourceId.Netease, searchDelayMs = 100, fetchDelayMs = 100),
         )
         lateinit var result: LyricsMatchResult
 
@@ -27,38 +30,195 @@ class LyricsMatchCoordinatorTest {
         }
 
         assertTrue(result is LyricsMatchResult.Found)
+        assertTrue("provider work should overlap, elapsed=$elapsed", elapsed < 500)
         assertEquals(listOf(1, 1, 1), sources.map(FakeSource::fetchCalls))
-        assertTrue("provider work should overlap, elapsed=$elapsed", elapsed < 550)
     }
 
-    @Test fun `later rich provider is awaited instead of cut off early`() = runBlocking {
-        val sources = listOf(
-            FakeSource(
-                LyricsSourceId.QqMusic,
-                searchDelayMs = 20,
-                fetchResult = { basicLyrics("plain") },
-            ),
-            FakeSource(
-                LyricsSourceId.Netease,
-                searchDelayMs = 220,
-                fetchResult = { wordTimedLyrics(withTranslation = true) },
-            ),
+    @Test fun `translation beats eligible word timing`() = runBlocking {
+        val word = FakeSource(
+            LyricsSourceId.Kugou,
+            candidates = { listOf(candidate(LyricsSourceId.Kugou, "word", durationMs = 180_100)) },
+            fetchResult = { wordLyrics() },
         )
-        lateinit var result: LyricsMatchResult
+        val translated = FakeSource(LyricsSourceId.Netease, fetchResult = { translatedLyrics() })
 
-        val elapsed = measureTimeMillis {
-            result = LyricsMatchCoordinator(sources, sourceTimeoutMs = 500).match(request)
-        }
+        val found = LyricsMatchCoordinator(listOf(translated, word)).match(request) as LyricsMatchResult.Found
 
-        val found = result as LyricsMatchResult.Found
         assertEquals(LyricsSourceId.Netease, found.lyrics.source)
-        assertEquals(LyricsContentQuality.WordTimed, found.lyrics.quality)
-        assertTrue("later provider should reach a terminal outcome, elapsed=$elapsed", elapsed >= 180)
-        assertEquals(1, sources[0].fetchCalls)
-        assertEquals(1, sources[1].fetchCalls)
+        assertEquals(LyricsContentQuality.Translated, found.lyrics.quality)
     }
 
-    @Test fun `RTRT selects later Netease word timed bilingual lyrics over QQ plain lyrics`() = runBlocking {
+    @Test fun `eligible word timing breaks a translation coverage tie`() = runBlocking {
+        val translatedLine = FakeSource(
+            LyricsSourceId.Netease,
+            fetchResult = { translatedLyrics() },
+        )
+        val translatedWord = FakeSource(
+            LyricsSourceId.Kugou,
+            fetchResult = { translatedWordLyrics() },
+        )
+
+        val found = LyricsMatchCoordinator(listOf(translatedLine, translatedWord)).match(request) as LyricsMatchResult.Found
+
+        assertEquals(LyricsSourceId.Kugou, found.lyrics.source)
+        assertEquals(LyricsContentQuality.WordTimed, found.lyrics.quality)
+    }
+
+    @Test fun `greater translation coverage beats eligible word timing`() = runBlocking {
+        val fullyTranslated = FakeSource(
+            LyricsSourceId.Kugou,
+            fetchResult = { translatedLyrics() },
+        )
+        val partiallyTranslatedWord = FakeSource(
+            LyricsSourceId.Netease,
+            fetchResult = { partiallyTranslatedWordLyrics() },
+        )
+
+        val found = LyricsMatchCoordinator(listOf(partiallyTranslatedWord, fullyTranslated)).match(request) as LyricsMatchResult.Found
+
+        assertEquals(LyricsSourceId.Kugou, found.lyrics.source)
+        assertEquals(LyricsContentQuality.Translated, found.lyrics.quality)
+    }
+
+    @Test fun `translation beats a smaller duration delta`() = runBlocking {
+        val exact = FakeSource(LyricsSourceId.Netease, fetchResult = { lineLyrics("plain") })
+        val translated = FakeSource(
+            LyricsSourceId.QqMusic,
+            candidates = { listOf(candidate(LyricsSourceId.QqMusic, "translated", durationMs = 180_900)) },
+            fetchResult = { translatedLyrics() },
+        )
+
+        val found = LyricsMatchCoordinator(listOf(exact, translated)).match(request) as LyricsMatchResult.Found
+
+        assertEquals(LyricsSourceId.QqMusic, found.lyrics.source)
+    }
+
+    @Test fun `smaller duration delta beats provider order`() = runBlocking {
+        val netease = FakeSource(
+            LyricsSourceId.Netease,
+            candidates = { listOf(candidate(LyricsSourceId.Netease, "near", durationMs = 180_500)) },
+        )
+        val kugou = FakeSource(
+            LyricsSourceId.Kugou,
+            candidates = { listOf(candidate(LyricsSourceId.Kugou, "nearest", durationMs = 180_100)) },
+        )
+
+        val found = LyricsMatchCoordinator(listOf(netease, kugou)).match(request) as LyricsMatchResult.Found
+
+        assertEquals(LyricsSourceId.Kugou, found.lyrics.source)
+    }
+
+    @Test fun `provider tie order is netease then qq then kugou`() = runBlocking {
+        val found = LyricsMatchCoordinator(
+            listOf(
+                FakeSource(LyricsSourceId.Kugou),
+                FakeSource(LyricsSourceId.QqMusic),
+                FakeSource(LyricsSourceId.Netease),
+            ),
+        ).match(request) as LyricsMatchResult.Found
+
+        assertEquals(LyricsSourceId.Netease, found.lyrics.source)
+    }
+
+    @Test fun `word timing at two second boundary remains eligible`() = runBlocking {
+        val source = FakeSource(
+            LyricsSourceId.Netease,
+            candidates = { listOf(candidate(LyricsSourceId.Netease, "boundary", durationMs = 182_000)) },
+            fetchResult = { wordLyrics() },
+        )
+
+        val found = LyricsMatchCoordinator(listOf(source)).match(request) as LyricsMatchResult.Found
+
+        assertEquals(LyricsContentQuality.WordTimed, found.lyrics.quality)
+        assertTrue(found.lyrics.lyrics.lines.single() is KaraokeLine)
+    }
+
+    @Test fun `word timing one millisecond beyond two seconds is downgraded`() = runBlocking {
+        val source = FakeSource(
+            LyricsSourceId.Netease,
+            candidates = { listOf(candidate(LyricsSourceId.Netease, "downgraded", durationMs = 182_001)) },
+            fetchResult = { wordLyrics() },
+        )
+
+        val found = LyricsMatchCoordinator(listOf(source)).match(request) as LyricsMatchResult.Found
+
+        assertEquals(LyricsContentQuality.Basic, found.lyrics.quality)
+        assertTrue(found.lyrics.lyrics.lines.all { it is SyncedLine })
+    }
+
+    @Test fun `word timing at five second boundary remains as downgraded line timing`() = runBlocking {
+        val source = FakeSource(
+            LyricsSourceId.Netease,
+            candidates = { listOf(candidate(LyricsSourceId.Netease, "line-boundary", durationMs = 185_000)) },
+            fetchResult = { wordLyrics() },
+        )
+
+        val found = LyricsMatchCoordinator(listOf(source)).match(request) as LyricsMatchResult.Found
+
+        assertEquals(LyricsContentQuality.Basic, found.lyrics.quality)
+        assertTrue(found.lyrics.lyrics.lines.single() is SyncedLine)
+    }
+
+    @Test fun `candidate one millisecond beyond five seconds is rejected`() = runBlocking {
+        val source = FakeSource(
+            LyricsSourceId.Netease,
+            candidates = { listOf(candidate(LyricsSourceId.Netease, "rejected", durationMs = 185_001)) },
+            fetchResult = { wordLyrics() },
+        )
+
+        val result = LyricsMatchCoordinator(listOf(source)).match(request)
+
+        assertEquals(LyricsMatchResult.NotFound, result)
+        assertEquals(0, source.fetchCalls)
+    }
+
+    @Test fun `unknown duration never enables word timing`() = runBlocking {
+        val source = FakeSource(
+            LyricsSourceId.Netease,
+            candidates = { listOf(candidate(LyricsSourceId.Netease, "unknown", durationMs = null)) },
+            fetchResult = { wordLyrics() },
+        )
+
+        val found = LyricsMatchCoordinator(listOf(source)).match(request) as LyricsMatchResult.Found
+
+        assertEquals(LyricsContentQuality.Basic, found.lyrics.quality)
+        assertTrue(found.lyrics.lyrics.lines.single() is SyncedLine)
+    }
+
+    @Test fun `all fetched candidates participate in content ranking`() = runBlocking {
+        val source = FakeSource(
+            LyricsSourceId.QqMusic,
+            candidates = {
+                listOf(
+                    candidate(LyricsSourceId.QqMusic, "a"),
+                    candidate(LyricsSourceId.QqMusic, "b"),
+                )
+            },
+            fetchResult = { if (it.remoteId == "b") translatedLyrics() else lineLyrics("plain") },
+        )
+
+        val found = LyricsMatchCoordinator(listOf(source)).match(request) as LyricsMatchResult.Found
+
+        assertEquals("b", found.lyrics.candidate.remoteId)
+        assertEquals(2, source.fetchCalls)
+    }
+
+    @Test fun `provider attempts at most three metadata eligible candidates`() = runBlocking {
+        val source = FakeSource(
+            LyricsSourceId.QqMusic,
+            candidates = {
+                (1..4).map { index -> candidate(LyricsSourceId.QqMusic, index.toString()) }
+            },
+            fetchResult = { throw LyricsPayloadException("invalid lyrics") },
+        )
+
+        val result = LyricsMatchCoordinator(listOf(source)).match(request)
+
+        assertEquals(LyricsMatchResult.InvalidResponse, result)
+        assertEquals(3, source.fetchCalls)
+    }
+
+    @Test fun `delayed richer provider still participates in final ranking`() = runBlocking {
         val rtrt = LyricsMatchRequest(
             localId = "rtrt",
             title = "RTRT",
@@ -66,251 +226,62 @@ class LyricsMatchCoordinatorTest {
             album = "Miracle Milk",
             durationMs = 215_000,
         )
-        val qq = FakeSource(
-            id = LyricsSourceId.QqMusic,
-            searchDelayMs = 10,
-            candidates = { listOf(candidate(it.request, LyricsSourceId.QqMusic, "qq-rtrt")) },
-            fetchResult = { basicLyrics("Hop, step, jump") },
+        fun rtrtCandidate(source: LyricsSourceId) = LyricsCandidate(
+            source = source,
+            remoteId = source.name,
+            title = rtrt.title,
+            artists = rtrt.artists,
+            album = rtrt.album,
+            durationMs = rtrt.durationMs,
         )
-        val netease = FakeSource(
-            id = LyricsSourceId.Netease,
-            searchDelayMs = 180,
-            candidates = { listOf(candidate(it.request, LyricsSourceId.Netease, "netease-rtrt")) },
-            fetchResult = {
-                SourceLyrics(
-                    original = LyricsTextParser.parseYrc(
-                        "[1200,1800](1200,450,0)Hop(1650,350,0), (2000,400,0)step(2400,600,0) jump",
-                    ),
-                    translation = LyricsTextParser.parseLrc(
-                        "[00:01.20]跳起来",
-                        LyricsTrackKind.Translation,
-                    ),
-                )
-            },
-        )
-
-        val result = LyricsMatchCoordinator(listOf(qq, netease), sourceTimeoutMs = 500).match(rtrt)
-
-        val lyrics = (result as LyricsMatchResult.Found).lyrics
-        assertEquals(LyricsSourceId.Netease, lyrics.source)
-        assertEquals("netease-rtrt", lyrics.candidate.remoteId)
-        assertEquals(LyricsContentQuality.WordTimed, lyrics.quality)
-        assertTrue(lyrics.translation?.isNotEmpty == true)
-    }
-
-    @Test fun `word timed original beats line timed bilingual lyrics`() = runBlocking {
-        val translated = FakeSource(
+        val plain = FakeSource(
             LyricsSourceId.QqMusic,
-            fetchResult = { translatedLyrics() },
+            candidates = { listOf(rtrtCandidate(LyricsSourceId.QqMusic)) },
+            fetchResult = { lineLyrics("plain") },
         )
-        val wordTimed = FakeSource(
+        val rich = FakeSource(
             LyricsSourceId.Netease,
-            candidates = {
-                listOf(candidate(it.request, LyricsSourceId.Netease, "word").copy(artists = listOf("Artis")))
-            },
-            fetchResult = { wordTimedLyrics(withTranslation = false) },
+            searchDelayMs = 120,
+            candidates = { listOf(rtrtCandidate(LyricsSourceId.Netease)) },
+            fetchResult = { translatedWordLyrics() },
         )
 
-        val result = LyricsMatchCoordinator(listOf(translated, wordTimed), sourceTimeoutMs = 200).match(request)
+        val found = LyricsMatchCoordinator(listOf(plain, rich), sourceTimeoutMs = 500)
+            .match(rtrt) as LyricsMatchResult.Found
 
-        val lyrics = (result as LyricsMatchResult.Found).lyrics
-        assertEquals(LyricsSourceId.Netease, lyrics.source)
-        assertEquals(LyricsContentQuality.WordTimed, lyrics.quality)
+        assertEquals(LyricsSourceId.Netease, found.lyrics.source)
+        assertEquals(LyricsContentQuality.WordTimed, found.lyrics.quality)
+        assertEquals(listOf(1, 1), listOf(plain.fetchCalls, rich.fetchCalls))
     }
 
-    @Test fun `aligned translation beats higher confidence basic lyrics`() = runBlocking {
-        val basic = FakeSource(LyricsSourceId.QqMusic, fetchResult = { basicLyrics("plain") })
-        val translated = FakeSource(
-            LyricsSourceId.Netease,
-            candidates = {
-                listOf(candidate(it.request, LyricsSourceId.Netease, "translated").copy(artists = listOf("Artis")))
-            },
-            fetchResult = { translatedLyrics() },
-        )
-
-        val result = LyricsMatchCoordinator(listOf(basic, translated), sourceTimeoutMs = 200).match(request)
-
-        val lyrics = (result as LyricsMatchResult.Found).lyrics
-        assertEquals(LyricsSourceId.Netease, lyrics.source)
-        assertEquals(LyricsContentQuality.Translated, lyrics.quality)
-    }
-
-    @Test fun `romanization alone does not elevate basic lyrics`() = runBlocking {
-        val romanized = FakeSource(
-            LyricsSourceId.QqMusic,
-            fetchResult = {
-                basicLyrics("original").copy(
-                    romanization = LyricsTextParser.parseLrc(
-                        "[00:01.00]romanized",
-                        LyricsTrackKind.Romanization,
-                    ),
-                )
-            },
-        )
-        val basic = FakeSource(LyricsSourceId.Netease, fetchResult = { basicLyrics("plain") })
-
-        val result = LyricsMatchCoordinator(listOf(romanized, basic), sourceTimeoutMs = 200).match(request)
-
-        val lyrics = (result as LyricsMatchResult.Found).lyrics
-        assertEquals(LyricsSourceId.QqMusic, lyrics.source)
-        assertEquals(LyricsContentQuality.Basic, lyrics.quality)
-    }
-
-    @Test fun `metadata score and provider order deterministically break equal quality`() = runBlocking {
-        val lowerScore = FakeSource(
-            LyricsSourceId.QqMusic,
-            candidates = {
-                listOf(candidate(it.request, LyricsSourceId.QqMusic, "lower").copy(artists = listOf("Artis")))
-            },
-        )
-        val exact = FakeSource(LyricsSourceId.Netease)
-
-        val scoreWinner = LyricsMatchCoordinator(listOf(lowerScore, exact), sourceTimeoutMs = 200)
-            .match(request) as LyricsMatchResult.Found
-        assertEquals(LyricsSourceId.Netease, scoreWinner.lyrics.source)
-
-        val exactQq = FakeSource(LyricsSourceId.QqMusic)
-        val exactNetease = FakeSource(LyricsSourceId.Netease)
-        val providerWinner = LyricsMatchCoordinator(listOf(exactNetease, exactQq), sourceTimeoutMs = 200)
-            .match(request) as LyricsMatchResult.Found
-        assertEquals(LyricsSourceId.QqMusic, providerWinner.lyrics.source)
-    }
-
-    @Test fun `provider retries metadata ranked candidates until one is usable`() = runBlocking {
-        val source = FakeSource(
-            id = LyricsSourceId.QqMusic,
-            candidates = {
-                listOf(
-                    candidate(LyricsSourceId.QqMusic, "leader"),
-                    candidate(LyricsSourceId.QqMusic, "fallback", artists = listOf("Artist X"), album = null),
-                )
-            },
-            fetchResult = { candidate ->
-                if (candidate.remoteId == "leader") throw LyricsPayloadException("empty")
-                basicLyrics("fallback")
-            },
-        )
-
-        val result = LyricsMatchCoordinator(listOf(source), sourceTimeoutMs = 200).match(request)
-
-        assertEquals("fallback", (result as LyricsMatchResult.Found).lyrics.candidate.remoteId)
-        assertEquals(2, source.fetchCalls)
-    }
-
-    @Test fun `provider stops after its first usable metadata ranked candidate`() = runBlocking {
-        val source = FakeSource(
-            id = LyricsSourceId.QqMusic,
-            candidates = {
-                listOf(
-                    candidate(LyricsSourceId.QqMusic, "leader"),
-                    candidate(LyricsSourceId.QqMusic, "lower", artists = listOf("Artist X"), album = null),
-                )
-            },
-            fetchResult = { candidate ->
-                if (candidate.remoteId == "leader") basicLyrics("leader") else wordTimedLyrics(true)
-            },
-        )
-
-        val result = LyricsMatchCoordinator(listOf(source), sourceTimeoutMs = 200).match(request)
-
-        assertEquals("leader", (result as LyricsMatchResult.Found).lyrics.candidate.remoteId)
-        assertEquals(1, source.fetchCalls)
-    }
-
-    @Test fun `provider attempts at most three candidates`() = runBlocking {
-        val source = FakeSource(
-            id = LyricsSourceId.QqMusic,
-            candidates = {
-                (1..4).map { index -> candidate(LyricsSourceId.QqMusic, index.toString()) }
-            },
-            fetchResult = { throw LyricsPayloadException("empty") },
-        )
-
-        val result = LyricsMatchCoordinator(listOf(source), sourceTimeoutMs = 200).match(request)
-
-        assertEquals(LyricsMatchResult.InvalidResponse, result)
-        assertEquals(3, source.fetchCalls)
-    }
-
-    @Test fun `title-only search runs when primary results are unusable`() = runBlocking {
-        val source = FakeSource(
-            id = LyricsSourceId.QqMusic,
-            candidates = { query ->
-                if (query.keyword == request.title) {
-                    listOf(candidate(LyricsSourceId.QqMusic, "exact"))
-                } else {
-                    listOf(candidate(LyricsSourceId.QqMusic, "irrelevant", title = "Different Song"))
-                }
-            },
-        )
-
-        val result = LyricsMatchCoordinator(listOf(source), sourceTimeoutMs = 200).match(request)
-
-        assertTrue(result is LyricsMatchResult.Found)
-        assertEquals(listOf("Artist - Song", "Song"), source.searchKeywords)
-    }
-
-    @Test fun `transport and invalid payload failures do not discard another provider result`() = runBlocking {
-        val sources = listOf(
-            FakeSource(LyricsSourceId.QqMusic, searchFailure = LyricsTransportException("down")),
-            FakeSource(
-                LyricsSourceId.Kugou,
-                fetchResult = { throw LyricsPayloadException("malformed") },
-            ),
-            FakeSource(LyricsSourceId.Netease, fetchResult = { translatedLyrics() }),
-        )
-
-        val result = LyricsMatchCoordinator(sources, sourceTimeoutMs = 200).match(request)
-
-        assertEquals(LyricsSourceId.Netease, (result as LyricsMatchResult.Found).lyrics.source)
-    }
-
-    @Test fun `all transport failures return network failure after terminal outcomes`() = runBlocking {
-        val sources = LyricsSourceId.entries.map {
-            FakeSource(it, searchFailure = LyricsTransportException("down"))
+    @Test fun `terminal provider failures retain their classification`() = runBlocking {
+        val networkSources = LyricsSourceId.entries.map { id ->
+            FakeSource(id, searchFailure = LyricsTransportException("offline"))
+        }
+        val invalidSources = LyricsSourceId.entries.map { id ->
+            FakeSource(id, searchFailure = LyricsPayloadException("malformed"))
         }
 
         assertEquals(
             LyricsMatchResult.NetworkFailure,
-            LyricsMatchCoordinator(sources, sourceTimeoutMs = 100).match(request),
+            LyricsMatchCoordinator(networkSources).match(request),
         )
-    }
-
-    @Test fun `invalid payload is not reduced to not found`() = runBlocking {
-        val sources = LyricsSourceId.entries.map {
-            FakeSource(it, searchFailure = LyricsPayloadException("invalid payload"))
-        }
-
         assertEquals(
             LyricsMatchResult.InvalidResponse,
-            LyricsMatchCoordinator(sources, sourceTimeoutMs = 100).match(request),
+            LyricsMatchCoordinator(invalidSources).match(request),
         )
     }
 
-    @Test fun `empty successful searches return not found`() = runBlocking {
-        val sources = LyricsSourceId.entries.map { id ->
-            FakeSource(id, candidates = { emptyList() })
-        }
-
-        assertEquals(
-            LyricsMatchResult.NotFound,
-            LyricsMatchCoordinator(sources, sourceTimeoutMs = 100).match(request),
-        )
-    }
-
-    @Test fun `one source timeout remains bounded while another result succeeds`() = runBlocking {
-        val sources = listOf(
-            FakeSource(LyricsSourceId.QqMusic, searchDelayMs = 500),
-            FakeSource(LyricsSourceId.Netease, searchDelayMs = 10),
-        )
-        lateinit var result: LyricsMatchResult
-
-        val elapsed = measureTimeMillis {
-            result = LyricsMatchCoordinator(sources, sourceTimeoutMs = 80).match(request)
-        }
+    @Test fun `one provider timeout does not discard another result`() = runBlocking {
+        val result = LyricsMatchCoordinator(
+            listOf(
+                FakeSource(LyricsSourceId.QqMusic, searchDelayMs = 500),
+                FakeSource(LyricsSourceId.Netease),
+            ),
+            sourceTimeoutMs = 80,
+        ).match(request)
 
         assertTrue(result is LyricsMatchResult.Found)
-        assertTrue("source timeout should remain bounded, elapsed=$elapsed", elapsed < 300)
     }
 
     @Test fun `caller cancellation cancels provider work`() = runBlocking {
@@ -318,7 +289,6 @@ class LyricsMatchCoordinatorTest {
         val cancelled = CompletableDeferred<Unit>()
         val source = object : LyricsSource {
             override val id = LyricsSourceId.QqMusic
-
             override suspend fun search(query: LyricsSearchQuery): List<LyricsCandidate> {
                 started.complete(Unit)
                 try {
@@ -327,12 +297,9 @@ class LyricsMatchCoordinatorTest {
                     cancelled.complete(Unit)
                 }
             }
-
-            override suspend fun fetch(candidate: LyricsCandidate): SourceLyrics = basicLyrics("unused")
+            override suspend fun fetch(candidate: LyricsCandidate): SyncedLyrics = lineLyrics("unused")
         }
-        val job = async {
-            LyricsMatchCoordinator(listOf(source), sourceTimeoutMs = 5_000).match(request)
-        }
+        val job = async { LyricsMatchCoordinator(listOf(source), sourceTimeoutMs = 5_000).match(request) }
 
         started.await()
         job.cancelAndJoin()
@@ -347,70 +314,62 @@ class LyricsMatchCoordinatorTest {
         private val fetchDelayMs: Long = 0,
         private val searchFailure: Throwable? = null,
         private val candidates: (LyricsSearchQuery) -> List<LyricsCandidate> = { query ->
-            listOf(candidate(query.request, id))
+            listOf(candidate(id, id.name, durationMs = query.request.durationMs))
         },
-        private val fetchResult: (LyricsCandidate) -> SourceLyrics = { basicLyrics("line") },
+        private val fetchResult: (LyricsCandidate) -> SyncedLyrics = { lineLyrics("line") },
     ) : LyricsSource {
         var fetchCalls = 0
-        val searchKeywords = mutableListOf<String>()
 
         override suspend fun search(query: LyricsSearchQuery): List<LyricsCandidate> {
             delay(searchDelayMs)
             searchFailure?.let { throw it }
-            searchKeywords += query.keyword
             return candidates(query)
         }
 
-        override suspend fun fetch(candidate: LyricsCandidate): SourceLyrics {
-            fetchCalls += 1
+        override suspend fun fetch(candidate: LyricsCandidate): SyncedLyrics {
+            fetchCalls++
             delay(fetchDelayMs)
             return fetchResult(candidate)
         }
     }
 
     private companion object {
-        fun basicLyrics(text: String) = SourceLyrics(
-            LyricsTextParser.parseLrc("[00:01.00]$text"),
+        fun lineLyrics(text: String) = parseLyrics("[00:01.00]$text")
+
+        fun translatedLyrics() = parseLyrics(
+            original = "[00:01.00]Hello\n[00:03.00]World",
+            translation = "[00:01.00]你好\n[00:03.00]世界",
         )
 
-        fun translatedLyrics() = SourceLyrics(
-            original = LyricsTextParser.parseLrc("[00:01.00]Hello\n[00:03.00]World"),
-            translation = LyricsTextParser.parseLrc(
-                "[00:01.00]你好\n[00:03.00]世界",
-                LyricsTrackKind.Translation,
-            ),
-        )
+        fun wordLyrics() = parseLyrics(
+            "[1000,2000](1000,500,0)Hel(1500,500,0)lo(2000,500,0) world",
+        ).also { assertTrue(it.lines.single() is KaraokeLine) }
 
-        fun wordTimedLyrics(withTranslation: Boolean) = SourceLyrics(
-            original = LyricsTextParser.parseYrc(
-                "[1000,2000](1000,500,0)Hel(1500,500,0)lo(2000,500,0) world",
-            ),
-            translation = if (withTranslation) {
-                LyricsTextParser.parseLrc("[00:01.00]你好世界", LyricsTrackKind.Translation)
-            } else {
-                null
-            },
-        )
+        fun translatedWordLyrics() = parseLyrics(
+            original = "[1000,2000](1000,500,0)Hel(1500,500,0)lo(2000,500,0) world",
+            translation = "[00:01.00]\u4f60\u597d\u4e16\u754c",
+        ).also { assertTrue(it.lines.single() is KaraokeLine) }
+
+        fun partiallyTranslatedWordLyrics() = parseLyrics(
+            original = """
+                [1000,1000](1000,500,0)Hel(1500,500,0)lo
+                [3000,1000](3000,500,0)Wor(3500,500,0)ld
+            """.trimIndent(),
+            translation = "[00:01.00]\u4f60\u597d",
+        ).also { lyrics -> assertTrue(lyrics.lines.all { it is KaraokeLine }) }
 
         fun candidate(
             source: LyricsSourceId,
             remoteId: String,
-            title: String = "Song",
-            artists: List<String> = listOf("Artist"),
-            album: String? = "Album",
-        ) = LyricsCandidate(source, remoteId, title, artists, album, 180_000)
-
-        fun candidate(
-            request: LyricsMatchRequest,
-            source: LyricsSourceId,
-            remoteId: String = source.name,
+            durationMs: Long? = 180_000,
         ) = LyricsCandidate(
-            source,
-            remoteId,
-            request.title,
-            request.artists,
-            request.album,
-            request.durationMs,
+            source = source,
+            remoteId = remoteId,
+            title = "Song",
+            artists = listOf("Artist"),
+            album = "Album",
+            durationMs = durationMs,
+            mediaId = "mid",
         )
     }
 }

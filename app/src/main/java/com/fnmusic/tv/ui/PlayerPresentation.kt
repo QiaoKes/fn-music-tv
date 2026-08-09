@@ -61,7 +61,18 @@ internal fun <T> retainPlayerVisualResource(
     current
 }
 
-internal class PlayerVisualResourceContinuity<T> {
+internal enum class PlayerVisualRetentionScope {
+    SameNamespace,
+    SameMedia;
+
+    fun retains(previous: NowPlayingIdentity, current: NowPlayingIdentity): Boolean =
+        previous.namespace == current.namespace &&
+            (this == SameNamespace || previous.mediaId == current.mediaId)
+}
+
+internal class PlayerVisualResourceContinuity<T>(
+    private val retentionScope: PlayerVisualRetentionScope,
+) {
     private var terminal: OwnedPlayerVisualResource<T>? = null
 
     fun resolve(
@@ -73,7 +84,7 @@ internal class PlayerVisualResourceContinuity<T> {
             return current
         }
         val retained = terminal
-            ?.takeIf { it.identity.namespace == identity.namespace }
+            ?.takeIf { retentionScope.retains(it.identity, identity) }
             ?.state
             ?: NowPlayingResourceState.Loading
         return retainPlayerVisualResource(retained, current).also { displayed ->

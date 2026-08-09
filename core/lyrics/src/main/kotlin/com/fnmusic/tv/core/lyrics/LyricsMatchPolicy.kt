@@ -10,11 +10,12 @@ import kotlin.math.max
 data class LyricsMatchPolicy(
     val minimumScore: Double = 80.0,
     val minimumTitleScore: Double = 50.0,
-    val maximumDurationDeltaMs: Long = 4_000L,
+    val maximumDurationDeltaMs: Long = 5_000L,
+    val maximumWordTimingDeltaMs: Long = 2_000L,
     val sourceOrder: List<LyricsSourceId> = listOf(
+        LyricsSourceId.Netease,
         LyricsSourceId.QqMusic,
         LyricsSourceId.Kugou,
-        LyricsSourceId.Netease,
     ),
 )
 

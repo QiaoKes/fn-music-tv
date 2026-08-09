@@ -40,8 +40,12 @@ class LyricsCandidateScorerTest {
         assertTrue(scored.all { it.consensusCount == 2 })
     }
 
-    @Test fun `duration mismatch over four seconds is rejected`() {
-        assertTrue(scorer.score(request, listOf(candidate(durationMs = 273_001))).isEmpty())
+    @Test fun `duration mismatch at five seconds is accepted`() {
+        assertEquals(1, scorer.score(request, listOf(candidate(durationMs = 274_000))).size)
+    }
+
+    @Test fun `duration mismatch one millisecond over five seconds is rejected`() {
+        assertTrue(scorer.score(request, listOf(candidate(durationMs = 274_001))).isEmpty())
     }
 
     @Test fun `instrumental and live conflicts are rejected`() {

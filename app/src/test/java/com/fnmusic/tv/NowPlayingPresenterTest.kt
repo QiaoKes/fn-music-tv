@@ -598,7 +598,7 @@ class NowPlayingPresenterTest {
                 isLrc = false,
                 offsetMs = 0L,
             ),
-            timeline = null,
+            syncedLyrics = null,
         )
 
         fun NowPlayingPresentation?.isReadyForRevision(revision: Long): Boolean =

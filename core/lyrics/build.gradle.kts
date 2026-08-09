@@ -16,6 +16,7 @@ java {
 }
 
 dependencies {
+    api(libs.accompanist.lyrics.core)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp)

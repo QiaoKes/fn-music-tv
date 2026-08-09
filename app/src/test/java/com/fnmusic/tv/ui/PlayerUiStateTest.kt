@@ -167,23 +167,6 @@ class PlayerUiStateTest {
         )
     }
 
-    @Test fun `lyric window keeps active line near the second slot`() {
-        assertEquals(3..5, playerLyricWindow(lineCount = 10, activeIndex = 4))
-    }
-
-    @Test fun `lyric window remains full at timeline boundaries`() {
-        assertEquals(0..2, playerLyricWindow(lineCount = 10, activeIndex = -1))
-        assertEquals(7..9, playerLyricWindow(lineCount = 10, activeIndex = 9))
-        assertEquals(0..2, playerLyricWindow(lineCount = 3, activeIndex = 1))
-    }
-
-    @Test fun `lyrics show only current and next lines at timeline boundaries`() {
-        assertEquals(listOf(null, null), currentAndNextLyricIndices(lineCount = 0, activeIndex = -1))
-        assertEquals(listOf(null, 0), currentAndNextLyricIndices(lineCount = 4, activeIndex = -1))
-        assertEquals(listOf(0, 1), currentAndNextLyricIndices(lineCount = 4, activeIndex = 0))
-        assertEquals(listOf(3, null), currentAndNextLyricIndices(lineCount = 4, activeIndex = 3))
-    }
-
     @Test fun `lyric position advances between controller snapshots only while playing`() {
         assertEquals(
             1_125L,
@@ -318,15 +301,28 @@ class PlayerUiStateTest {
         )
     }
 
-    @Test fun `player visual continuity survives route recreation and rejects another namespace`() {
-        val continuity = PlayerVisualResourceContinuity<String>()
+    @Test fun `same media visual continuity retains lyrics across presentation revisions`() {
+        val continuity = PlayerVisualResourceContinuity<String>(PlayerVisualRetentionScope.SameMedia)
+        val firstIdentity = nowPlayingIdentity()
+        val revisedIdentity = firstIdentity.copy(presentationRevision = 43)
+        val oldLyrics = NowPlayingResourceState.Ready("old lyrics")
+
+        assertSame(oldLyrics, continuity.resolve(firstIdentity, oldLyrics))
+        assertSame(oldLyrics, continuity.resolve(revisedIdentity, NowPlayingResourceState.Loading))
+    }
+
+    @Test fun `same media visual continuity rejects lyrics from another song`() {
+        val continuity = PlayerVisualResourceContinuity<String>(PlayerVisualRetentionScope.SameMedia)
         val firstIdentity = nowPlayingIdentity()
         val nextIdentity = firstIdentity.copy(mediaId = "track-b", presentationRevision = 43)
         val oldLyrics = NowPlayingResourceState.Ready("old lyrics")
         val newLyrics = NowPlayingResourceState.Ready("new lyrics")
 
         assertSame(oldLyrics, continuity.resolve(firstIdentity, oldLyrics))
-        assertSame(oldLyrics, continuity.resolve(nextIdentity, NowPlayingResourceState.Loading))
+        assertSame(
+            NowPlayingResourceState.Loading,
+            continuity.resolve(nextIdentity, NowPlayingResourceState.Loading),
+        )
         assertSame(newLyrics, continuity.resolve(nextIdentity, newLyrics))
         assertSame(
             NowPlayingResourceState.Loading,
@@ -335,6 +331,16 @@ class PlayerUiStateTest {
                 NowPlayingResourceState.Loading,
             ),
         )
+    }
+
+    @Test fun `same namespace visual continuity retains artwork across songs`() {
+        val continuity = PlayerVisualResourceContinuity<String>(PlayerVisualRetentionScope.SameNamespace)
+        val firstIdentity = nowPlayingIdentity()
+        val nextIdentity = firstIdentity.copy(mediaId = "track-b", presentationRevision = 43)
+        val oldArtwork = NowPlayingResourceState.Ready("old artwork")
+
+        assertSame(oldArtwork, continuity.resolve(firstIdentity, oldArtwork))
+        assertSame(oldArtwork, continuity.resolve(nextIdentity, NowPlayingResourceState.Loading))
     }
 
     @Test fun `poster surface preserves hue without forcing glare`() {
