@@ -1,0 +1,6 @@
+{"file":".trellis/spec/frontend/android-tv-interaction.md","reason":"Settings、全局更新弹窗、下载状态和系统授权返回必须遵守 TV 遥控焦点、触屏与路由恢复契约。"}
+{"file":".trellis/spec/backend/android-client-contracts.md","reason":"更新功能跨 Android 网络、应用生命周期、签名 APK 与 GitHub Actions 发布产物，必须保持客户端和 CI 既有安全边界。"}
+{"file":".trellis/spec/backend/self-update-distribution.md","reason":"实现 sideload 自更新、CI 元数据、Cloudflare 发布后台和 R2 发布顺序的专用可执行契约。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"更新检查、下载、校验、安装和 Worker 发布失败需要一致的取消传播与安全错误映射。"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"App、CI、Worker 与 R2 共享 release metadata/update manifest 契约，需要端到端字段和数据流核对。"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"在新增 updater 与发布工具前复核现有 OkHttp、偏好、Compose 按钮和 CI 校验能力，避免重复机制。"}

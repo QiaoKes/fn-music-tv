@@ -1,0 +1,7 @@
+{"file":".trellis/spec/frontend/android-tv-interaction.md","reason":"复核设置页和更新弹窗的 D-pad 焦点、触屏单次触发、播放器抑制与返回恢复。"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"执行 Compose UI 与前端质量检查。"}
+{"file":".trellis/spec/backend/android-client-contracts.md","reason":"复核 release 构建、APK 签名、客户端网络和生命周期契约未回归。"}
+{"file":".trellis/spec/backend/self-update-distribution.md","reason":"复核 updater、CI metadata、Worker/R2 顺序、渠道隔离和验证矩阵。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"执行 App、CI、Worker 后端边界的测试与质量门禁。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"检查 cancellation、错误分层、日志脱敏和资源清理。"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"端到端验证 metadata、R2 manifest、App 解析与发布回滚字段一致。"}
