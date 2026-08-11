@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "packageName": "com.fnmusic.tv",
+  "versionName": "1.0.6",
+  "versionCode": 22,
+  "title": "v1.0.6",
+  "notes": "本次更新内容",
+  "apk": {
+    "url": "https://download.example.com/releases/22/fn-music-tv-1.0.6-universal.apk",
+    "size": 5560000,
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "publishedAt": "2026-08-11T12:10:00Z",
+  "githubReleaseUrl": "https://github.com/QiaoKes/fn-music-tv/releases/tag/v1.0.6"
+}

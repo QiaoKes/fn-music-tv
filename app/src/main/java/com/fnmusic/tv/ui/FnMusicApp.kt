@@ -89,6 +89,7 @@ import kotlinx.coroutines.launch
 internal fun FnMusicApp(container: AppUiDependencies, onExitApplication: () -> Unit) {
     val session by container.sessionRepository.state.collectAsStateWithLifecycle()
     val playback by container.playbackController.state.collectAsStateWithLifecycle()
+    val updateState by container.updateController.state.collectAsStateWithLifecycle()
     FnMusicTheme {
         Box(Modifier.fillMaxSize().background(FnColors.Background)) {
             when (val current = session) {
@@ -118,6 +119,7 @@ internal fun FnMusicApp(container: AppUiDependencies, onExitApplication: () -> U
                     AuthenticatedApp(container, current, playback, onExitApplication)
                 }
             }
+            UpdateDialogHost(updateState, container.updateController)
         }
     }
 }

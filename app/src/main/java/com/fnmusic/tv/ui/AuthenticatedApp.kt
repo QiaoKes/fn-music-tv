@@ -51,6 +51,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
@@ -177,6 +178,12 @@ internal fun AuthenticatedApp(
     val open: (LibraryRoute) -> Unit = { stack = stack + it }
     val root: (LibraryRoute) -> Unit = { stack = listOf(it) }
     val back: () -> Unit = { if (stack.size > 1) stack = stack.dropLast(1) }
+    LaunchedEffect(route) {
+        container.updateController.setAutomaticPromptAllowed(route !is LibraryRoute.Player)
+    }
+    DisposableEffect(container.updateController) {
+        onDispose { container.updateController.setAutomaticPromptAllowed(true) }
+    }
     LaunchedEffect(route.storageKey()) { lastHomeBackAt = 0L }
     LaunchedEffect(stack) {
         routeStateLifecycle.update(stack).forEach { removedRoute ->
