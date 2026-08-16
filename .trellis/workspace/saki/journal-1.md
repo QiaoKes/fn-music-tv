@@ -429,3 +429,26 @@ Replaced legacy lyric parsing and UI with Accompanist Lyrics, added YRC/QRC/KRC 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 20: 完成设置页与应用内更新
+
+**Date**: 2026-08-12
+**Task**: 完成设置页与应用内更新
+**Branch**: `feature-version-saki`
+
+### Summary
+
+完成设置页视觉调整、版本信息展示、应用内更新检查与前台下载安装；版本升级至 1.0.6 (22)，补充更新协议、测试与变更记录。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8c63e4b` | (see git log) |
+| `851956a` | (see git log) |
+| `2d59a9b` | (see git log) |
+
+### Status
+
+[OK] **Completed**

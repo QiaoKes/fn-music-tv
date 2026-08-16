@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 19
-- **Last Active**: 2026-08-10
+- **Total Sessions**: 20
+- **Last Active**: 2026-08-12
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~431 | Active |
+| `journal-1.md` | ~454 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 20 | 2026-08-12 | 完成设置页与应用内更新 | `8c63e4b`, `851956a`, `2d59a9b` | `feature-version-saki` |
 | 19 | 2026-08-10 | Replace TV lyrics stack and release 1.0.5 | `129470c`, `87fac0f`, `61bfef4` | `feature-lyricsrecode-saki` |
 | 18 | 2026-08-09 | Release configuration maintenance | `61d584f`, `000ff3d` | `main` |
 | 17 | 2026-08-09 | Smooth compact TV lyrics | `33ae74a` | `codex/smooth-compact-tv-lyrics` |

@@ -26,3 +26,7 @@ docs/API.md
 # Operating system metadata
 .DS_Store
 Thumbs.db
+
+# Cloudflare publisher tool and deployment state stay local
+**/node_modules/
+tool/update-publisher/

@@ -1,9 +1,11 @@
+import java.net.URI
 import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.baselineprofile)
 }
 
@@ -26,6 +28,21 @@ val releaseSigningPassword = providers.gradleProperty("fnMusicReleasePassword").
     ?: releasePasswordFile.takeIf { it.isFile }?.readText()?.trim()
 val releaseSigningReady = releaseKeystoreFile.isFile && !releaseSigningPassword.isNullOrBlank()
 val allowUnsignedRelease = providers.gradleProperty("allowUnsignedRelease").orNull?.toBoolean() == true
+val updateManifestUrl = providers.gradleProperty("fnMusicUpdateManifestUrl").orNull
+    ?: providers.environmentVariable("FN_MUSIC_UPDATE_MANIFEST_URL").orNull
+    ?: ""
+
+fun String.asBuildConfigString(): String = buildString {
+    append('"')
+    this@asBuildConfigString.forEach { character ->
+        when (character) {
+            '\\' -> append("\\\\")
+            '"' -> append("\\\"")
+            else -> append(character)
+        }
+    }
+    append('"')
+}
 
 android {
     namespace = "com.fnmusic.tv"
@@ -42,8 +59,16 @@ android {
 
     flavorDimensions += "distribution"
     productFlavors {
-        create("sideload") { dimension = "distribution" }
-        create("store") { dimension = "distribution" }
+        create("sideload") {
+            dimension = "distribution"
+            buildConfigField("boolean", "SELF_UPDATE_ENABLED", "true")
+            buildConfigField("String", "UPDATE_MANIFEST_URL", updateManifestUrl.asBuildConfigString())
+        }
+        create("store") {
+            dimension = "distribution"
+            buildConfigField("boolean", "SELF_UPDATE_ENABLED", "false")
+            buildConfigField("String", "UPDATE_MANIFEST_URL", "".asBuildConfigString())
+        }
     }
 
     signingConfigs {
@@ -70,7 +95,10 @@ android {
         }
     }
 
-    buildFeatures { compose = true }
+    buildFeatures {
+        buildConfig = true
+        compose = true
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -107,14 +135,33 @@ val verifyReleaseSigning by tasks.registering {
     }
 }
 
+val verifySideloadUpdateConfiguration by tasks.registering {
+    group = "verification"
+    description = "Verifies the sideload release update manifest URL."
+    doLast {
+        val parsed = runCatching { URI(updateManifestUrl) }.getOrNull()
+        check(
+            parsed?.scheme.equals("https", ignoreCase = true) &&
+                !parsed?.host.isNullOrBlank() &&
+                parsed?.userInfo == null &&
+                parsed?.fragment == null,
+        ) {
+            "Sideload Release requires an HTTPS fnMusicUpdateManifestUrl without credentials or fragments."
+        }
+    }
+}
+
 tasks.configureEach {
     if (
         name == "packageSideloadRelease" ||
-        name == "packageStoreRelease" ||
         name == "bundleSideloadRelease" ||
+        name == "packageStoreRelease" ||
         name == "bundleStoreRelease"
     ) {
         dependsOn(verifyReleaseSigning)
+    }
+    if (name == "packageSideloadRelease" || name == "bundleSideloadRelease") {
+        dependsOn(verifySideloadUpdateConfiguration)
     }
 }
 
@@ -144,6 +191,8 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.tv.material)
     implementation(libs.accompanist.lyrics.ui)
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.okhttp)
     baselineProfile(project(":baselineprofile"))
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
@@ -153,4 +202,7 @@ dependencies {
     androidTestImplementation(libs.androidx.uiautomator)
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
+    testImplementation(libs.mockwebserver)
+    testImplementation(libs.okhttp.tls)
+    testImplementation(libs.androidx.test.core)
 }

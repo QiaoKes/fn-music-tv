@@ -96,10 +96,12 @@ jobs:
           FN_CONNECT_API_KEY: ${{ secrets.FN_CONNECT_API_KEY }}
           FN_CONNECT_AUTHX_PREFIX: ${{ secrets.FN_CONNECT_AUTHX_PREFIX }}
           FN_MUSIC_RELEASE_PASSWORD: ${{ secrets.FN_MUSIC_RELEASE_PASSWORD }}
+          FN_MUSIC_UPDATE_MANIFEST_URL: ${{ vars.FN_MUSIC_UPDATE_MANIFEST_URL }}
         run: |
           set -euo pipefail
           test -n "$FN_CONNECT_API_KEY"
           test -n "$FN_CONNECT_AUTHX_PREFIX"
+          test -n "$FN_MUSIC_UPDATE_MANIFEST_URL"
           echo "::add-mask::$FN_CONNECT_API_KEY"
           echo "::add-mask::$FN_CONNECT_AUTHX_PREFIX"
           if git grep -F -q -- "$FN_CONNECT_API_KEY" || git grep -F -q -- "$FN_CONNECT_AUTHX_PREFIX"; then
@@ -109,6 +111,7 @@ jobs:
           ./gradlew --no-daemon --stacktrace \
             --no-build-cache \
             -PfnMusicReleaseStoreFile="${{ steps.signing.outputs.keystore }}" \
+            -PfnMusicUpdateManifestUrl="$FN_MUSIC_UPDATE_MANIFEST_URL" \
             :app:assembleSideloadRelease
 
       - name: Verify and stage universal APK
@@ -141,14 +144,24 @@ jobs:
           grep -F "sdkVersion:'29'" <<< "$badging"
           grep -F "targetSdkVersion:'36'" <<< "$badging"
           grep -F "native-code: 'arm64-v8a' 'armeabi-v7a' 'x86' 'x86_64'" <<< "$badging"
-          "$apksigner" verify --verbose --print-certs "$source_apk"
+          signer_output=$("$apksigner" verify --verbose --print-certs "$source_apk")
+          printf '%s\n' "$signer_output"
+          signer_sha=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<< "$signer_output" | head -n 1 | tr '[:upper:]' '[:lower:]' | tr -d ':[:space:]')
+          [[ "$signer_sha" =~ ^[0-9a-f]{64}$ ]]
 
           mkdir -p dist
           release_apk="dist/fn-music-tv-$VERSION_NAME-universal.apk"
           cp "$source_apk" "$release_apk"
           sha256sum "$release_apk" > "$release_apk.sha256"
+          metadata="dist/release-metadata.json"
+          ./tool/release-metadata/generate-release-metadata.sh \
+            "$release_apk" \
+            "$signer_sha" \
+            "$GITHUB_SHA" \
+            "$metadata"
           echo "apk=$release_apk" >> "$GITHUB_OUTPUT"
           echo "checksum=$release_apk.sha256" >> "$GITHUB_OUTPUT"
+          echo "metadata=$metadata" >> "$GITHUB_OUTPUT"
 
       - name: Upload packaged APK
         uses: actions/upload-artifact@v7
@@ -157,6 +170,7 @@ jobs:
           path: |
             ${{ steps.artifact.outputs.apk }}
             ${{ steps.artifact.outputs.checksum }}
+            ${{ steps.artifact.outputs.metadata }}
           if-no-files-found: error
           retention-days: 14
 
@@ -168,11 +182,13 @@ jobs:
           VERSION_NAME: ${{ steps.version.outputs.name }}
           RELEASE_APK: ${{ steps.artifact.outputs.apk }}
           RELEASE_CHECKSUM: ${{ steps.artifact.outputs.checksum }}
+          RELEASE_METADATA: ${{ steps.artifact.outputs.metadata }}
           RELEASE_NOTES: ${{ steps.release_notes.outputs.path }}
         run: |
           gh release create "$RELEASE_TAG" \
             "$RELEASE_APK#Android 10.0+ universal APK" \
             "$RELEASE_CHECKSUM#SHA-256 checksum" \
+            "$RELEASE_METADATA#Machine-readable release metadata" \
             --target "$GITHUB_SHA" \
             --title "$RELEASE_TAG" \
             --notes "$(cat "$RELEASE_NOTES")" \

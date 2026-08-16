@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "packageName": "com.fnmusic.tv",
+  "versionName": "1.0.6",
+  "versionCode": 22,
+  "apk": {
+    "fileName": "fn-music-tv-1.0.6-universal.apk",
+    "size": 5560000,
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "signingCertificateSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "builtAt": "2026-08-11T12:00:00Z",
+  "commitSha": "0123456789abcdef0123456789abcdef01234567"
+}

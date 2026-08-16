@@ -20,6 +20,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
 | [Android Client Contracts](./android-client-contracts.md) | NAS API, Room, Media3, and CI boundaries | Active |
+| [Sideload Self-Update Distribution](./self-update-distribution.md) | Android updater, CI metadata, Cloudflare publisher, and R2 ordering | Active |
 
 ---
 

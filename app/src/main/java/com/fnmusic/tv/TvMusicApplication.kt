@@ -9,6 +9,7 @@ import com.fnmusic.tv.core.data.local.LocalStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import com.fnmusic.tv.update.UpdateCoordinator
 
 class TvMusicApplication : Application() {
     internal val container: AppContainer by lazy { AppContainer(this) }
@@ -25,6 +26,8 @@ internal class AppContainer(private val application: Application) : AppUiDepende
     override val appPreferences = AppPreferences(application, localStore)
     override val musicRepository = MusicRepository(application, sessionRepository, appPreferences, localStore)
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    override val updateController: UpdateCoordinator = UpdateCoordinator(application, applicationScope)
+    internal val updateCoordinator: UpdateCoordinator get() = updateController
     override val artworkBitmapCache = ArtworkBitmapCache(
         scope = applicationScope,
         loader = { coverId, variant ->
@@ -60,5 +63,8 @@ internal class AppContainer(private val application: Application) : AppUiDepende
         coordinator.start()
     }
 
-    suspend fun shutdownForExit() = coordinator.shutdownForExit()
+    suspend fun shutdownForExit() {
+        updateCoordinator.shutdownForExit()
+        coordinator.shutdownForExit()
+    }
 }
