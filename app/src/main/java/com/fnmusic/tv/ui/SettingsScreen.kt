@@ -282,7 +282,9 @@ internal fun SettingsScreen(container: AuthenticatedAppDependencies) {
                 }
                 AboutDivider()
                 Column(
-                    Modifier.width(325.dp).padding(horizontal = 26.dp),
+                    Modifier
+                        .weight(1f)
+                        .padding(horizontal = 26.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     AboutValue("版本", "${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）")
@@ -292,7 +294,7 @@ internal fun SettingsScreen(container: AuthenticatedAppDependencies) {
                 if (container.updateController.enabled) {
                     AboutDivider()
                     Column(
-                        Modifier.weight(1f).padding(start = 25.dp),
+                        Modifier.width(175.dp).padding(start = 20.dp),
                         verticalArrangement = Arrangement.spacedBy(5.dp),
                     ) {
                         Text("软件更新", color = FnColors.Muted, fontSize = 12.sp, lineHeight = 14.sp)
@@ -350,7 +352,15 @@ private fun AboutDivider() {
 private fun AboutValue(label: String, value: String) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(label, color = FnColors.Muted, fontSize = 12.sp, modifier = Modifier.width(63.dp))
-        Text(value, fontSize = 13.sp, lineHeight = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        Text(
+            value,
+            modifier = Modifier.weight(1f),
+            fontSize = 13.sp,
+            lineHeight = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
