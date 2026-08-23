@@ -144,6 +144,19 @@ fun queueRelocationFocusTargetKey(
     previouslyFocusedKey: String?,
 ): String?
 
+fun mediaBandReturnFocusKey(
+    entryKeys: List<String>,
+    terminalKey: String,
+    lastFocusedKey: String?,
+): String
+
+suspend fun ArtworkBitmapCache.getProgressively(
+    coverId: String,
+    variant: CoverVariant,
+    fallbackVariant: CoverVariant?,
+    onIntermediate: (Bitmap) -> Unit,
+): Bitmap?
+
 fun isHomeBackConfirmed(
     previousBackAt: Long,
     currentBackAt: Long,
@@ -395,6 +408,11 @@ interface AuthenticatedAppActions {
   Returning from a child route restores the retained key and scroll position; it must not refetch
   page 1 or force focus back to the first item. If the retained key no longer exists, use that
   surface's deterministic first-action fallback.
+- A vertically entered `LazyRow` must attach its row-level `FocusRequester` to the last focused item
+  that still exists, including a terminal "All" item. Do not permanently attach the row requester to
+  index zero: after the row scrolls to its end, index zero may leave composition and Up -> chrome ->
+  Down will have no live target. If the remembered key was removed, fall back to the first live entry;
+  an otherwise empty media band falls back to its terminal item.
 - Home playlists and All Playlists share one session-owned `RetainedListSnapshot`. My and the full
   Artists/Albums grids share the same retained paged snapshots; shared libraries use another
   retained list. A successful initial load is not repeated on route re-entry. An empty failed list
@@ -410,11 +428,17 @@ interface AuthenticatedAppActions {
   route has composed, call both `SaveableStateHolder.removeState(storageKey)` and
   `LibraryRetainedStateStore.remove(retainedStateKeys)`. Do not release a key that still exists
   lower in the stack; reopening a fully removed detail creates fresh state.
-- Remote artwork keeps fixed bounds and renders a deterministic placeholder until its exact
-  `CoverVariant` bitmap is ready. Initialize Compose state from the application decoded cache so a
-  page return does not flash the placeholder. Artist/album lockup focus may prefetch the exact Grid
-  entry for the destination detail page, but the Compact list image must never be displayed as a
-  temporary Grid image; this avoids a visible low-resolution-to-high-resolution sharpening step.
+- Remote artwork keeps fixed bounds and initializes Compose state from the application decoded
+  cache so a page return does not flash the placeholder. Detail pages render a deterministic
+  placeholder until their exact `CoverVariant` bitmap is ready. Artist/album lockup focus may
+  prefetch the exact Grid entry for the destination detail page, but a Compact list image must never
+  be stretched into a detail header; this avoids a prominent low-resolution-to-high-resolution step.
+- A fixed-size decorative Home feature deck may explicitly opt into progressive artwork with
+  `fallbackVariant = CoverVariant.Compact`. Check the exact Grid cache first, publish a real Compact
+  bitmap as the intermediate frame, then load and replace it with exact Grid asynchronously. If the
+  exact load fails, retain the real intermediate image. While neither variant is ready, render a
+  neutral dark surface rather than a title or first-character card; remote input must never be
+  required to make an already completed image load visible.
 - Missing and failed remote artwork uses the same media-specific fallback on cards and details.
   Favorites detail reuses the Home Favorites artwork; artists use the same circular first-character
   avatar at both sizes; tracks, playlists, and albums use the shared centered first-character
@@ -489,6 +513,8 @@ interface AuthenticatedAppActions {
 | Back with queue / controls visible | Close queue first; otherwise hide controls; do not leave player early |
 | Async route first load completes | Focus its first actionable content item exactly once |
 | Return to a retained route | Restore prior focus, scroll, pages, and continuation metadata |
+| Enter a horizontally scrolled media band from chrome or an adjacent band | Focus its last still-valid item without resetting horizontal scroll |
+| A media band's remembered item was removed | Focus its first live entry, or its terminal item when no media entries remain |
 | Dynamic detail remains anywhere in the back stack | Keep its saveable and retained state |
 | Dynamic detail key fully leaves the back stack | Remove its saveable state and detail-owned retained entries after composition |
 | Session summary route leaves the back stack | Remove route-local saveable state but keep shared retained summary data |
@@ -496,6 +522,8 @@ interface AuthenticatedAppActions {
 | Home content is rendered | Random Roam and Favorites are the first row; playlists start on row two |
 | Favorites becomes empty | Show `还没有收藏歌曲` with no stale retained rows |
 | Exact artwork bitmap is already decoded | Render it on the first composition without an empty/placeholder frame |
+| Home feature Grid artwork misses but Compact exists | Render Compact immediately, then replace it asynchronously with Grid without remote input |
+| Home feature exact Grid load fails after Compact succeeds | Keep the real Compact image; do not regress to a title/initial card |
 | Detail Grid artwork is still loading | Keep the fixed deterministic placeholder; never substitute the Compact list bitmap |
 | Artist/album lockup receives focus | Prefetch its exact Grid artwork without changing the displayed Compact artwork |
 | Favorites or an artist has no artwork | Reuse the Favorites feature art or circular artist initial consistently on card and detail |
@@ -550,6 +578,10 @@ interface AuthenticatedAppActions {
   focus to the new current row after it is composed.
 - Good: Home always renders Random Roam and Favorites together above a separately scrolling playlist
   row; entering Favorites restores the retained track position after returning from player.
+- Good: move a My media band to `全部歌手`, move Up to the profile actions, then Down and return to
+  `全部歌手` while preserving the row's end scroll position.
+- Base: a media band with no prior focus enters its first media item; a band with no media entries
+  enters its terminal collection item.
 - Base: no current queue row focuses the first row; an empty queue owns no row requester.
 - Base: roam has no normal mode/queue nodes and skips a disabled previous action.
 - Base: My Back returns Home; Home Back once only shows the confirmation while music continues.
@@ -584,8 +616,11 @@ interface AuthenticatedAppActions {
 - Bad: putting playlists in the same first-row lazy list as Random Roam/Favorites, or deleting a
   queue row by media ID when occurrences are addressed by distinct queue indices.
 - Bad: requesting first focus before data is composed, or always requesting index zero after Back.
-- Bad: drawing an empty solid rectangle while artwork loads, or stretching a cached Compact bitmap
-  into detail before swapping to Grid.
+- Bad: permanently attaching a media band's vertical-entry requester to index zero; once the row is
+  scrolled to the end that item can be detached, so Down from the profile or previous band does nothing.
+- Bad: showing a title/initial card in a Home feature deck while its real cover is loading, requiring
+  a D-pad event to reveal a completed bitmap, or stretching a cached Compact bitmap into a detail
+  header before swapping to Grid.
 - Bad: keeping a legacy record fallback in a detail screen while the corresponding card uses a
   feature image or first-character avatar; missing artwork must not change visual identity by route.
 - Bad: showing the IME on center-key down without delay and letting the matching key-up enter the
@@ -647,9 +682,9 @@ interface AuthenticatedAppActions {
 - Retained summary tests: a successful list snapshot prevents another initial request, while an
   empty failed snapshot is retryable on the next route entry. Home/My/full grids consume the same
   user-scoped store keys.
-- Artwork continuity tests: exact decoded hits are available synchronously, Compact and Grid stay
-  isolated, focused artist/album items request Grid prefetch, and a miss retains stable bounds and
-  placeholder content.
+- Artwork continuity tests: exact decoded hits are available synchronously, cache entries stay
+  variant-isolated, Home progressive requests publish Compact before Grid and retain Compact when
+  Grid fails, focused artist/album items request Grid prefetch, and a miss retains stable bounds.
 - Library fallback screenshot checks: Favorites detail matches its Home artwork, an artist without
   a cover shows the same initial on card and detail, and source search finds no retired record
   fallback implementation or call site.
@@ -681,6 +716,10 @@ interface AuthenticatedAppActions {
   queue action.
 - Home/Favorites device test: assert the fixed Random Roam/Favorites first row, playlist-only second
   row, Favorites empty/list/error states, retained scroll, and refresh after an unfavorite revision.
+- My media-band focus tests: assert the pure return-key projection preserves the last live media or
+  terminal key, falls back after removal, and selects the terminal key for an empty band. On device,
+  scroll each media band to its terminal item, leave it vertically, re-enter it, and assert focus and
+  horizontal scroll both remain at that terminal item.
 - Queue/roam bounds test: compare unmerged text bounds with the owning semantics bounds and assert
   the roam label center and queue title/artist group center match their fixed-height containers.
 - Back device test: assert queue -> controls -> player ordering, My -> Home, one Home Back only shows
@@ -814,6 +853,25 @@ itemsIndexed(items, key = { index, _ -> requesterKeys[index] }) { index, item ->
         modifier = Modifier
             .focusProperties { left = FocusRequester.Cancel; right = FocusRequester.Cancel }
             .focusRequester(requester),
+    )
+}
+```
+
+```kotlin
+// Wrong: index zero can be detached after a horizontal row scrolls to its end.
+itemsIndexed(entries) { index, entry ->
+    BandLockup(
+        entry,
+        Modifier.then(if (index == 0) Modifier.focusRequester(rowFocus) else Modifier),
+    )
+}
+
+// Correct: the row-entry requester follows the last still-valid focus key.
+val returnKey = mediaBandReturnFocusKey(entryKeys, terminalKey, lastFocusedKey)
+items(entries, key = BandEntry::focusKey) { entry ->
+    BandLockup(
+        entry,
+        Modifier.then(if (entry.focusKey == returnKey) Modifier.focusRequester(rowFocus) else Modifier),
     )
 }
 ```

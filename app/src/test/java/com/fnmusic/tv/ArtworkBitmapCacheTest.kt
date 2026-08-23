@@ -3,6 +3,7 @@ package com.fnmusic.tv
 import android.graphics.Bitmap
 import android.graphics.Color
 import com.fnmusic.tv.core.model.CoverVariant
+import java.util.Collections
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -78,6 +79,46 @@ class ArtworkBitmapCacheTest {
 
         assertSame(expected, cache.peek("cover", CoverVariant.Grid))
         assertNull(cache.peek("cover", CoverVariant.Compact))
+    }
+
+    @Test
+    fun `progressive request publishes compact before exact grid`() = runBlocking {
+        val compact = bitmap(Color.RED)
+        val grid = bitmap(Color.BLUE)
+        val loads = Collections.synchronizedList(mutableListOf<CoverVariant>())
+        val intermediate = mutableListOf<Bitmap>()
+        val cache = ArtworkBitmapCache(scope, loader = { _, variant ->
+            loads += variant
+            if (variant == CoverVariant.Compact) compact else grid
+        })
+
+        val result = cache.getProgressively(
+            coverId = "cover",
+            variant = CoverVariant.Grid,
+            fallbackVariant = CoverVariant.Compact,
+            onIntermediate = intermediate::add,
+        )
+
+        assertEquals(listOf(CoverVariant.Compact, CoverVariant.Grid), loads)
+        assertEquals(listOf(compact), intermediate)
+        assertSame(grid, result)
+    }
+
+    @Test
+    fun `progressive request keeps fallback when exact load fails`() = runBlocking {
+        val compact = bitmap(Color.RED)
+        val cache = ArtworkBitmapCache(scope, loader = { _, variant ->
+            if (variant == CoverVariant.Compact) compact else null
+        })
+
+        val result = cache.getProgressively(
+            coverId = "cover",
+            variant = CoverVariant.Grid,
+            fallbackVariant = CoverVariant.Compact,
+            onIntermediate = {},
+        )
+
+        assertSame(compact, result)
     }
 
     @Test

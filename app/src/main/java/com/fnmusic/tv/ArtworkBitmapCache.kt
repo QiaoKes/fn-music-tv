@@ -42,6 +42,20 @@ internal class ArtworkBitmapCache(
         return request.await()
     }
 
+    suspend fun getProgressively(
+        coverId: String,
+        variant: CoverVariant,
+        fallbackVariant: CoverVariant?,
+        onIntermediate: (Bitmap) -> Unit,
+    ): Bitmap? {
+        peek(coverId, variant)?.let { return it }
+        val distinctFallback = fallbackVariant?.takeIf { it != variant }
+        val fallback = distinctFallback?.let { get(coverId, it) }
+        peek(coverId, variant)?.let { return it }
+        fallback?.let(onIntermediate)
+        return get(coverId, variant) ?: fallback
+    }
+
     fun prefetch(coverId: String, variant: CoverVariant): Job? {
         val key = Key(coverId, variant)
         return synchronized(lock) {

@@ -21,17 +21,19 @@
 ### Home feature cards
 
 - 新建 `HomeFeatureCard`，使用 `Row` + `weight(1f)` 形成两个等宽、固定 150dp 高的宽卡；卡片本身是唯一交互和焦点目标。
-- 新建 `FeatureCoverDeck`，接收最多三个 `FeatureArtworkItem(title, coverId)`。三个 `RemoteArtwork(CoverVariant.Grid)` 固定为同尺寸正方形，通过 `graphicsLayer` 设置位置、旋转和阴影。
+- 新建 `FeatureCoverDeck`，接收最多三个 `FeatureArtworkItem(title, coverId)`。三个 `RemoteArtwork(CoverVariant.Grid, fallbackVariant = CoverVariant.Compact)` 固定为同尺寸正方形，通过 `graphicsLayer` 设置位置、旋转和阴影。
 - `Roam` deck 使用向外角度，`Favorites` deck 使用以中间封面为前景的对称收拢角度。封面层、遮罩、图标和标题均 `matchParentSize` 内绘制，不参与焦点。
 - 随机漫游封面优先来自共享 `grid:albums` 第一页，再使用首页歌单封面补足；收藏封面来自独立的 `home:favorites-preview` 第一页。封面 ID 去重后最多取三张，选择顺序在同一登录会话中稳定。
 - 首页进入时并行触发现有歌单、专辑和收藏预览加载。收藏预览观察 `FavoriteLibraryState.revision`；成功收藏变更后重置并刷新预览。预览失败只回退占位，不阻止功能卡点击，也不新增页面级错误。
-- 无封面 ID 的条目在投影阶段过滤；不足三个有效封面时按实际数量使用居中的 1 张或 2 张布局，不再用首字占位补足。远端加载失败仍使用图片组件自身的失败回退，卡片边界保持不变。
+- 无封面 ID 的条目在投影阶段过滤；不足三个有效封面时按实际数量使用居中的 1 张或 2 张布局，不再用首字占位补足。远端加载期间使用中性深色底，不显示标题首字卡片。
+- `ArtworkBitmapCache.getProgressively` 先查找精确 Grid 缓存；未命中时加载并立即发布 Compact 过渡图，再异步加载 Grid 并替换。Grid 加载失败时保留已发布的 Compact 图；缓存键仍包含账号命名空间、封面 ID 和图片规格，不跨账号复用。
 
 ### My profile strip
 
 - 移除重复的“我的音乐”页面大标题，`ProfileStrip` 在顶部导航后以 12dp 间距直接出现，为媒体内容释放更多垂直空间。
 - `LibraryTopBar` 在 My 且无媒体时保留空白左侧槽位，使分段导航继续右对齐；会话加载态 `BrandLoading` 复用 `R.drawable.ic_logo`，在品牌文字左侧显示 54dp Logo。
 - 新建 `ProfileStrip`，内部为 `ProfileAvatar`、用户名、`ServerChip`、弹性间隔、设置与切换账号两个 `ProfileActionButton`。
+- `ProfileStrip` 只承担稳定布局，不绘制外层背景或边框；两个操作按钮继续独立表达可操作性和焦点状态。
 - 用户名和服务器名限制为单行省略；操作区固定宽度，身份区使用 `weight(1f)`，避免长文本挤压按钮。
 - 设置与切换账号继续调用传入回调；图标使用项目现有 Canvas / 矢量绘制习惯，不增加图标库依赖。
 
@@ -40,6 +42,7 @@
 - 保留 `MediaBand` 的 `LazyRow` 和终端入口语义；歌手和专辑复用现有横向 `ArtistLockup` / `AlbumLockup`，全部歌曲使用同尺寸的 `MyLibraryLockup`。
 - Home 的“全部歌单”使用独立 `PlaylistGrid` 四宫格占位，与 My 的“全部歌曲”曲库插画保持语义区分；默认 artwork 不附加珊瑚边框，聚焦时才条件式添加边框 Modifier。
 - 三类媒体项目均为约 170×95dp 的横向卡片：固定 artwork 位于左侧，名称与次要信息位于右侧；名称最多两行并省略。
+- 共享 `lockupButtonColors` 的常态与禁用表面为透明，`lockupButtonBorder` 的常态边框为透明；聚焦 / 按压仍使用深灰表面、1.5dp 珊瑚描边和 1.025 倍缩放。
 - “全部歌手”“全部专辑”保留在各自横向列表末尾；“音乐库 / 全部歌曲”作为专辑下方第三个 band，位于首屏下方并由 `LazyColumn` 滚动到达。
 - `MyLibraryLockup` 直接调用 `CollectionArtworkFallbackContent(..., CollectionArtworkFallback.Collection, ...)`，与全部歌曲详情头图复用 `HomeArtworkKind.Collection`，不再走 `InitialArtworkPlaceholder("全部歌曲", ...)`。
 - 所有承载缩放卡片的 `LazyRow` / `LazyVerticalGrid` 使用 4dp `contentPadding`，给首尾焦点描边与缩放留出安全区。
@@ -73,6 +76,6 @@ MusicRepository
 
 ## Testing strategy
 
-- 单元测试覆盖封面选择：去重、三项上限、补位、稳定顺序、收藏 revision 刷新判定。
+- 单元测试覆盖封面选择：去重、三项上限、补位、稳定顺序、收藏 revision 刷新判定，以及 Compact 过渡图先发布、Grid 成功替换与失败保留。
 - Compose / device 测试覆盖胶囊导航选中与焦点区分、功能卡单击、资料条长文本不重叠、全部歌曲图形复用、关键 D-pad 邻接和触屏拖动不误触。
 - 在 1920×1080 TV 模拟器安装 sideload debug，分别截取 Home / My 首屏与 My 向下滚动后的音乐库区，检查空白、裁切、重叠、焦点和真实封面加载。

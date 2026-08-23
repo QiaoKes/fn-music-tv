@@ -888,11 +888,16 @@ private fun FeatureCoverDeck(
                         container = LocalAuthenticatedDependencies.current,
                         coverId = coverId,
                         variant = CoverVariant.Grid,
+                        fallbackVariant = CoverVariant.Compact,
                         modifier = Modifier.fillMaxSize(),
                         shape = artworkShape,
                         contentScale = ContentScale.Crop,
                         placeholderContent = {
-                            InitialArtworkPlaceholder(item.title, FnColors.Coral, Modifier.fillMaxSize(), artworkShape)
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .background(Color(0xFF242927), artworkShape),
+                            )
                         },
                     )
                 } else {
@@ -1227,13 +1232,10 @@ private fun ProfileStrip(
     onSettings: () -> Unit,
     onSwitchAccount: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(8.dp)
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(48.dp)
-            .background(Color(0xFF171B1D), shape)
-            .border(0.5.dp, Color.White.copy(alpha = 0.12f), shape)
             .padding(start = 4.dp, end = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1421,6 +1423,15 @@ private data class BandEntry(
     val action: (() -> Unit)?,
 )
 
+internal fun mediaBandReturnFocusKey(
+    entryKeys: List<String>,
+    terminalKey: String,
+    lastFocusedKey: String?,
+): String = lastFocusedKey
+    ?.takeIf { it == terminalKey || it in entryKeys }
+    ?: entryKeys.firstOrNull()
+    ?: terminalKey
+
 @Composable
 private fun MediaBand(
     title: String,
@@ -1433,6 +1444,15 @@ private fun MediaBand(
     downFocusRequester: FocusRequester,
     onFocused: (String) -> Unit,
 ) {
+    var lastFocusedEntryKey by rememberSaveable(terminalEntry.focusKey) {
+        mutableStateOf<String?>(null)
+    }
+    val entryKeys = entries.map(BandEntry::focusKey)
+    val returnFocusKey = mediaBandReturnFocusKey(
+        entryKeys = entryKeys,
+        terminalKey = terminalEntry.focusKey,
+        lastFocusedKey = lastFocusedEntryKey,
+    )
     Column {
         Text(title, fontSize = 25.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
@@ -1440,7 +1460,7 @@ private fun MediaBand(
             contentPadding = PaddingValues(4.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            itemsIndexed(entries, key = { _, entry -> entry.focusKey }) { index, entry ->
+            itemsIndexed(entries, key = { _, entry -> entry.focusKey }) { _, entry ->
                 BandLockup(
                     entry,
                     Modifier
@@ -1448,9 +1468,14 @@ private fun MediaBand(
                             up = upFocusRequester
                             down = downFocusRequester
                         }
-                        .then(if (index == 0) Modifier.focusRequester(rowFocusRequester) else Modifier)
+                        .then(if (returnFocusKey == entry.focusKey) Modifier.focusRequester(rowFocusRequester) else Modifier)
                         .then(if (focusedKey == entry.focusKey) Modifier.focusRequester(focusRequester) else Modifier)
-                        .onFocusChanged { if (it.isFocused) onFocused(entry.focusKey) },
+                        .onFocusChanged {
+                            if (it.isFocused) {
+                                lastFocusedEntryKey = entry.focusKey
+                                onFocused(entry.focusKey)
+                            }
+                        },
                 )
             }
             item {
@@ -1461,9 +1486,14 @@ private fun MediaBand(
                             up = upFocusRequester
                             down = downFocusRequester
                         }
-                        .then(if (entries.isEmpty()) Modifier.focusRequester(rowFocusRequester) else Modifier)
+                        .then(if (returnFocusKey == terminalEntry.focusKey) Modifier.focusRequester(rowFocusRequester) else Modifier)
                         .then(if (focusedKey == terminalEntry.focusKey) Modifier.focusRequester(focusRequester) else Modifier)
-                        .onFocusChanged { if (it.isFocused) onFocused(terminalEntry.focusKey) },
+                        .onFocusChanged {
+                            if (it.isFocused) {
+                                lastFocusedEntryKey = terminalEntry.focusKey
+                                onFocused(terminalEntry.focusKey)
+                            }
+                        },
                 )
             }
         }
@@ -3170,15 +3200,18 @@ private fun LockupLabels(title: String, subtitle: String, modifier: Modifier = M
 
 @Composable
 private fun lockupButtonColors() = ButtonDefaults.colors(
-    containerColor = Color(0xFF1B201F),
+    containerColor = Color.Transparent,
     contentColor = FnColors.Text,
     focusedContainerColor = Color(0xFF303634),
     focusedContentColor = FnColors.Text,
+    pressedContainerColor = Color(0xFF303634),
+    pressedContentColor = FnColors.Text,
+    disabledContainerColor = Color.Transparent,
 )
 
 @Composable
 private fun lockupButtonBorder(shape: Shape) = ButtonDefaults.border(
-    border = Border(BorderStroke(0.5.dp, Color.White.copy(alpha = 0.08f)), shape = shape),
+    border = Border(BorderStroke(1.5.dp, Color.Transparent), shape = shape),
     focusedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
     pressedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
 )
@@ -3209,11 +3242,12 @@ private fun RemoteArtwork(
     coverId: String,
     variant: CoverVariant,
     modifier: Modifier = Modifier,
+    fallbackVariant: CoverVariant? = null,
     shape: Shape = RoundedCornerShape(8.dp),
     contentScale: ContentScale = ContentScale.Fit,
     placeholderContent: (@Composable () -> Unit)? = null,
 ) {
-    val bitmap = rememberRemoteArtworkBitmap(container, coverId, variant)
+    val bitmap = rememberRemoteArtworkBitmap(container, coverId, variant, fallbackVariant)
     if (bitmap != null) {
         Image(bitmap.asImageBitmap(), null, modifier.clip(shape), contentScale = contentScale)
     } else {
@@ -3237,12 +3271,23 @@ private fun rememberRemoteArtworkBitmap(
     container: AuthenticatedAppDependencies,
     coverId: String?,
     variant: CoverVariant,
+    fallbackVariant: CoverVariant? = null,
 ): Bitmap? {
-    val initialBitmap = remember(container, coverId, variant) {
-        coverId?.let { container.artworkBitmapCache.peek(it, variant) }
+    val initialBitmap = remember(container, coverId, variant, fallbackVariant) {
+        coverId?.let { id ->
+            container.artworkBitmapCache.peek(id, variant)
+                ?: fallbackVariant?.let { container.artworkBitmapCache.peek(id, it) }
+        }
     }
-    val bitmap by produceState(initialBitmap, container, coverId, variant) {
-        value = coverId?.let { container.artworkBitmapCache.get(it, variant) }
+    val bitmap by produceState(initialBitmap, container, coverId, variant, fallbackVariant) {
+        value = coverId?.let { id ->
+            container.artworkBitmapCache.getProgressively(
+                coverId = id,
+                variant = variant,
+                fallbackVariant = fallbackVariant,
+                onIntermediate = { value = it },
+            )
+        }
     }
     return if (coverId == null) null else bitmap
 }
