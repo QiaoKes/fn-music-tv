@@ -452,3 +452,24 @@ Replaced legacy lyric parsing and UI with Accompanist Lyrics, added YRC/QRC/KRC 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 21: 完成首页与我的 UI 改版
+
+**Date**: 2026-08-24
+**Task**: 完成首页与我的 UI 改版
+**Branch**: `opt-ui-saki`
+
+### Summary
+
+重设计首页与我的电视端界面，优化封面缓存与焦点行为，为全部歌手和专辑加入 12 项固定分页，并发布 1.0.7。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fdea908` | (see git log) |
+
+### Status
+
+[OK] **Completed**
