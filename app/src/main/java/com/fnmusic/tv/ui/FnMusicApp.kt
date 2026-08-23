@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -57,6 +58,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -74,6 +76,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 import com.fnmusic.tv.AppUiDependencies
+import com.fnmusic.tv.R
 import com.fnmusic.tv.core.data.repository.LoginDraft
 import com.fnmusic.tv.core.data.repository.LoginHistoryEntry
 import com.fnmusic.tv.core.data.repository.SessionState
@@ -174,7 +177,17 @@ private fun SessionRecoveryScreen(
 @Composable
 private fun BrandLoading() {
     Column(Modifier.fillMaxSize().padding(64.dp), verticalArrangement = Arrangement.Center) {
-        Text("回声台", color = FnColors.Text, fontSize = 44.sp, fontWeight = FontWeight.Bold)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Image(
+                painter = painterResource(R.drawable.ic_logo),
+                contentDescription = null,
+                modifier = Modifier.size(54.dp),
+            )
+            Text("回声台", color = FnColors.Text, fontSize = 44.sp, fontWeight = FontWeight.Bold)
+        }
         Spacer(Modifier.height(12.dp))
         Text("正在载入", color = FnColors.Muted, fontSize = 24.sp)
     }

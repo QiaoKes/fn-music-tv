@@ -157,6 +157,8 @@ internal val LocalLibraryRetainedState = staticCompositionLocalOf<LibraryRetaine
     error("Missing library retained state")
 }
 
+private const val FULL_CATALOG_PAGE_SIZE = 12
+
 @Composable
 internal fun AuthenticatedApp(
     container: AuthenticatedAppDependencies,
@@ -339,40 +341,122 @@ private fun LibraryTopBar(
     onMy: () -> Unit,
     onPlayer: () -> Unit,
     modifier: Modifier = Modifier,
+    nowPlayingFocus: FocusRequester,
+    homeTabFocus: FocusRequester,
+    myTabFocus: FocusRequester,
+    contentDownFocus: FocusRequester,
 ) {
     Row(
-        Modifier.fillMaxWidth().height(76.dp),
+        Modifier.fillMaxWidth().height(70.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (playback.hasMedia) {
-            NowPlayingPill(playback, onPlayer, modifier)
+            NowPlayingPill(
+                playback = playback,
+                onClick = onPlayer,
+                modifier = modifier
+                    .focusProperties {
+                        right = homeTabFocus
+                        down = contentDownFocus
+                    }
+                    .focusRequester(nowPlayingFocus),
+            )
         } else {
-            Text("回声台", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier)
         }
-        val tabColors = ButtonDefaults.colors(
-            containerColor = Color.Transparent,
-            contentColor = FnColors.Text,
-            focusedContainerColor = FnColors.Coral,
-            focusedContentColor = FnColors.Background,
+        SegmentedLibraryTabs(
+            selectedHome = selectedHome,
+            playbackAvailable = playback.hasMedia,
+            homeFocus = homeTabFocus,
+            myFocus = myTabFocus,
+            nowPlayingFocus = nowPlayingFocus,
+            contentDownFocus = contentDownFocus,
+            onHome = onHome,
+            onMy = onMy,
+        )
+    }
+}
+
+@Composable
+private fun SegmentedLibraryTabs(
+    selectedHome: Boolean,
+    playbackAvailable: Boolean,
+    homeFocus: FocusRequester,
+    myFocus: FocusRequester,
+    nowPlayingFocus: FocusRequester,
+    contentDownFocus: FocusRequester,
+    onHome: () -> Unit,
+    onMy: () -> Unit,
+) {
+    val containerShape = CircleShape
+    Row(
+        modifier = Modifier
+            .size(width = 162.dp, height = 49.dp)
+            .background(Color(0xFF171B1D), containerShape)
+            .border(0.5.dp, Color.White.copy(alpha = 0.12f), containerShape)
+            .padding(3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        LibraryTab(
+            label = "首页",
+            selected = selectedHome,
+            modifier = Modifier
+                .focusProperties {
+                    left = if (playbackAvailable) nowPlayingFocus else FocusRequester.Cancel
+                    right = myFocus
+                    down = contentDownFocus
+                }
+                .focusRequester(homeFocus),
+            onClick = { if (!selectedHome) onHome() },
+        )
+        LibraryTab(
+            label = "我的",
+            selected = !selectedHome,
+            modifier = Modifier
+                .focusProperties {
+                    left = homeFocus
+                    right = FocusRequester.Cancel
+                    down = contentDownFocus
+                }
+                .focusRequester(myFocus),
+            onClick = { if (selectedHome) onMy() },
+        )
+    }
+}
+
+@Composable
+private fun LibraryTab(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier,
+    onClick: () -> Unit,
+) {
+    val shape = CircleShape
+    Button(
+        onClick = onClick,
+        modifier = modifier
+            .size(width = 78.dp, height = 43.dp)
+            .semantics { this.selected = selected },
+        shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
+        scale = ButtonDefaults.scale(focusedScale = 1.025f),
+        colors = ButtonDefaults.colors(
+            containerColor = if (selected) FnColors.Coral else Color.Transparent,
+            contentColor = if (selected) FnColors.Background else Color(0xFFADB0B6),
+            focusedContainerColor = if (selected) Color(0xFFFF866D) else FnColors.FocusFill,
+            focusedContentColor = if (selected) FnColors.Background else FnColors.Text,
             pressedContainerColor = FnColors.Coral,
             pressedContentColor = FnColors.Background,
-            disabledContainerColor = Color(0xFF382A27),
-            disabledContentColor = Color(0xFFF0D9D1),
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Button(
-                onClick = onHome,
-                enabled = !selectedHome,
-                colors = tabColors,
-                scale = ButtonDefaults.scale(focusedScale = 1.07f),
-            ) { Text("首页", fontSize = 21.sp) }
-            Button(
-                onClick = onMy,
-                enabled = selectedHome,
-                colors = tabColors,
-                scale = ButtonDefaults.scale(focusedScale = 1.07f),
-            ) { Text("我的", fontSize = 21.sp) }
+        ),
+        border = ButtonDefaults.border(
+            border = Border(BorderStroke(0.dp, Color.Transparent), shape = shape),
+            focusedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
+            pressedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
+        ),
+        contentPadding = PaddingValues(0.dp),
+    ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(label, fontSize = 21.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
         }
     }
 }
@@ -501,14 +585,33 @@ private fun BrowseHome(
 ) {
     val retainedStore = LocalLibraryRetainedState.current
     val playlistState = retainedStore.list<Playlist>("playlists")
+    val albumState = retainedStore.paged<Album>("grid:albums")
+    val favoritePreviewState = retainedStore.paged<Track>("home:favorites-preview")
+    val favoriteLibraryState by container.musicRepository.favoriteState.collectAsStateWithLifecycle()
     val playlistSnapshot = playlistState.snapshot
     val playlists = playlistSnapshot.entries
     val playlistsLoaded = playlistSnapshot.initialLoadCompleted
+    val albums = albumState.snapshot.entries
+    val favoriteTracks = favoritePreviewState.snapshot.entries
+    val roamArtwork = remember(albums, playlists) {
+        featureArtworkSlots(
+            primary = albums.map { FeatureArtworkItem(it.name, it.coverId) },
+            fallback = playlists.map { FeatureArtworkItem(it.name, it.coverId) },
+        )
+    }
+    val favoriteArtwork = remember(favoriteTracks) {
+        featureArtworkSlots(
+            primary = favoriteTracks.map { FeatureArtworkItem(it.title, it.coverId) },
+        )
+    }
     var actionError by remember { mutableStateOf<AppError?>(null) }
     var roamActionRunning by remember { mutableStateOf(false) }
     var focusedKey by rememberSaveable { mutableStateOf<String?>(null) }
     var initialFocusRequested by remember { mutableStateOf(false) }
     val contentFocus = remember { FocusRequester() }
+    val nowPlayingFocus = remember { FocusRequester() }
+    val homeTabFocus = remember { FocusRequester() }
+    val myTabFocus = remember { FocusRequester() }
     val roamFocus = remember { FocusRequester() }
     val favoritesFocus = remember { FocusRequester() }
     val playlistRowFocus = remember { FocusRequester() }
@@ -516,6 +619,18 @@ private fun BrowseHome(
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
         retainedStore.loadListOnce(playlistState, container.musicRepository::playlists)
+        retainedStore.loadFirstPageOnce(
+            albumState,
+            { page -> container.musicRepository.albums(page, FULL_CATALOG_PAGE_SIZE) },
+        ) { it.guid.value }
+    }
+    LaunchedEffect(favoriteLibraryState.revision) {
+        retainedStore.loadFirstPageForRevision(
+            state = favoritePreviewState,
+            revision = favoriteLibraryState.revision,
+            loader = container.musicRepository::favoriteTracks,
+            key = { it.guid.value },
+        )
     }
     LaunchedEffect(playlistsLoaded, playback.hasMedia, focusedKey) {
         if (initialFocusRequested) return@LaunchedEffect
@@ -535,12 +650,12 @@ private fun BrowseHome(
             initialFocusRequested = true
         }
     }
-    Column(Modifier.fillMaxSize().padding(horizontal = 64.dp, vertical = 38.dp)) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 64.dp, vertical = 24.dp)) {
         LibraryTopBar(
-            playback,
-            true,
-            {},
-            onMy,
+            playback = playback,
+            selectedHome = true,
+            onHome = {},
+            onMy = onMy,
             onPlayer = {
                 focusedKey = "now-playing"
                 onPlayer()
@@ -548,31 +663,36 @@ private fun BrowseHome(
             modifier = Modifier
                 .then(if (focusedKey == "now-playing") Modifier.focusRequester(contentFocus) else Modifier)
                 .onFocusChanged { if (it.isFocused) focusedKey = "now-playing" },
+            nowPlayingFocus = nowPlayingFocus,
+            homeTabFocus = homeTabFocus,
+            myTabFocus = myTabFocus,
+            contentDownFocus = roamFocus,
         )
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(12.dp))
         Text("听点什么", fontSize = 34.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-            PlaylistTile(
-                "随机漫游",
-                "",
-                null,
-                FnColors.Teal,
-                featureArtwork = HomeArtworkKind.Roam,
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+            HomeFeatureCard(
+                title = "随机漫游",
+                kind = HomeArtworkKind.Roam,
+                artwork = roamArtwork,
                 modifier = Modifier
+                    .weight(1f)
                     .focusProperties {
+                        up = if (playback.hasMedia) nowPlayingFocus else homeTabFocus
                         right = favoritesFocus
                         down = playlistRowFocus
                     }
                     .focusRequester(roamFocus)
                     .then(if (focusedKey == "roam") Modifier.focusRequester(contentFocus) else Modifier)
                     .onFocusChanged { if (it.isFocused) focusedKey = "roam" },
-            ) {
+                onClick = {
+                focusedKey = "roam"
                 if (playback.queueKind == QueueKind.Roam) {
                     onPlayer()
-                    return@PlaylistTile
+                    return@HomeFeatureCard
                 }
-                if (roamActionRunning || playback.roamBusy) return@PlaylistTile
+                if (roamActionRunning || playback.roamBusy) return@HomeFeatureCard
                 roamActionRunning = true
                 scope.launch {
                     try {
@@ -586,15 +706,16 @@ private fun BrowseHome(
                         roamActionRunning = false
                     }
                 }
-            }
-            PlaylistTile(
-                "收藏",
-                "",
-                null,
-                FnColors.Coral,
-                featureArtwork = HomeArtworkKind.Favorites,
+                },
+            )
+            HomeFeatureCard(
+                title = "收藏",
+                kind = HomeArtworkKind.Favorites,
+                artwork = favoriteArtwork,
                 modifier = Modifier
+                    .weight(1f)
                     .focusProperties {
+                        up = myTabFocus
                         left = roamFocus
                         right = FocusRequester.Cancel
                         down = playlistRowFocus
@@ -602,42 +723,320 @@ private fun BrowseHome(
                     .focusRequester(favoritesFocus)
                     .then(if (focusedKey == "favorites") Modifier.focusRequester(contentFocus) else Modifier)
                     .onFocusChanged { if (it.isFocused) focusedKey = "favorites" },
-                onClick = onFavorites,
+                onClick = {
+                    focusedKey = "favorites"
+                    onFavorites()
+                },
             )
         }
         Spacer(Modifier.height(14.dp))
-        LazyRow(state = rowState, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+        LazyRow(
+            state = rowState,
+            contentPadding = PaddingValues(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
             itemsIndexed(playlists.take(12), key = { _, playlist -> playlist.guid.value }) { index, playlist ->
                 val key = "playlist:${playlist.guid.value}"
-                PlaylistTile(
-                    playlist.name,
-                    "歌单",
-                    playlist.coverId,
-                    FnColors.Coral,
+                HomePlaylistLockup(
+                    title = playlist.name,
+                    subtitle = "歌单",
+                    coverId = playlist.coverId,
                     modifier = Modifier
                         .focusProperties { up = if (index == 0) roamFocus else favoritesFocus }
                         .then(if (index == 0) Modifier.focusRequester(playlistRowFocus) else Modifier)
                         .then(if (focusedKey == key) Modifier.focusRequester(contentFocus) else Modifier)
                         .onFocusChanged { if (it.isFocused) focusedKey = key },
-                ) { onPlaylist(playlist) }
+                    onClick = {
+                        focusedKey = key
+                        onPlaylist(playlist)
+                    },
+                )
             }
             item {
-                PlaylistTile(
-                    "全部歌单",
-                    "",
-                    null,
-                    FnColors.Muted,
-                    featureArtwork = HomeArtworkKind.Collection,
+                HomePlaylistLockup(
+                    title = "全部歌单",
+                    subtitle = "浏览全部",
+                    coverId = null,
+                    fallback = HomeArtworkKind.PlaylistGrid,
                     modifier = Modifier
                         .focusProperties { up = favoritesFocus }
                         .then(if (playlists.isEmpty()) Modifier.focusRequester(playlistRowFocus) else Modifier)
                         .then(if (focusedKey == "all-playlists") Modifier.focusRequester(contentFocus) else Modifier)
                         .onFocusChanged { if (it.isFocused) focusedKey = "all-playlists" },
-                    onClick = onAll,
+                    onClick = {
+                        focusedKey = "all-playlists"
+                        onAll()
+                    },
                 )
             }
         }
         (actionError ?: playlistSnapshot.error)?.let { InlineError(it) }
+    }
+}
+
+internal data class FeatureArtworkItem(
+    val title: String,
+    val coverId: String?,
+)
+
+internal fun featureArtworkSlots(
+    primary: List<FeatureArtworkItem>,
+    fallback: List<FeatureArtworkItem> = emptyList(),
+    limit: Int = 3,
+): List<FeatureArtworkItem> {
+    if (limit <= 0) return emptyList()
+    return (primary + fallback)
+        .asSequence()
+        .mapNotNull { item ->
+            item.coverId?.trim()?.takeIf(String::isNotEmpty)?.let { item.copy(coverId = it) }
+        }
+        .distinctBy { it.coverId }
+        .take(limit)
+        .toList()
+}
+
+@Composable
+private fun HomeFeatureCard(
+    title: String,
+    kind: HomeArtworkKind,
+    artwork: List<FeatureArtworkItem>,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(8.dp)
+    val background = when (kind) {
+        HomeArtworkKind.Roam -> Brush.horizontalGradient(listOf(Color(0xFF071D19), Color(0xFF102823)))
+        HomeArtworkKind.Favorites -> Brush.horizontalGradient(listOf(Color(0xFF1C1110), Color(0xFF2A1615)))
+        HomeArtworkKind.Collection,
+        HomeArtworkKind.PlaylistGrid,
+        -> Brush.horizontalGradient(listOf(Color(0xFF17201E), Color(0xFF22302D)))
+    }
+    Button(
+        onClick = onClick,
+        modifier = modifier.height(150.dp),
+        shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
+        scale = ButtonDefaults.scale(focusedScale = 1.018f),
+        colors = ButtonDefaults.colors(
+            containerColor = Color.Transparent,
+            contentColor = FnColors.Text,
+            focusedContainerColor = Color.Transparent,
+            focusedContentColor = FnColors.Text,
+            pressedContainerColor = Color.Transparent,
+            pressedContentColor = FnColors.Text,
+        ),
+        border = ButtonDefaults.border(
+            border = Border(BorderStroke(0.5.dp, Color.White.copy(alpha = 0.05f)), shape = shape),
+            focusedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
+            pressedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
+        ),
+        contentPadding = PaddingValues(0.dp),
+    ) {
+        Box(Modifier.fillMaxSize().background(background)) {
+            FeatureCoverDeck(kind, artwork, Modifier.fillMaxSize())
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.horizontalGradient(
+                            0f to Color.Black.copy(alpha = 0.27f),
+                            0.38f to Color.Black.copy(alpha = 0.06f),
+                            1f to Color.Black.copy(alpha = 0.13f),
+                        ),
+                    ),
+            )
+            FeatureGlyph(
+                kind = kind,
+                modifier = Modifier.align(Alignment.TopStart).padding(start = 20.dp, top = 18.dp).size(48.dp),
+            )
+            Text(
+                title,
+                modifier = Modifier.align(Alignment.BottomStart).padding(start = 20.dp, bottom = 18.dp),
+                fontSize = 20.sp,
+                lineHeight = 22.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FeatureCoverDeck(
+    kind: HomeArtworkKind,
+    artwork: List<FeatureArtworkItem>,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    val placements = deckPlacements(kind, artwork.size)
+    Box(modifier.clipToBounds()) {
+        placements.forEach { placement ->
+            val item = artwork.getOrNull(placement.itemIndex) ?: return@forEach
+            val artworkShape = RoundedCornerShape(7.dp)
+            Box(
+                Modifier
+                    .align(Alignment.CenterEnd)
+                    .size(112.dp)
+                    .graphicsLayer {
+                        translationX = with(density) { placement.translationXDp.dp.toPx() }
+                        translationY = with(density) { placement.translationYDp.dp.toPx() }
+                        rotationZ = placement.rotation
+                        shadowElevation = with(density) { 7.dp.toPx() }
+                        shape = artworkShape
+                        clip = true
+                    }
+                    .border(0.5.dp, Color.White.copy(alpha = 0.22f), artworkShape),
+            ) {
+                val coverId = item.coverId
+                if (coverId != null) {
+                    RemoteArtwork(
+                        container = LocalAuthenticatedDependencies.current,
+                        coverId = coverId,
+                        variant = CoverVariant.Grid,
+                        fallbackVariant = CoverVariant.Compact,
+                        modifier = Modifier.fillMaxSize(),
+                        shape = artworkShape,
+                        contentScale = ContentScale.Crop,
+                        placeholderContent = {
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .background(Color(0xFF242927), artworkShape),
+                            )
+                        },
+                    )
+                } else {
+                    InitialArtworkPlaceholder(
+                        text = item.title,
+                        accent = if (kind == HomeArtworkKind.Roam) FnColors.Teal else FnColors.Coral,
+                        modifier = Modifier.fillMaxSize(),
+                        shape = artworkShape,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun deckPlacements(kind: HomeArtworkKind, artworkCount: Int): List<DeckPlacement> =
+    when (kind) {
+        HomeArtworkKind.Roam -> when (artworkCount.coerceAtMost(3)) {
+            1 -> listOf(DeckPlacement(0, -72f, 3f, 0f))
+            2 -> listOf(
+                DeckPlacement(0, -118f, 7f, -8f),
+                DeckPlacement(1, -24f, 5f, 8f),
+            )
+            3 -> listOf(
+                DeckPlacement(0, -146f, 6f, -11f),
+                DeckPlacement(1, -76f, 8f, 0f),
+                DeckPlacement(2, -8f, 3f, 10f),
+            )
+            else -> emptyList()
+        }
+        HomeArtworkKind.Favorites -> when (artworkCount.coerceAtMost(3)) {
+            1 -> listOf(DeckPlacement(0, -72f, 0f, 0f))
+            2 -> listOf(
+                DeckPlacement(0, -118f, 7f, -6f),
+                DeckPlacement(1, -24f, 7f, 6f),
+            )
+            3 -> listOf(
+                DeckPlacement(0, -140f, 8f, -7f),
+                DeckPlacement(2, -8f, 8f, 7f),
+                DeckPlacement(1, -72f, 0f, 0f),
+            )
+            else -> emptyList()
+        }
+        HomeArtworkKind.Collection,
+        HomeArtworkKind.PlaylistGrid,
+        -> emptyList()
+    }
+
+private data class DeckPlacement(
+    val itemIndex: Int,
+    val translationXDp: Float,
+    val translationYDp: Float,
+    val rotation: Float,
+)
+
+@Composable
+private fun FeatureGlyph(kind: HomeArtworkKind, modifier: Modifier = Modifier) {
+    val accent = if (kind == HomeArtworkKind.Roam) FnColors.Teal else FnColors.Coral
+    Box(
+        modifier
+            .background(Color(0xFF0E1314).copy(alpha = 0.92f), CircleShape)
+            .border(0.5.dp, Color.White.copy(alpha = 0.14f), CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.size(25.dp)) {
+            if (kind == HomeArtworkKind.Favorites) {
+                drawPath(heartPath(size), color = accent, style = Stroke(width = 2.2.dp.toPx()))
+            } else {
+                val stroke = 2.1.dp.toPx()
+                val startX = size.width * 0.08f
+                val endX = size.width * 0.88f
+                fun point(x: Float, y: Float) = androidx.compose.ui.geometry.Offset(x, y)
+                drawLine(accent, point(startX, size.height * 0.24f), point(size.width * 0.34f, size.height * 0.24f), stroke, StrokeCap.Round)
+                drawLine(accent, point(size.width * 0.34f, size.height * 0.24f), point(size.width * 0.67f, size.height * 0.76f), stroke, StrokeCap.Round)
+                drawLine(accent, point(size.width * 0.67f, size.height * 0.76f), point(endX, size.height * 0.76f), stroke, StrokeCap.Round)
+                drawLine(accent, point(startX, size.height * 0.76f), point(size.width * 0.34f, size.height * 0.76f), stroke, StrokeCap.Round)
+                drawLine(accent, point(size.width * 0.34f, size.height * 0.76f), point(size.width * 0.67f, size.height * 0.24f), stroke, StrokeCap.Round)
+                drawLine(accent, point(size.width * 0.67f, size.height * 0.24f), point(endX, size.height * 0.24f), stroke, StrokeCap.Round)
+                drawLine(accent, point(endX, size.height * 0.24f), point(size.width * 0.75f, size.height * 0.12f), stroke, StrokeCap.Round)
+                drawLine(accent, point(endX, size.height * 0.24f), point(size.width * 0.75f, size.height * 0.36f), stroke, StrokeCap.Round)
+                drawLine(accent, point(endX, size.height * 0.76f), point(size.width * 0.75f, size.height * 0.64f), stroke, StrokeCap.Round)
+                drawLine(accent, point(endX, size.height * 0.76f), point(size.width * 0.75f, size.height * 0.88f), stroke, StrokeCap.Round)
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomePlaylistLockup(
+    title: String,
+    subtitle: String,
+    coverId: String?,
+    modifier: Modifier = Modifier,
+    fallback: HomeArtworkKind? = null,
+    onClick: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(8.dp)
+    Button(
+        onClick = onClick,
+        modifier = modifier
+            .size(width = 190.dp, height = 174.dp)
+            .onFocusChanged { focused = it.isFocused },
+        shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
+        scale = ButtonDefaults.scale(focusedScale = 1.018f),
+        colors = ButtonDefaults.colors(
+            containerColor = Color.Transparent,
+            contentColor = FnColors.Text,
+            focusedContainerColor = Color.Transparent,
+            focusedContentColor = FnColors.Text,
+            pressedContainerColor = Color.Transparent,
+            pressedContentColor = FnColors.Text,
+        ),
+        contentPadding = PaddingValues(0.dp),
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(120.dp)
+                    .then(if (focused) Modifier.border(1.5.dp, FnColors.Coral, shape) else Modifier)
+                    .clip(shape),
+            ) {
+                PlaylistTileArtwork(
+                    title = title,
+                    coverId = coverId,
+                    accent = FnColors.Coral,
+                    modifier = Modifier.fillMaxSize(),
+                    featureArtwork = fallback,
+                )
+            }
+            Spacer(Modifier.height(7.dp))
+            Text(title, fontSize = 18.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(3.dp))
+            Text(subtitle, color = FnColors.Muted, fontSize = 12.sp, lineHeight = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
     }
 }
 
@@ -672,16 +1071,31 @@ private fun BrowseMy(
     var focusedKey by rememberSaveable { mutableStateOf<String?>(null) }
     var initialFocusRequested by remember { mutableStateOf(false) }
     val contentFocus = remember { FocusRequester() }
+    val nowPlayingFocus = remember { FocusRequester() }
+    val homeTabFocus = remember { FocusRequester() }
+    val myTabFocus = remember { FocusRequester() }
+    val settingsFocus = remember { FocusRequester() }
+    val switchAccountFocus = remember { FocusRequester() }
+    val artistRowFocus = remember { FocusRequester() }
+    val albumRowFocus = remember { FocusRequester() }
+    val libraryRowFocus = remember { FocusRequester() }
     val listState = rememberLazyListState()
     val scope = retainedStore.scope
     LaunchedEffect(Unit) {
-        retainedStore.loadFirstPageOnce(artistState, container.musicRepository::artists) { it.guid.value }
-        retainedStore.loadFirstPageOnce(albumState, container.musicRepository::albums) { it.guid.value }
+        retainedStore.loadFirstPageOnce(
+            artistState,
+            { page -> container.musicRepository.artists(page, FULL_CATALOG_PAGE_SIZE) },
+        ) { it.guid.value }
+        retainedStore.loadFirstPageOnce(
+            albumState,
+            { page -> container.musicRepository.albums(page, FULL_CATALOG_PAGE_SIZE) },
+        ) { it.guid.value }
     }
     LaunchedEffect(artistsLoaded, albumsLoaded, playback.hasMedia, focusedKey) {
         if (initialFocusRequested) return@LaunchedEffect
         val allContentLoaded = artistsLoaded && albumsLoaded
-        val restoringChrome = focusedKey == "settings" || playback.hasMedia && focusedKey == "now-playing"
+        val restoringChrome = focusedKey == "settings" || focusedKey == "switch-account" ||
+            playback.hasMedia && focusedKey == "now-playing"
         if (!allContentLoaded && !restoringChrome) return@LaunchedEffect
         val availableKeys = buildList {
             if (allContentLoaded) {
@@ -693,6 +1107,7 @@ private fun BrowseMy(
             }
             if (playback.hasMedia) add("now-playing")
             add("settings")
+            add("switch-account")
         }
         focusedKey = focusedKey?.takeIf(availableKeys::contains) ?: availableKeys.firstOrNull()
         yield()
@@ -701,12 +1116,17 @@ private fun BrowseMy(
             initialFocusRequested = true
         }
     }
-    Column(Modifier.fillMaxSize().padding(horizontal = 64.dp, vertical = 38.dp)) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 64.dp)
+            .padding(top = 24.dp),
+    ) {
         LibraryTopBar(
-            playback,
-            false,
-            onHome,
-            {},
+            playback = playback,
+            selectedHome = false,
+            onHome = onHome,
+            onMy = {},
             onPlayer = {
                 focusedKey = "now-playing"
                 onPlayer()
@@ -714,43 +1134,53 @@ private fun BrowseMy(
             modifier = Modifier
                 .then(if (focusedKey == "now-playing") Modifier.focusRequester(contentFocus) else Modifier)
                 .onFocusChanged { if (it.isFocused) focusedKey = "now-playing" },
+            nowPlayingFocus = nowPlayingFocus,
+            homeTabFocus = homeTabFocus,
+            myTabFocus = myTabFocus,
+            contentDownFocus = settingsFocus,
         )
-        Row(
-            Modifier.fillMaxWidth().padding(vertical = 16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column {
-                Text("我的音乐", fontSize = 38.sp, fontWeight = FontWeight.Bold)
-                Text("${session.user.username} · ${session.server.name}", color = FnColors.Muted, fontSize = 19.sp)
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(
-                    onClick = {
-                        focusedKey = "settings"
-                        onSettings()
-                    },
-                    modifier = Modifier
-                        .then(if (focusedKey == "settings") Modifier.focusRequester(contentFocus) else Modifier)
-                        .onFocusChanged { if (it.isFocused) focusedKey = "settings" },
-                ) { Text("设置") }
-                Button(onClick = {
-                    scope.launch {
-                        container.authenticatedActions.switchAccount()
-                    }
-                }) { Text("切换账号") }
-            }
-        }
-        LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        Spacer(Modifier.height(12.dp))
+        ProfileStrip(
+            username = session.user.username,
+            serverName = session.server.name,
+            focusedKey = focusedKey,
+            restoredFocus = contentFocus,
+            settingsFocus = settingsFocus,
+            switchAccountFocus = switchAccountFocus,
+            homeTabFocus = homeTabFocus,
+            myTabFocus = myTabFocus,
+            artistRowFocus = artistRowFocus,
+            onFocused = { focusedKey = it },
+            onSettings = {
+                focusedKey = "settings"
+                onSettings()
+            },
+            onSwitchAccount = {
+                focusedKey = "switch-account"
+                scope.launch { container.authenticatedActions.switchAccount() }
+            },
+        )
+        Spacer(Modifier.height(10.dp))
+        LazyColumn(state = listState) {
             item {
                 MediaBand(
                     "歌手",
                     artists.take(8).map {
-                        BandEntry(it.name, "${it.trackCount ?: 0} 首歌曲", it.coverId, BandKind.Artist, "artist:${it.guid.value}") { onArtist(it) }
+                        val key = "artist:${it.guid.value}"
+                        BandEntry(it.name, "${it.trackCount ?: 0} 首歌曲", it.coverId, BandKind.Artist, key) {
+                            focusedKey = key
+                            onArtist(it)
+                        }
                     },
-                    BandEntry("全部歌手", "浏览完整列表", null, BandKind.Artist, "all-artists", onArtists),
+                    BandEntry("全部歌手", "浏览完整列表", null, BandKind.Artist, "all-artists") {
+                        focusedKey = "all-artists"
+                        onArtists()
+                    },
                     focusedKey,
                     contentFocus,
+                    rowFocusRequester = artistRowFocus,
+                    upFocusRequester = settingsFocus,
+                    downFocusRequester = albumRowFocus,
                     onFocused = { focusedKey = it },
                 )
             }
@@ -758,11 +1188,21 @@ private fun BrowseMy(
                 MediaBand(
                     "专辑",
                     albums.take(8).map {
-                        BandEntry(it.name, it.artistName.orEmpty(), it.coverId, BandKind.Album, "album:${it.guid.value}") { onAlbum(it) }
+                        val key = "album:${it.guid.value}"
+                        BandEntry(it.name, it.artistName.orEmpty(), it.coverId, BandKind.Album, key) {
+                            focusedKey = key
+                            onAlbum(it)
+                        }
                     },
-                    BandEntry("全部专辑", "浏览完整列表", null, BandKind.Album, "all-albums", onAlbums),
+                    BandEntry("全部专辑", "浏览完整列表", null, BandKind.Album, "all-albums") {
+                        focusedKey = "all-albums"
+                        onAlbums()
+                    },
                     focusedKey,
                     contentFocus,
+                    rowFocusRequester = albumRowFocus,
+                    upFocusRequester = artistRowFocus,
+                    downFocusRequester = libraryRowFocus,
                     onFocused = { focusedKey = it },
                 )
             }
@@ -770,11 +1210,212 @@ private fun BrowseMy(
                 MediaBand(
                     "音乐库",
                     emptyList(),
-                    BandEntry("全部歌曲", "完整曲库", null, BandKind.Library, "all-tracks", onAllTracks),
+                    BandEntry("全部歌曲", "完整曲库", null, BandKind.Library, "all-tracks") {
+                        focusedKey = "all-tracks"
+                        onAllTracks()
+                    },
                     focusedKey,
                     contentFocus,
+                    rowFocusRequester = libraryRowFocus,
+                    upFocusRequester = albumRowFocus,
+                    downFocusRequester = FocusRequester.Cancel,
                     onFocused = { focusedKey = it },
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProfileStrip(
+    username: String,
+    serverName: String,
+    focusedKey: String?,
+    restoredFocus: FocusRequester,
+    settingsFocus: FocusRequester,
+    switchAccountFocus: FocusRequester,
+    homeTabFocus: FocusRequester,
+    myTabFocus: FocusRequester,
+    artistRowFocus: FocusRequester,
+    onFocused: (String) -> Unit,
+    onSettings: () -> Unit,
+    onSwitchAccount: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .padding(start = 4.dp, end = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ProfileAvatar(username, Modifier.size(40.dp))
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+            Text(
+                username.ifBlank { "音乐用户" },
+                fontSize = 18.sp,
+                lineHeight = 20.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(2.dp))
+            ServerChip(serverName)
+        }
+        Spacer(Modifier.width(12.dp))
+        ProfileActionButton(
+            label = "设置",
+            glyph = ProfileGlyph.Settings,
+            modifier = Modifier
+                .width(72.dp)
+                .focusProperties {
+                    left = FocusRequester.Cancel
+                    right = switchAccountFocus
+                    up = homeTabFocus
+                    down = artistRowFocus
+                }
+                .focusRequester(settingsFocus)
+                .then(if (focusedKey == "settings") Modifier.focusRequester(restoredFocus) else Modifier)
+                .onFocusChanged { if (it.isFocused) onFocused("settings") },
+            onClick = onSettings,
+        )
+        Spacer(Modifier.width(8.dp))
+        ProfileActionButton(
+            label = "切换账号",
+            glyph = ProfileGlyph.SwitchAccount,
+            modifier = Modifier
+                .width(102.dp)
+                .focusProperties {
+                    left = settingsFocus
+                    right = FocusRequester.Cancel
+                    up = myTabFocus
+                    down = artistRowFocus
+                }
+                .focusRequester(switchAccountFocus)
+                .then(if (focusedKey == "switch-account") Modifier.focusRequester(restoredFocus) else Modifier)
+                .onFocusChanged { if (it.isFocused) onFocused("switch-account") },
+            onClick = onSwitchAccount,
+        )
+    }
+}
+
+@Composable
+private fun ProfileAvatar(username: String, modifier: Modifier = Modifier) {
+    Box(
+        modifier.background(
+            brush = Brush.linearGradient(
+                listOf(Color(0xFFFF8A70), Color(0xFFD6A35E), Color(0xFF70C8AF)),
+            ),
+            shape = CircleShape,
+        ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            username.trim().take(1).ifBlank { "音" }.uppercase(),
+            color = FnColors.Background,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+@Composable
+private fun ServerChip(serverName: String) {
+    val shape = CircleShape
+    Row(
+        modifier = Modifier
+            .width(132.dp)
+            .height(18.dp)
+            .border(0.5.dp, Color.White.copy(alpha = 0.17f), shape)
+            .padding(horizontal = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ProfileGlyphCanvas(ProfileGlyph.Server, Modifier.size(11.dp), Color(0xFF9FA5A8))
+        Spacer(Modifier.width(5.dp))
+        Text(
+            serverName.ifBlank { "NAS" },
+            color = Color(0xFFB7BBBE),
+            fontSize = 10.sp,
+            lineHeight = 11.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+private enum class ProfileGlyph { Settings, SwitchAccount, Server }
+
+@Composable
+private fun ProfileActionButton(
+    label: String,
+    glyph: ProfileGlyph,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val shape = CircleShape
+    Button(
+        onClick = onClick,
+        modifier = modifier.height(36.dp),
+        shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
+        scale = ButtonDefaults.scale(focusedScale = 1.035f),
+        colors = ButtonDefaults.colors(
+            containerColor = Color.Transparent,
+            contentColor = Color(0xFFC7CACC),
+            focusedContainerColor = FnColors.Coral.copy(alpha = 0.08f),
+            focusedContentColor = FnColors.Coral,
+            pressedContainerColor = FnColors.Coral.copy(alpha = 0.13f),
+            pressedContentColor = FnColors.Coral,
+        ),
+        border = ButtonDefaults.border(
+            border = Border(BorderStroke(0.5.dp, Color.White.copy(alpha = 0.14f)), shape = shape),
+            focusedBorder = Border(BorderStroke(1.2.dp, FnColors.Coral), shape = shape),
+            pressedBorder = Border(BorderStroke(1.2.dp, FnColors.Coral), shape = shape),
+        ),
+        contentPadding = PaddingValues(horizontal = 9.dp, vertical = 0.dp),
+    ) {
+        ProfileGlyphCanvas(glyph, Modifier.size(15.dp), LocalContentColor.current)
+        Spacer(Modifier.width(6.dp))
+        Text(label, fontSize = 13.sp, lineHeight = 15.sp, maxLines = 1)
+    }
+}
+
+@Composable
+private fun ProfileGlyphCanvas(
+    glyph: ProfileGlyph,
+    modifier: Modifier = Modifier,
+    color: Color,
+) {
+    Canvas(modifier) {
+        val stroke = 1.45.dp.toPx()
+        when (glyph) {
+            ProfileGlyph.Settings -> {
+                drawCircle(color, size.minDimension * 0.24f, center, style = Stroke(stroke))
+                drawCircle(color, size.minDimension * 0.06f, center)
+                repeat(8) { index ->
+                    val angle = index * Math.PI.toFloat() / 4f
+                    val inner = size.minDimension * 0.34f
+                    val outer = size.minDimension * 0.46f
+                    drawLine(
+                        color,
+                        androidx.compose.ui.geometry.Offset(center.x + kotlin.math.cos(angle) * inner, center.y + kotlin.math.sin(angle) * inner),
+                        androidx.compose.ui.geometry.Offset(center.x + kotlin.math.cos(angle) * outer, center.y + kotlin.math.sin(angle) * outer),
+                        stroke,
+                        StrokeCap.Round,
+                    )
+                }
+            }
+            ProfileGlyph.SwitchAccount -> {
+                drawLine(color, androidx.compose.ui.geometry.Offset(size.width * 0.15f, size.height * 0.33f), androidx.compose.ui.geometry.Offset(size.width * 0.82f, size.height * 0.33f), stroke, StrokeCap.Round)
+                drawLine(color, androidx.compose.ui.geometry.Offset(size.width * 0.82f, size.height * 0.33f), androidx.compose.ui.geometry.Offset(size.width * 0.66f, size.height * 0.17f), stroke, StrokeCap.Round)
+                drawLine(color, androidx.compose.ui.geometry.Offset(size.width * 0.82f, size.height * 0.33f), androidx.compose.ui.geometry.Offset(size.width * 0.66f, size.height * 0.49f), stroke, StrokeCap.Round)
+                drawLine(color, androidx.compose.ui.geometry.Offset(size.width * 0.85f, size.height * 0.69f), androidx.compose.ui.geometry.Offset(size.width * 0.18f, size.height * 0.69f), stroke, StrokeCap.Round)
+                drawLine(color, androidx.compose.ui.geometry.Offset(size.width * 0.18f, size.height * 0.69f), androidx.compose.ui.geometry.Offset(size.width * 0.34f, size.height * 0.53f), stroke, StrokeCap.Round)
+                drawLine(color, androidx.compose.ui.geometry.Offset(size.width * 0.18f, size.height * 0.69f), androidx.compose.ui.geometry.Offset(size.width * 0.34f, size.height * 0.85f), stroke, StrokeCap.Round)
+            }
+            ProfileGlyph.Server -> {
+                val shape = androidx.compose.ui.geometry.CornerRadius(1.5.dp.toPx())
+                drawRoundRect(color, topLeft = androidx.compose.ui.geometry.Offset(size.width * 0.06f, size.height * 0.08f), size = androidx.compose.ui.geometry.Size(size.width * 0.88f, size.height * 0.34f), cornerRadius = shape, style = Stroke(stroke))
+                drawRoundRect(color, topLeft = androidx.compose.ui.geometry.Offset(size.width * 0.06f, size.height * 0.58f), size = androidx.compose.ui.geometry.Size(size.width * 0.88f, size.height * 0.34f), cornerRadius = shape, style = Stroke(stroke))
             }
         }
     }
@@ -791,6 +1432,15 @@ private data class BandEntry(
     val action: (() -> Unit)?,
 )
 
+internal fun mediaBandReturnFocusKey(
+    entryKeys: List<String>,
+    terminalKey: String,
+    lastFocusedKey: String?,
+): String = lastFocusedKey
+    ?.takeIf { it == terminalKey || it in entryKeys }
+    ?: entryKeys.firstOrNull()
+    ?: terminalKey
+
 @Composable
 private fun MediaBand(
     title: String,
@@ -798,24 +1448,64 @@ private fun MediaBand(
     terminalEntry: BandEntry,
     focusedKey: String?,
     focusRequester: FocusRequester,
+    rowFocusRequester: FocusRequester,
+    upFocusRequester: FocusRequester,
+    downFocusRequester: FocusRequester,
     onFocused: (String) -> Unit,
 ) {
+    var lastFocusedEntryKey by rememberSaveable(terminalEntry.focusKey) {
+        mutableStateOf<String?>(null)
+    }
+    val entryKeys = entries.map(BandEntry::focusKey)
+    val returnFocusKey = mediaBandReturnFocusKey(
+        entryKeys = entryKeys,
+        terminalKey = terminalEntry.focusKey,
+        lastFocusedKey = lastFocusedEntryKey,
+    )
     Column {
         Text(title, fontSize = 25.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            items(entries) { entry ->
+        LazyRow(
+            contentPadding = PaddingValues(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            itemsIndexed(entries, key = { _, entry -> entry.focusKey }) { index, entry ->
                 BandLockup(
                     entry,
-                    Modifier.then(if (focusedKey == entry.focusKey) Modifier.focusRequester(focusRequester) else Modifier)
-                        .onFocusChanged { if (it.isFocused) onFocused(entry.focusKey) },
+                    Modifier
+                        .focusProperties {
+                            if (index == 0) left = FocusRequester.Cancel
+                            up = upFocusRequester
+                            down = downFocusRequester
+                        }
+                        .then(if (returnFocusKey == entry.focusKey) Modifier.focusRequester(rowFocusRequester) else Modifier)
+                        .then(if (focusedKey == entry.focusKey) Modifier.focusRequester(focusRequester) else Modifier)
+                        .onFocusChanged {
+                            if (it.isFocused) {
+                                lastFocusedEntryKey = entry.focusKey
+                                onFocused(entry.focusKey)
+                            }
+                        },
                 )
             }
             item {
                 BandLockup(
                     terminalEntry,
-                    Modifier.then(if (focusedKey == terminalEntry.focusKey) Modifier.focusRequester(focusRequester) else Modifier)
-                        .onFocusChanged { if (it.isFocused) onFocused(terminalEntry.focusKey) },
+                    Modifier
+                        .focusProperties {
+                            if (entries.isEmpty()) left = FocusRequester.Cancel
+                            right = FocusRequester.Cancel
+                            up = upFocusRequester
+                            down = downFocusRequester
+                        }
+                        .then(if (returnFocusKey == terminalEntry.focusKey) Modifier.focusRequester(rowFocusRequester) else Modifier)
+                        .then(if (focusedKey == terminalEntry.focusKey) Modifier.focusRequester(focusRequester) else Modifier)
+                        .onFocusChanged {
+                            if (it.isFocused) {
+                                lastFocusedEntryKey = terminalEntry.focusKey
+                                onFocused(terminalEntry.focusKey)
+                            }
+                        },
                 )
             }
         }
@@ -839,12 +1529,45 @@ private fun BandLockup(entry: BandEntry, modifier: Modifier = Modifier) {
             modifier = modifier,
             enabled = entry.action != null,
         ) { entry.action?.invoke() }
-        BandKind.Library -> LibraryLockup(
+        BandKind.Library -> MyLibraryLockup(
             entry.title,
             entry.subtitle,
             modifier = modifier,
             enabled = entry.action != null,
         ) { entry.action?.invoke() }
+    }
+}
+
+@Composable
+private fun MyLibraryLockup(
+    title: String,
+    subtitle: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(8.dp)
+    val artworkShape = RoundedCornerShape(4.dp)
+    Button(
+        enabled = enabled,
+        onClick = onClick,
+        modifier = modifier.size(width = 170.dp, height = 95.dp),
+        shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
+        scale = ButtonDefaults.scale(focusedScale = 1.025f),
+        colors = lockupButtonColors(),
+        border = lockupButtonBorder(shape),
+        contentPadding = PaddingValues(7.dp),
+    ) {
+        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+            CollectionArtworkFallbackContent(
+                title = title,
+                fallback = CollectionArtworkFallback.Collection,
+                modifier = Modifier.size(73.dp),
+                shape = artworkShape,
+            )
+            Spacer(Modifier.width(9.dp))
+            LockupLabels(title, subtitle, Modifier.weight(1f))
+        }
     }
 }
 
@@ -863,22 +1586,35 @@ private fun AllPlaylists(container: AuthenticatedAppDependencies, onOpen: (Playl
 
 @Composable
 private fun ArtistGrid(container: AuthenticatedAppDependencies, onOpen: (Artist) -> Unit) {
-    PagedGrid("artists", "全部歌手", loader = container.musicRepository::artists, key = { it.guid.value }) { artist, modifier ->
+    PagedCatalogPage(
+        stateKey = "artists",
+        title = "全部歌手",
+        totalLabel = { "$it 位歌手" },
+        loader = { page -> container.musicRepository.artists(page, FULL_CATALOG_PAGE_SIZE) },
+        key = { it.guid.value },
+    ) { artist, modifier ->
         ArtistLockup(artist.name, "${artist.trackCount ?: 0} 首歌曲", artist.coverId, modifier = modifier) { onOpen(artist) }
     }
 }
 
 @Composable
 private fun AlbumGrid(container: AuthenticatedAppDependencies, onOpen: (Album) -> Unit) {
-    PagedGrid("albums", "全部专辑", loader = container.musicRepository::albums, key = { it.guid.value }) { album, modifier ->
+    PagedCatalogPage(
+        stateKey = "albums",
+        title = "全部专辑",
+        totalLabel = { "$it 张专辑" },
+        loader = { page -> container.musicRepository.albums(page, FULL_CATALOG_PAGE_SIZE) },
+        key = { it.guid.value },
+    ) { album, modifier ->
         AlbumLockup(album.name, album.artistName.orEmpty(), album.coverId, modifier = modifier) { onOpen(album) }
     }
 }
 
 @Composable
-private fun <T> PagedGrid(
+private fun <T> PagedCatalogPage(
     stateKey: String,
     title: String,
+    totalLabel: (Int) -> String,
     loader: suspend (Int) -> Page<T>,
     key: (T) -> String,
     item: @Composable (T, Modifier) -> Unit,
@@ -887,15 +1623,17 @@ private fun <T> PagedGrid(
     val retained = retainedStore.paged<T>("grid:$stateKey")
     val snapshot = retained.snapshot
     val entries = snapshot.entries
-    val page = snapshot.page
-    val hasNext = snapshot.hasNext
-    val loading = retained.loading
+    var currentPage by rememberSaveable(stateKey) { mutableStateOf(1) }
     var focusedKey by rememberSaveable(stateKey) { mutableStateOf<String?>(null) }
+    var lastFocusedIndex by rememberSaveable(stateKey) { mutableStateOf(0) }
+    var pendingPage by remember(stateKey) { mutableStateOf<Int?>(null) }
+    var pagerFocusedTarget by remember(stateKey) { mutableStateOf<CatalogPagerTarget?>(null) }
     var initialFocusRequested by remember(stateKey) { mutableStateOf(false) }
-    val contentFocus = remember(stateKey) { FocusRequester() }
-    val gridState = rememberLazyGridState()
+    val previousPageFocus = remember(stateKey) { FocusRequester() }
+    val nextPageFocus = remember(stateKey) { FocusRequester() }
+
     fun load(target: Int) {
-        if (retained.loading) return
+        if (retained.loading || target > 1 && !retained.snapshot.hasNext) return
         retained.loading = true
         retainedStore.scope.launch {
             runCatching { loader(target) }
@@ -914,31 +1652,193 @@ private fun <T> PagedGrid(
             load(1)
         }
     }
-    LaunchedEffect(snapshot.initialLoadCompleted, entries, focusedKey) {
-        if (!snapshot.initialLoadCompleted || entries.isEmpty() || initialFocusRequested) return@LaunchedEffect
-        val keys = entries.map(key)
-        focusedKey = focusedKey?.takeIf(keys::contains) ?: keys.first()
-        yield()
-        runCatching { contentFocus.requestFocus() }
-        initialFocusRequested = true
-    }
-    Column(Modifier.fillMaxSize().padding(64.dp, 44.dp)) {
-        Text(title, fontSize = 40.sp, fontWeight = FontWeight.Bold)
-        snapshot.error?.let { InlineError(it) }
-        Spacer(Modifier.height(20.dp))
-        LazyVerticalGrid(state = gridState, columns = GridCells.Fixed(4), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            items(entries, key = key) { entry ->
-                val entryKey = key(entry)
-                item(
-                    entry,
-                    Modifier.then(if (focusedKey == entryKey) Modifier.focusRequester(contentFocus) else Modifier)
-                        .onFocusChanged { if (it.isFocused) focusedKey = entryKey },
-                )
+
+    Box(Modifier.fillMaxSize()) {
+        val columns = 4
+        val rows = 3
+        val pageSize = FULL_CATALOG_PAGE_SIZE
+        val horizontalPadding = 64.dp
+        val verticalPadding = 44.dp
+        val gridHeight = 95.dp * rows + 14.dp * (rows - 1) + 8.dp
+        val totalPages = catalogPageCount(snapshot.total, entries.size, pageSize)
+        val visibleEntries = catalogPageEntries(entries, currentPage, pageSize)
+        val itemFocuses = remember(stateKey, pageSize) { List(pageSize) { FocusRequester() } }
+        val retryFocus = remember(stateKey) { FocusRequester() }
+        val canPrevious = currentPage > 1
+        val canNext = currentPage < totalPages
+        val returnItemFocus = itemFocuses[
+            lastFocusedIndex.coerceIn(0, visibleEntries.lastIndex.coerceAtLeast(0)),
+        ]
+
+        fun showPage(target: Int) {
+            if (target !in 1..totalPages) return
+            val start = catalogPageStartIndex(target, pageSize)
+            if (start < entries.size) {
+                currentPage = target
+                pendingPage = null
+            } else {
+                pendingPage = target
+                if (!retained.loading) load(target)
             }
-            if (entries.isEmpty() && snapshot.error != null) {
-                item { LoadMoreBlock(1, loading) { load(1) } }
+        }
+
+        LaunchedEffect(snapshot.initialLoadCompleted, entries, pageSize, focusedKey) {
+            if (!snapshot.initialLoadCompleted || entries.isEmpty() || initialFocusRequested) return@LaunchedEffect
+            val retainedIndex = focusedKey?.let { retainedKey -> entries.indexOfFirst { key(it) == retainedKey } } ?: -1
+            val targetPage = if (retainedIndex >= 0) retainedIndex / pageSize + 1 else currentPage.coerceIn(1, totalPages)
+            if (currentPage != targetPage) {
+                currentPage = targetPage
+                return@LaunchedEffect
             }
-            if (hasNext) item { LoadMoreBlock(page + 1, loading) { load(page + 1) } }
+            val targetIndex = if (retainedIndex >= 0) retainedIndex % pageSize else 0
+            focusedKey = key(visibleEntries.getOrElse(targetIndex) { visibleEntries.first() })
+            lastFocusedIndex = targetIndex.coerceAtMost(visibleEntries.lastIndex)
+            yield()
+            runCatching { itemFocuses[lastFocusedIndex].requestFocus() }
+            initialFocusRequested = true
+        }
+
+        LaunchedEffect(snapshot.initialLoadCompleted, entries, snapshot.error) {
+            if (
+                !snapshot.initialLoadCompleted ||
+                entries.isNotEmpty() ||
+                snapshot.error == null ||
+                initialFocusRequested
+            ) return@LaunchedEffect
+            yield()
+            runCatching { retryFocus.requestFocus() }
+            initialFocusRequested = true
+        }
+
+        LaunchedEffect(snapshot.initialLoadCompleted, totalPages, pageSize) {
+            if (snapshot.initialLoadCompleted && currentPage > totalPages) currentPage = totalPages
+        }
+
+        LaunchedEffect(currentPage, pageSize, entries.size, snapshot.page, snapshot.hasNext) {
+            if (
+                snapshot.initialLoadCompleted &&
+                !retained.loading &&
+                shouldPrefetchCatalogContinuation(currentPage, pageSize, entries.size, snapshot.hasNext)
+            ) {
+                load(snapshot.page + 1)
+            }
+        }
+
+        LaunchedEffect(pendingPage, entries.size, snapshot.hasNext, retained.loading, snapshot.error) {
+            val target = pendingPage ?: return@LaunchedEffect
+            if (catalogPageStartIndex(target, pageSize) < entries.size) {
+                currentPage = target.coerceAtMost(totalPages)
+                pendingPage = null
+            } else if (!retained.loading && snapshot.hasNext && snapshot.error == null) {
+                load(target)
+            } else if (!retained.loading) {
+                pendingPage = null
+            }
+        }
+
+        LaunchedEffect(canPrevious, canNext, pagerFocusedTarget) {
+            when {
+                pagerFocusedTarget == CatalogPagerTarget.Previous && !canPrevious && canNext -> {
+                    yield()
+                    runCatching { nextPageFocus.requestFocus() }
+                }
+
+                pagerFocusedTarget == CatalogPagerTarget.Next && !canNext && canPrevious -> {
+                    yield()
+                    runCatching { previousPageFocus.requestFocus() }
+                }
+            }
+        }
+
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(horizontal = horizontalPadding, vertical = verticalPadding),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(title, fontSize = 40.sp, fontWeight = FontWeight.Bold)
+                snapshot.total?.let { total ->
+                    Spacer(Modifier.width(14.dp))
+                    Text(totalLabel(total), color = FnColors.Muted, fontSize = 12.sp)
+                }
+                snapshot.error?.let { error ->
+                    Spacer(Modifier.width(18.dp))
+                    Text(appErrorMessage(error), color = FnColors.Coral, fontSize = 12.sp)
+                }
+            }
+            Spacer(Modifier.height(20.dp))
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(columns),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(gridHeight),
+                userScrollEnabled = false,
+                contentPadding = PaddingValues(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                items(
+                    count = visibleEntries.size,
+                    key = { index -> key(visibleEntries[index]) },
+                ) { index ->
+                    val entry = visibleEntries[index]
+                    val entryKey = key(entry)
+                    val column = index % columns
+                    val nextRowIndex = index + columns
+                    val pagerTarget = catalogPagerTarget(column, columns, canPrevious, canNext)
+                    item(
+                        entry,
+                        Modifier
+                            .focusProperties {
+                                left = itemFocuses.getOrNull(index - 1)
+                                    ?.takeIf { column > 0 }
+                                    ?: FocusRequester.Cancel
+                                right = itemFocuses.getOrNull(index + 1)
+                                    ?.takeIf { column < columns - 1 && index + 1 < visibleEntries.size }
+                                    ?: FocusRequester.Cancel
+                                up = itemFocuses.getOrNull(index - columns) ?: FocusRequester.Cancel
+                                down = if (nextRowIndex < visibleEntries.size) {
+                                    itemFocuses[nextRowIndex]
+                                } else {
+                                    when (pagerTarget) {
+                                        CatalogPagerTarget.Previous -> previousPageFocus
+                                        CatalogPagerTarget.Next -> nextPageFocus
+                                        null -> FocusRequester.Cancel
+                                    }
+                                }
+                            }
+                            .focusRequester(itemFocuses[index])
+                            .onFocusChanged {
+                                if (it.isFocused) {
+                                    focusedKey = entryKey
+                                    lastFocusedIndex = index
+                                }
+                            },
+                    )
+                }
+
+                if (visibleEntries.isEmpty() && snapshot.error != null) {
+                    item {
+                        CatalogRetryButton(
+                            loading = retained.loading,
+                            modifier = Modifier.focusRequester(retryFocus),
+                        ) { load(1) }
+                    }
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            CatalogPager(
+                currentPage = currentPage,
+                totalPages = totalPages,
+                canPrevious = canPrevious,
+                canNext = canNext,
+                previousFocus = previousPageFocus,
+                nextFocus = nextPageFocus,
+                upFocus = returnItemFocus,
+                onPagerFocused = { pagerFocusedTarget = it },
+                onPrevious = { showPage(currentPage - 1) },
+                onNext = { showPage(currentPage + 1) },
+            )
         }
     }
 }
@@ -965,7 +1865,13 @@ private fun <T> GridPage(
     Column(Modifier.fillMaxSize().padding(64.dp, 44.dp)) {
         Text(title, fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(20.dp))
-        LazyVerticalGrid(state = gridState, columns = GridCells.Fixed(4), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        LazyVerticalGrid(
+            state = gridState,
+            columns = GridCells.Fixed(4),
+            contentPadding = PaddingValues(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
             items(entries, key = key) { entry ->
                 val entryKey = key(entry)
                 item(
@@ -1119,6 +2025,7 @@ private fun ArtistAlbumGrid(
         columns = GridCells.Fixed(3),
         state = gridState,
         modifier = Modifier.fillMaxSize().padding(top = 12.dp),
+        contentPadding = PaddingValues(4.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -2094,7 +3001,7 @@ private fun PlaylistTileArtwork(
     }
 }
 
-private enum class HomeArtworkKind { Roam, Favorites, Collection }
+private enum class HomeArtworkKind { Roam, Favorites, Collection, PlaylistGrid }
 
 @Composable
 private fun HomeFeatureArtwork(kind: HomeArtworkKind, modifier: Modifier) {
@@ -2301,6 +3208,48 @@ private fun HomeFeatureArtwork(kind: HomeArtworkKind, modifier: Modifier) {
                     cornerRadius = corner,
                 )
             }
+
+            HomeArtworkKind.PlaylistGrid -> {
+                drawRect(Color(0xFF171C1F))
+                val borderInset = shortEdge * 0.012f
+                drawRoundRect(
+                    color = Color.White.copy(alpha = 0.13f),
+                    topLeft = androidx.compose.ui.geometry.Offset(borderInset, borderInset),
+                    size = androidx.compose.ui.geometry.Size(
+                        size.width - borderInset * 2f,
+                        size.height - borderInset * 2f,
+                    ),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(shortEdge * 0.07f),
+                    style = Stroke(
+                        width = 1.dp.toPx(),
+                        pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(
+                            floatArrayOf(4.dp.toPx(), 4.dp.toPx()),
+                        ),
+                    ),
+                )
+                val cellSize = shortEdge * 0.15f
+                val gap = shortEdge * 0.055f
+                val gridWidth = cellSize * 2f + gap
+                val gridHeight = cellSize * 2f + gap
+                val gridOrigin = androidx.compose.ui.geometry.Offset(
+                    (size.width - gridWidth) / 2f,
+                    (size.height - gridHeight) / 2f,
+                )
+                repeat(2) { row ->
+                    repeat(2) { column ->
+                        drawRoundRect(
+                            color = Color(0xFF858B8E),
+                            topLeft = androidx.compose.ui.geometry.Offset(
+                                gridOrigin.x + column * (cellSize + gap),
+                                gridOrigin.y + row * (cellSize + gap),
+                            ),
+                            size = androidx.compose.ui.geometry.Size(cellSize, cellSize),
+                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(shortEdge * 0.035f),
+                            style = Stroke(width = 2.dp.toPx()),
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -2329,6 +3278,7 @@ private fun ArtistLockup(
         shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
         scale = ButtonDefaults.scale(focusedScale = 1.025f),
         colors = lockupButtonColors(),
+        border = lockupButtonBorder(shape),
         contentPadding = PaddingValues(7.dp),
     ) {
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
@@ -2395,6 +3345,7 @@ private fun AlbumLockup(
         shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
         scale = ButtonDefaults.scale(focusedScale = 1.025f),
         colors = lockupButtonColors(),
+        border = lockupButtonBorder(shape),
         contentPadding = PaddingValues(7.dp),
     ) {
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
@@ -2420,33 +3371,6 @@ private fun AlbumLockup(
 }
 
 @Composable
-private fun LibraryLockup(
-    title: String,
-    subtitle: String,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    onClick: () -> Unit,
-) {
-    val shape = RoundedCornerShape(8.dp)
-    val artworkShape = RoundedCornerShape(6.dp)
-    Button(
-        enabled = enabled,
-        onClick = onClick,
-        modifier = modifier.size(width = 170.dp, height = 95.dp),
-        shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
-        scale = ButtonDefaults.scale(focusedScale = 1.025f),
-        colors = lockupButtonColors(),
-        contentPadding = PaddingValues(7.dp),
-    ) {
-        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-            InitialArtworkPlaceholder(title, FnColors.Teal, Modifier.size(61.dp), artworkShape)
-            Spacer(Modifier.width(10.dp))
-            LockupLabels(title, subtitle, Modifier.weight(1f))
-        }
-    }
-}
-
-@Composable
 private fun LockupLabels(title: String, subtitle: String, modifier: Modifier = Modifier) {
     Column(modifier, verticalArrangement = Arrangement.Center) {
         Text(title, fontSize = 12.sp, lineHeight = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -2459,27 +3383,157 @@ private fun LockupLabels(title: String, subtitle: String, modifier: Modifier = M
 
 @Composable
 private fun lockupButtonColors() = ButtonDefaults.colors(
-    containerColor = Color(0xFF1B201F),
+    containerColor = Color.Transparent,
     contentColor = FnColors.Text,
     focusedContainerColor = Color(0xFF303634),
     focusedContentColor = FnColors.Text,
+    pressedContainerColor = Color(0xFF303634),
+    pressedContentColor = FnColors.Text,
+    disabledContainerColor = Color.Transparent,
 )
 
 @Composable
-private fun LoadMoreBlock(nextPage: Int, loading: Boolean, onClick: () -> Unit) {
+private fun lockupButtonBorder(shape: Shape) = ButtonDefaults.border(
+    border = Border(BorderStroke(1.5.dp, Color.Transparent), shape = shape),
+    focusedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
+    pressedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
+)
+
+@Composable
+private fun CatalogPager(
+    currentPage: Int,
+    totalPages: Int,
+    canPrevious: Boolean,
+    canNext: Boolean,
+    previousFocus: FocusRequester,
+    nextFocus: FocusRequester,
+    upFocus: FocusRequester,
+    onPagerFocused: (CatalogPagerTarget?) -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().height(48.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CatalogPageArrowButton(
+            direction = CatalogPagerTarget.Previous,
+            enabled = canPrevious,
+            modifier = Modifier
+                .focusProperties {
+                    left = FocusRequester.Cancel
+                    right = if (canNext) nextFocus else FocusRequester.Cancel
+                    up = upFocus
+                }
+                .focusRequester(previousFocus)
+                .onFocusChanged { if (it.isFocused) onPagerFocused(CatalogPagerTarget.Previous) },
+            onClick = onPrevious,
+        )
+        Row(
+            modifier = Modifier.width(82.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(currentPage.toString(), color = FnColors.Muted, fontSize = 13.sp)
+            Spacer(Modifier.width(6.dp))
+            Text("/", color = FnColors.Muted, fontSize = 13.sp)
+            Spacer(Modifier.width(6.dp))
+            Text(totalPages.toString(), color = FnColors.Muted, fontSize = 13.sp)
+        }
+        CatalogPageArrowButton(
+            direction = CatalogPagerTarget.Next,
+            enabled = canNext,
+            modifier = Modifier
+                .focusProperties {
+                    left = if (canPrevious) previousFocus else FocusRequester.Cancel
+                    right = FocusRequester.Cancel
+                    up = upFocus
+                }
+                .focusRequester(nextFocus)
+                .onFocusChanged { if (it.isFocused) onPagerFocused(CatalogPagerTarget.Next) },
+            onClick = onNext,
+        )
+    }
+}
+
+@Composable
+private fun CatalogPageArrowButton(
+    direction: CatalogPagerTarget,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val shape = CircleShape
+    Button(
+        enabled = enabled,
+        onClick = onClick,
+        modifier = modifier
+            .size(42.dp)
+            .semantics {
+                contentDescription = if (direction == CatalogPagerTarget.Previous) "上一页" else "下一页"
+            },
+        shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
+        scale = ButtonDefaults.scale(focusedScale = 1.05f),
+        colors = ButtonDefaults.colors(
+            containerColor = Color(0xFF171B1D),
+            contentColor = Color(0xFFB8BEC1),
+            focusedContainerColor = FnColors.Coral.copy(alpha = 0.09f),
+            focusedContentColor = FnColors.Coral,
+            pressedContainerColor = FnColors.Coral.copy(alpha = 0.14f),
+            pressedContentColor = FnColors.Coral,
+            disabledContainerColor = Color.Transparent,
+            disabledContentColor = Color(0xFF50575A),
+        ),
+        border = ButtonDefaults.border(
+            border = Border(BorderStroke(1.5.dp, Color.Transparent), shape = shape),
+            focusedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
+            pressedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
+        ),
+        contentPadding = PaddingValues(0.dp),
+    ) {
+        val contentColor = LocalContentColor.current
+        Canvas(Modifier.size(15.dp)) {
+            val left = if (direction == CatalogPagerTarget.Previous) size.width * 0.66f else size.width * 0.34f
+            val right = if (direction == CatalogPagerTarget.Previous) size.width * 0.34f else size.width * 0.66f
+            drawLine(
+                color = contentColor,
+                start = androidx.compose.ui.geometry.Offset(left, size.height * 0.18f),
+                end = androidx.compose.ui.geometry.Offset(right, size.height * 0.50f),
+                strokeWidth = 1.8.dp.toPx(),
+                cap = StrokeCap.Round,
+            )
+            drawLine(
+                color = contentColor,
+                start = androidx.compose.ui.geometry.Offset(right, size.height * 0.50f),
+                end = androidx.compose.ui.geometry.Offset(left, size.height * 0.82f),
+                strokeWidth = 1.8.dp.toPx(),
+                cap = StrokeCap.Round,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CatalogRetryButton(
+    loading: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
     val shape = RoundedCornerShape(8.dp)
     Button(
         enabled = !loading,
         onClick = onClick,
-        modifier = Modifier.size(width = 170.dp, height = 95.dp),
+        modifier = modifier.size(width = 170.dp, height = 95.dp),
         shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
         scale = ButtonDefaults.scale(focusedScale = 1.025f),
         colors = lockupButtonColors(),
+        border = lockupButtonBorder(shape),
         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
     ) {
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
-            Text(if (loading) "正在加载" else "加载更多", fontSize = 12.sp)
-            Text("第 $nextPage 页", color = FnColors.Muted, fontSize = 9.sp)
+            Text(if (loading) "正在加载" else "重试", fontSize = 12.sp)
+            Text("重新加载列表", color = FnColors.Muted, fontSize = 9.sp)
         }
     }
 }
@@ -2490,11 +3544,12 @@ private fun RemoteArtwork(
     coverId: String,
     variant: CoverVariant,
     modifier: Modifier = Modifier,
+    fallbackVariant: CoverVariant? = null,
     shape: Shape = RoundedCornerShape(8.dp),
     contentScale: ContentScale = ContentScale.Fit,
     placeholderContent: (@Composable () -> Unit)? = null,
 ) {
-    val bitmap = rememberRemoteArtworkBitmap(container, coverId, variant)
+    val bitmap = rememberRemoteArtworkBitmap(container, coverId, variant, fallbackVariant)
     if (bitmap != null) {
         Image(bitmap.asImageBitmap(), null, modifier.clip(shape), contentScale = contentScale)
     } else {
@@ -2518,12 +3573,23 @@ private fun rememberRemoteArtworkBitmap(
     container: AuthenticatedAppDependencies,
     coverId: String?,
     variant: CoverVariant,
+    fallbackVariant: CoverVariant? = null,
 ): Bitmap? {
-    val initialBitmap = remember(container, coverId, variant) {
-        coverId?.let { container.artworkBitmapCache.peek(it, variant) }
+    val initialBitmap = remember(container, coverId, variant, fallbackVariant) {
+        coverId?.let { id ->
+            container.artworkBitmapCache.peek(id, variant)
+                ?: fallbackVariant?.let { container.artworkBitmapCache.peek(id, it) }
+        }
     }
-    val bitmap by produceState(initialBitmap, container, coverId, variant) {
-        value = coverId?.let { container.artworkBitmapCache.get(it, variant) }
+    val bitmap by produceState(initialBitmap, container, coverId, variant, fallbackVariant) {
+        value = coverId?.let { id ->
+            container.artworkBitmapCache.getProgressively(
+                coverId = id,
+                variant = variant,
+                fallbackVariant = fallbackVariant,
+                onIntermediate = { value = it },
+            )
+        }
     }
     return if (coverId == null) null else bitmap
 }

@@ -231,10 +231,11 @@ class MusicRepository internal constructor(
         fetch = { session.authenticated { it.playlistTracks(guid, page) } },
     ) { it.toDomain() }.also(::observeFavoriteTracks)
 
-    suspend fun artists(page: Int) = cachedPage<ArtistDto, Artist>(
-        sourceKey = "artists",
+    suspend fun artists(page: Int, size: Int = 50) = cachedPage<ArtistDto, Artist>(
+        sourceKey = sizedPageSourceKey("artists", size),
         page = page,
-        fetch = { session.authenticated { it.artists(page) } },
+        pageSize = size,
+        fetch = { session.authenticated { it.artists(page, size) } },
     ) { it.toDomain() }
 
     suspend fun artist(guid: String): Artist = cachedIndex<ArtistDto, Artist>(
@@ -254,10 +255,11 @@ class MusicRepository internal constructor(
         fetch = { session.authenticated { it.artistAlbums(guid, page) } },
     ) { it.toDomain() }
 
-    suspend fun albums(page: Int) = cachedPage<AlbumDto, Album>(
-        sourceKey = "albums",
+    suspend fun albums(page: Int, size: Int = 50) = cachedPage<AlbumDto, Album>(
+        sourceKey = sizedPageSourceKey("albums", size),
         page = page,
-        fetch = { session.authenticated { it.albums(page) } },
+        pageSize = size,
+        fetch = { session.authenticated { it.albums(page, size) } },
     ) { it.toDomain() }
 
     suspend fun album(guid: String): Album = cachedIndex<AlbumDto, Album>(
@@ -513,6 +515,7 @@ class MusicRepository internal constructor(
     private suspend inline fun <reified Dto, Domain> cachedPage(
         sourceKey: String,
         page: Int,
+        pageSize: Int = PAGE_SIZE,
         crossinline fetch: suspend () -> SortedPageListDto<Dto>,
         noinline transform: (Dto) -> Domain,
     ): Page<Domain> {
@@ -551,7 +554,7 @@ class MusicRepository internal constructor(
             }
         }
         return (decodedResponse ?: ApiDecoder.json.decodeFromString<SortedPageListDto<Dto>>(payload))
-            .toPage(page, transform)
+            .toDomainPage(page, pageSize, transform)
     }
 
     private suspend inline fun <reified Dto, Domain> cachedIndex(
@@ -621,11 +624,6 @@ class MusicRepository internal constructor(
 
     private fun now(): Long = System.currentTimeMillis()
 
-    private fun <Dto, Domain> SortedPageListDto<Dto>.toPage(
-        page: Int,
-        transform: (Dto) -> Domain,
-    ) = Page(list.map(transform), page, PAGE_SIZE, total, sort)
-
     private companion object {
         const val METADATA_CAPACITY_BYTES = 8 * 1024 * 1024
         const val ARTWORK_MEMORY_CAPACITY_BYTES = 24 * 1024 * 1024
@@ -644,6 +642,20 @@ class MusicRepository internal constructor(
             return coordinator::match
         }
     }
+}
+
+internal fun sizedPageSourceKey(sourceKey: String, size: Int): String {
+    require(size > 0)
+    return "$sourceKey:size=$size"
+}
+
+internal fun <Dto, Domain> SortedPageListDto<Dto>.toDomainPage(
+    page: Int,
+    pageSize: Int,
+    transform: (Dto) -> Domain,
+): Page<Domain> {
+    require(pageSize > 0)
+    return Page(list.map(transform), page, pageSize, total, sort)
 }
 
 internal suspend fun resolveLyricsWithFallback(

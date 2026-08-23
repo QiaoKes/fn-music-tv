@@ -1,0 +1,2 @@
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend spec index for verification scope and consistency checks."}
+{"file":".trellis/spec/frontend/android-tv-interaction.md","reason":"Quality gate for D-pad, touch, focus restoration, responsive layout and artwork behavior."}

@@ -197,6 +197,32 @@ class TrimMusicApiTest {
         )
     }
 
+    @Test fun `artist and album catalogs honor the television page size`() = runBlocking {
+        server.enqueue(
+            MockResponse.Builder()
+                .body("""{"code":0,"msg":"success","data":{"list":[],"total":24,"sort":"trackCount,desc"}}""")
+                .build(),
+        )
+        server.enqueue(
+            MockResponse.Builder()
+                .body("""{"code":0,"msg":"success","data":{"list":[],"total":24,"sort":"newTrackAddedAt,desc"}}""")
+                .build(),
+        )
+        val api = api()
+
+        api.artists(page = 2, size = 12)
+        api.albums(page = 2, size = 12)
+
+        assertEquals(
+            "/music/api/v1/artist/list?page=2&size=12&sort=trackCount%2Cdesc",
+            server.takeRequest().target,
+        )
+        assertEquals(
+            "/music/api/v1/album/list?page=2&size=12&sort=newTrackAddedAt%2Cdesc",
+            server.takeRequest().target,
+        )
+    }
+
     @Test fun `roam start permits an empty successful result`() = runBlocking {
         server.enqueue(
             MockResponse.Builder()
