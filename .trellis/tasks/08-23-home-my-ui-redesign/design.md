@@ -2,7 +2,7 @@
 
 ## Scope and boundaries
 
-本次仅调整 `app` 层已登录后的 Home / My 概览界面。路由、Repository API、播放控制、账号协调、详情页和设置页保持现有边界。主要实现位于 `app/src/main/java/com/fnmusic/tv/ui/AuthenticatedApp.kt`，共享状态仍由 `LibraryRetainedStateStore` 和现有 `AuthenticatedAppDependencies` 提供。
+本次主要调整 `app` 层已登录后的 Home / My 概览界面，并让歌手 / 专辑 Repository 透传现有服务端页大小参数。路由、播放控制、账号协调、详情页和设置页保持现有边界。主要实现位于 `app/src/main/java/com/fnmusic/tv/ui/AuthenticatedApp.kt`，共享状态仍由 `LibraryRetainedStateStore` 和现有 `AuthenticatedAppDependencies` 提供。
 
 视觉基准：
 
@@ -31,7 +31,7 @@
 ### My profile strip
 
 - 移除重复的“我的音乐”页面大标题，`ProfileStrip` 在顶部导航后以 12dp 间距直接出现，为媒体内容释放更多垂直空间。
-- `LibraryTopBar` 在 My 且无媒体时保留空白左侧槽位，使分段导航继续右对齐；会话加载态 `BrandLoading` 复用 `R.drawable.ic_logo`，在品牌文字左侧显示 54dp Logo。
+- `LibraryTopBar` 在 Home / My 无媒体时都保留空白左侧槽位，使分段导航继续右对齐，且不显示常驻品牌文字；会话加载态 `BrandLoading` 复用 `R.drawable.ic_logo`，只在启动过渡中的品牌文字左侧显示 54dp Logo。
 - 新建 `ProfileStrip`，内部为 `ProfileAvatar`、用户名、`ServerChip`、弹性间隔、设置与切换账号两个 `ProfileActionButton`。
 - `ProfileStrip` 只承担稳定布局，不绘制外层背景或边框；两个操作按钮继续独立表达可操作性和焦点状态。
 - 用户名和服务器名限制为单行省略；操作区固定宽度，身份区使用 `weight(1f)`，避免长文本挤压按钮。
@@ -46,6 +46,15 @@
 - “全部歌手”“全部专辑”保留在各自横向列表末尾；“音乐库 / 全部歌曲”作为专辑下方第三个 band，位于首屏下方并由 `LazyColumn` 滚动到达。
 - `MyLibraryLockup` 直接调用 `CollectionArtworkFallbackContent(..., CollectionArtworkFallback.Collection, ...)`，与全部歌曲详情头图复用 `HomeArtworkKind.Collection`，不再走 `InitialArtworkPlaceholder("全部歌曲", ...)`。
 - 所有承载缩放卡片的 `LazyRow` / `LazyVerticalGrid` 使用 4dp `contentPadding`，给首尾焦点描边与缩放留出安全区。
+
+### Shared full-catalog pagination
+
+- `ArtistGrid` 和 `AlbumGrid` 均委托给泛型 `PagedCatalogPage<T>`。调用方只提供 `stateKey`、标题、总数文案、Repository loader、稳定键和现有 `ArtistLockup` / `AlbumLockup`。
+- 标准 TV 视口使用 4 列 × 3 行，页容量固定为 12。网格高度由 3 行和 95dp 卡片高度显式计算，`userScrollEnabled = false`。
+- `MusicRepository.artists(page, size)` 和 `albums(page, size)` 将 `size = 12` 透传给 `TrimMusicApi`。`sizedPageSourceKey` 把页大小纳入内存、响应和 Room 缓存键，使旧默认 50 项缓存与 TV 12 项缓存彻底隔离。
+- `RetainedPageSnapshot.total` 保留 API 总数。一个 API page 就是一个 TV page；已预取的 12 项页按稳定媒体键追加到保留状态，`catalogPageEntries` 按相同 12 项边界取出当前页。`shouldPrefetchCatalogContinuation` 只预取相邻下一页。
+- `CatalogPager` 是居中底部控件，包含两个圆形图标按钮和固定宽度页码。页码整体使用同一低对比辅助色，不单独高亮当前页；焦点状态只由左右箭头表达。焦点在第一页 / 最后一页自动交接到仍可用的方向，避免当前按钮禁用后丢失焦点。
+- 媒体卡按实际网格位置显式设置左右上下邻接。末行左半优先进入上一页，右半优先进入下一页；只有一个方向可用时所有列都进入该按钮。分页器向上返回最后聚焦卡片的同一网格位置。
 
 ## Data flow
 
@@ -77,5 +86,6 @@ MusicRepository
 ## Testing strategy
 
 - 单元测试覆盖封面选择：去重、三项上限、补位、稳定顺序、收藏 revision 刷新判定，以及 Compact 过渡图先发布、Grid 成功替换与失败保留。
+- 全目录分页单元测试覆盖 12 项切片、总页数、达到已加载边界时的预取判定、页大小缓存键隔离、HTTP `size=12`，以及末行列到可用分页方向的映射。
 - Compose / device 测试覆盖胶囊导航选中与焦点区分、功能卡单击、资料条长文本不重叠、全部歌曲图形复用、关键 D-pad 邻接和触屏拖动不误触。
 - 在 1920×1080 TV 模拟器安装 sideload debug，分别截取 Home / My 首屏与 My 向下滚动后的音乐库区，检查空白、裁切、重叠、焦点和真实封面加载。

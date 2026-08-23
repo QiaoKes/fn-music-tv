@@ -157,6 +157,8 @@ internal val LocalLibraryRetainedState = staticCompositionLocalOf<LibraryRetaine
     error("Missing library retained state")
 }
 
+private const val FULL_CATALOG_PAGE_SIZE = 12
+
 @Composable
 internal fun AuthenticatedApp(
     container: AuthenticatedAppDependencies,
@@ -360,8 +362,6 @@ private fun LibraryTopBar(
                     }
                     .focusRequester(nowPlayingFocus),
             )
-        } else if (selectedHome) {
-            Text("回声台", fontSize = 28.sp, fontWeight = FontWeight.Bold)
         } else {
             Spacer(Modifier)
         }
@@ -619,7 +619,10 @@ private fun BrowseHome(
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
         retainedStore.loadListOnce(playlistState, container.musicRepository::playlists)
-        retainedStore.loadFirstPageOnce(albumState, container.musicRepository::albums) { it.guid.value }
+        retainedStore.loadFirstPageOnce(
+            albumState,
+            { page -> container.musicRepository.albums(page, FULL_CATALOG_PAGE_SIZE) },
+        ) { it.guid.value }
     }
     LaunchedEffect(favoriteLibraryState.revision) {
         retainedStore.loadFirstPageForRevision(
@@ -1079,8 +1082,14 @@ private fun BrowseMy(
     val listState = rememberLazyListState()
     val scope = retainedStore.scope
     LaunchedEffect(Unit) {
-        retainedStore.loadFirstPageOnce(artistState, container.musicRepository::artists) { it.guid.value }
-        retainedStore.loadFirstPageOnce(albumState, container.musicRepository::albums) { it.guid.value }
+        retainedStore.loadFirstPageOnce(
+            artistState,
+            { page -> container.musicRepository.artists(page, FULL_CATALOG_PAGE_SIZE) },
+        ) { it.guid.value }
+        retainedStore.loadFirstPageOnce(
+            albumState,
+            { page -> container.musicRepository.albums(page, FULL_CATALOG_PAGE_SIZE) },
+        ) { it.guid.value }
     }
     LaunchedEffect(artistsLoaded, albumsLoaded, playback.hasMedia, focusedKey) {
         if (initialFocusRequested) return@LaunchedEffect
@@ -1460,11 +1469,12 @@ private fun MediaBand(
             contentPadding = PaddingValues(4.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            itemsIndexed(entries, key = { _, entry -> entry.focusKey }) { _, entry ->
+            itemsIndexed(entries, key = { _, entry -> entry.focusKey }) { index, entry ->
                 BandLockup(
                     entry,
                     Modifier
                         .focusProperties {
+                            if (index == 0) left = FocusRequester.Cancel
                             up = upFocusRequester
                             down = downFocusRequester
                         }
@@ -1483,6 +1493,8 @@ private fun MediaBand(
                     terminalEntry,
                     Modifier
                         .focusProperties {
+                            if (entries.isEmpty()) left = FocusRequester.Cancel
+                            right = FocusRequester.Cancel
                             up = upFocusRequester
                             down = downFocusRequester
                         }
@@ -1574,22 +1586,35 @@ private fun AllPlaylists(container: AuthenticatedAppDependencies, onOpen: (Playl
 
 @Composable
 private fun ArtistGrid(container: AuthenticatedAppDependencies, onOpen: (Artist) -> Unit) {
-    PagedGrid("artists", "全部歌手", loader = container.musicRepository::artists, key = { it.guid.value }) { artist, modifier ->
+    PagedCatalogPage(
+        stateKey = "artists",
+        title = "全部歌手",
+        totalLabel = { "$it 位歌手" },
+        loader = { page -> container.musicRepository.artists(page, FULL_CATALOG_PAGE_SIZE) },
+        key = { it.guid.value },
+    ) { artist, modifier ->
         ArtistLockup(artist.name, "${artist.trackCount ?: 0} 首歌曲", artist.coverId, modifier = modifier) { onOpen(artist) }
     }
 }
 
 @Composable
 private fun AlbumGrid(container: AuthenticatedAppDependencies, onOpen: (Album) -> Unit) {
-    PagedGrid("albums", "全部专辑", loader = container.musicRepository::albums, key = { it.guid.value }) { album, modifier ->
+    PagedCatalogPage(
+        stateKey = "albums",
+        title = "全部专辑",
+        totalLabel = { "$it 张专辑" },
+        loader = { page -> container.musicRepository.albums(page, FULL_CATALOG_PAGE_SIZE) },
+        key = { it.guid.value },
+    ) { album, modifier ->
         AlbumLockup(album.name, album.artistName.orEmpty(), album.coverId, modifier = modifier) { onOpen(album) }
     }
 }
 
 @Composable
-private fun <T> PagedGrid(
+private fun <T> PagedCatalogPage(
     stateKey: String,
     title: String,
+    totalLabel: (Int) -> String,
     loader: suspend (Int) -> Page<T>,
     key: (T) -> String,
     item: @Composable (T, Modifier) -> Unit,
@@ -1598,15 +1623,17 @@ private fun <T> PagedGrid(
     val retained = retainedStore.paged<T>("grid:$stateKey")
     val snapshot = retained.snapshot
     val entries = snapshot.entries
-    val page = snapshot.page
-    val hasNext = snapshot.hasNext
-    val loading = retained.loading
+    var currentPage by rememberSaveable(stateKey) { mutableStateOf(1) }
     var focusedKey by rememberSaveable(stateKey) { mutableStateOf<String?>(null) }
+    var lastFocusedIndex by rememberSaveable(stateKey) { mutableStateOf(0) }
+    var pendingPage by remember(stateKey) { mutableStateOf<Int?>(null) }
+    var pagerFocusedTarget by remember(stateKey) { mutableStateOf<CatalogPagerTarget?>(null) }
     var initialFocusRequested by remember(stateKey) { mutableStateOf(false) }
-    val contentFocus = remember(stateKey) { FocusRequester() }
-    val gridState = rememberLazyGridState()
+    val previousPageFocus = remember(stateKey) { FocusRequester() }
+    val nextPageFocus = remember(stateKey) { FocusRequester() }
+
     fun load(target: Int) {
-        if (retained.loading) return
+        if (retained.loading || target > 1 && !retained.snapshot.hasNext) return
         retained.loading = true
         retainedStore.scope.launch {
             runCatching { loader(target) }
@@ -1625,37 +1652,193 @@ private fun <T> PagedGrid(
             load(1)
         }
     }
-    LaunchedEffect(snapshot.initialLoadCompleted, entries, focusedKey) {
-        if (!snapshot.initialLoadCompleted || entries.isEmpty() || initialFocusRequested) return@LaunchedEffect
-        val keys = entries.map(key)
-        focusedKey = focusedKey?.takeIf(keys::contains) ?: keys.first()
-        yield()
-        runCatching { contentFocus.requestFocus() }
-        initialFocusRequested = true
-    }
-    Column(Modifier.fillMaxSize().padding(64.dp, 44.dp)) {
-        Text(title, fontSize = 40.sp, fontWeight = FontWeight.Bold)
-        snapshot.error?.let { InlineError(it) }
-        Spacer(Modifier.height(20.dp))
-        LazyVerticalGrid(
-            state = gridState,
-            columns = GridCells.Fixed(4),
-            contentPadding = PaddingValues(4.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+
+    Box(Modifier.fillMaxSize()) {
+        val columns = 4
+        val rows = 3
+        val pageSize = FULL_CATALOG_PAGE_SIZE
+        val horizontalPadding = 64.dp
+        val verticalPadding = 44.dp
+        val gridHeight = 95.dp * rows + 14.dp * (rows - 1) + 8.dp
+        val totalPages = catalogPageCount(snapshot.total, entries.size, pageSize)
+        val visibleEntries = catalogPageEntries(entries, currentPage, pageSize)
+        val itemFocuses = remember(stateKey, pageSize) { List(pageSize) { FocusRequester() } }
+        val retryFocus = remember(stateKey) { FocusRequester() }
+        val canPrevious = currentPage > 1
+        val canNext = currentPage < totalPages
+        val returnItemFocus = itemFocuses[
+            lastFocusedIndex.coerceIn(0, visibleEntries.lastIndex.coerceAtLeast(0)),
+        ]
+
+        fun showPage(target: Int) {
+            if (target !in 1..totalPages) return
+            val start = catalogPageStartIndex(target, pageSize)
+            if (start < entries.size) {
+                currentPage = target
+                pendingPage = null
+            } else {
+                pendingPage = target
+                if (!retained.loading) load(target)
+            }
+        }
+
+        LaunchedEffect(snapshot.initialLoadCompleted, entries, pageSize, focusedKey) {
+            if (!snapshot.initialLoadCompleted || entries.isEmpty() || initialFocusRequested) return@LaunchedEffect
+            val retainedIndex = focusedKey?.let { retainedKey -> entries.indexOfFirst { key(it) == retainedKey } } ?: -1
+            val targetPage = if (retainedIndex >= 0) retainedIndex / pageSize + 1 else currentPage.coerceIn(1, totalPages)
+            if (currentPage != targetPage) {
+                currentPage = targetPage
+                return@LaunchedEffect
+            }
+            val targetIndex = if (retainedIndex >= 0) retainedIndex % pageSize else 0
+            focusedKey = key(visibleEntries.getOrElse(targetIndex) { visibleEntries.first() })
+            lastFocusedIndex = targetIndex.coerceAtMost(visibleEntries.lastIndex)
+            yield()
+            runCatching { itemFocuses[lastFocusedIndex].requestFocus() }
+            initialFocusRequested = true
+        }
+
+        LaunchedEffect(snapshot.initialLoadCompleted, entries, snapshot.error) {
+            if (
+                !snapshot.initialLoadCompleted ||
+                entries.isNotEmpty() ||
+                snapshot.error == null ||
+                initialFocusRequested
+            ) return@LaunchedEffect
+            yield()
+            runCatching { retryFocus.requestFocus() }
+            initialFocusRequested = true
+        }
+
+        LaunchedEffect(snapshot.initialLoadCompleted, totalPages, pageSize) {
+            if (snapshot.initialLoadCompleted && currentPage > totalPages) currentPage = totalPages
+        }
+
+        LaunchedEffect(currentPage, pageSize, entries.size, snapshot.page, snapshot.hasNext) {
+            if (
+                snapshot.initialLoadCompleted &&
+                !retained.loading &&
+                shouldPrefetchCatalogContinuation(currentPage, pageSize, entries.size, snapshot.hasNext)
+            ) {
+                load(snapshot.page + 1)
+            }
+        }
+
+        LaunchedEffect(pendingPage, entries.size, snapshot.hasNext, retained.loading, snapshot.error) {
+            val target = pendingPage ?: return@LaunchedEffect
+            if (catalogPageStartIndex(target, pageSize) < entries.size) {
+                currentPage = target.coerceAtMost(totalPages)
+                pendingPage = null
+            } else if (!retained.loading && snapshot.hasNext && snapshot.error == null) {
+                load(target)
+            } else if (!retained.loading) {
+                pendingPage = null
+            }
+        }
+
+        LaunchedEffect(canPrevious, canNext, pagerFocusedTarget) {
+            when {
+                pagerFocusedTarget == CatalogPagerTarget.Previous && !canPrevious && canNext -> {
+                    yield()
+                    runCatching { nextPageFocus.requestFocus() }
+                }
+
+                pagerFocusedTarget == CatalogPagerTarget.Next && !canNext && canPrevious -> {
+                    yield()
+                    runCatching { previousPageFocus.requestFocus() }
+                }
+            }
+        }
+
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(horizontal = horizontalPadding, vertical = verticalPadding),
         ) {
-            items(entries, key = key) { entry ->
-                val entryKey = key(entry)
-                item(
-                    entry,
-                    Modifier.then(if (focusedKey == entryKey) Modifier.focusRequester(contentFocus) else Modifier)
-                        .onFocusChanged { if (it.isFocused) focusedKey = entryKey },
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(title, fontSize = 40.sp, fontWeight = FontWeight.Bold)
+                snapshot.total?.let { total ->
+                    Spacer(Modifier.width(14.dp))
+                    Text(totalLabel(total), color = FnColors.Muted, fontSize = 12.sp)
+                }
+                snapshot.error?.let { error ->
+                    Spacer(Modifier.width(18.dp))
+                    Text(appErrorMessage(error), color = FnColors.Coral, fontSize = 12.sp)
+                }
             }
-            if (entries.isEmpty() && snapshot.error != null) {
-                item { LoadMoreBlock(1, loading) { load(1) } }
+            Spacer(Modifier.height(20.dp))
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(columns),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(gridHeight),
+                userScrollEnabled = false,
+                contentPadding = PaddingValues(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                items(
+                    count = visibleEntries.size,
+                    key = { index -> key(visibleEntries[index]) },
+                ) { index ->
+                    val entry = visibleEntries[index]
+                    val entryKey = key(entry)
+                    val column = index % columns
+                    val nextRowIndex = index + columns
+                    val pagerTarget = catalogPagerTarget(column, columns, canPrevious, canNext)
+                    item(
+                        entry,
+                        Modifier
+                            .focusProperties {
+                                left = itemFocuses.getOrNull(index - 1)
+                                    ?.takeIf { column > 0 }
+                                    ?: FocusRequester.Cancel
+                                right = itemFocuses.getOrNull(index + 1)
+                                    ?.takeIf { column < columns - 1 && index + 1 < visibleEntries.size }
+                                    ?: FocusRequester.Cancel
+                                up = itemFocuses.getOrNull(index - columns) ?: FocusRequester.Cancel
+                                down = if (nextRowIndex < visibleEntries.size) {
+                                    itemFocuses[nextRowIndex]
+                                } else {
+                                    when (pagerTarget) {
+                                        CatalogPagerTarget.Previous -> previousPageFocus
+                                        CatalogPagerTarget.Next -> nextPageFocus
+                                        null -> FocusRequester.Cancel
+                                    }
+                                }
+                            }
+                            .focusRequester(itemFocuses[index])
+                            .onFocusChanged {
+                                if (it.isFocused) {
+                                    focusedKey = entryKey
+                                    lastFocusedIndex = index
+                                }
+                            },
+                    )
+                }
+
+                if (visibleEntries.isEmpty() && snapshot.error != null) {
+                    item {
+                        CatalogRetryButton(
+                            loading = retained.loading,
+                            modifier = Modifier.focusRequester(retryFocus),
+                        ) { load(1) }
+                    }
+                }
             }
-            if (hasNext) item { LoadMoreBlock(page + 1, loading) { load(page + 1) } }
+            Spacer(Modifier.weight(1f))
+            CatalogPager(
+                currentPage = currentPage,
+                totalPages = totalPages,
+                canPrevious = canPrevious,
+                canNext = canNext,
+                previousFocus = previousPageFocus,
+                nextFocus = nextPageFocus,
+                upFocus = returnItemFocus,
+                onPagerFocused = { pagerFocusedTarget = it },
+                onPrevious = { showPage(currentPage - 1) },
+                onNext = { showPage(currentPage + 1) },
+            )
         }
     }
 }
@@ -3217,12 +3400,131 @@ private fun lockupButtonBorder(shape: Shape) = ButtonDefaults.border(
 )
 
 @Composable
-private fun LoadMoreBlock(nextPage: Int, loading: Boolean, onClick: () -> Unit) {
+private fun CatalogPager(
+    currentPage: Int,
+    totalPages: Int,
+    canPrevious: Boolean,
+    canNext: Boolean,
+    previousFocus: FocusRequester,
+    nextFocus: FocusRequester,
+    upFocus: FocusRequester,
+    onPagerFocused: (CatalogPagerTarget?) -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().height(48.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CatalogPageArrowButton(
+            direction = CatalogPagerTarget.Previous,
+            enabled = canPrevious,
+            modifier = Modifier
+                .focusProperties {
+                    left = FocusRequester.Cancel
+                    right = if (canNext) nextFocus else FocusRequester.Cancel
+                    up = upFocus
+                }
+                .focusRequester(previousFocus)
+                .onFocusChanged { if (it.isFocused) onPagerFocused(CatalogPagerTarget.Previous) },
+            onClick = onPrevious,
+        )
+        Row(
+            modifier = Modifier.width(82.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(currentPage.toString(), color = FnColors.Muted, fontSize = 13.sp)
+            Spacer(Modifier.width(6.dp))
+            Text("/", color = FnColors.Muted, fontSize = 13.sp)
+            Spacer(Modifier.width(6.dp))
+            Text(totalPages.toString(), color = FnColors.Muted, fontSize = 13.sp)
+        }
+        CatalogPageArrowButton(
+            direction = CatalogPagerTarget.Next,
+            enabled = canNext,
+            modifier = Modifier
+                .focusProperties {
+                    left = if (canPrevious) previousFocus else FocusRequester.Cancel
+                    right = FocusRequester.Cancel
+                    up = upFocus
+                }
+                .focusRequester(nextFocus)
+                .onFocusChanged { if (it.isFocused) onPagerFocused(CatalogPagerTarget.Next) },
+            onClick = onNext,
+        )
+    }
+}
+
+@Composable
+private fun CatalogPageArrowButton(
+    direction: CatalogPagerTarget,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val shape = CircleShape
+    Button(
+        enabled = enabled,
+        onClick = onClick,
+        modifier = modifier
+            .size(42.dp)
+            .semantics {
+                contentDescription = if (direction == CatalogPagerTarget.Previous) "上一页" else "下一页"
+            },
+        shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
+        scale = ButtonDefaults.scale(focusedScale = 1.05f),
+        colors = ButtonDefaults.colors(
+            containerColor = Color(0xFF171B1D),
+            contentColor = Color(0xFFB8BEC1),
+            focusedContainerColor = FnColors.Coral.copy(alpha = 0.09f),
+            focusedContentColor = FnColors.Coral,
+            pressedContainerColor = FnColors.Coral.copy(alpha = 0.14f),
+            pressedContentColor = FnColors.Coral,
+            disabledContainerColor = Color.Transparent,
+            disabledContentColor = Color(0xFF50575A),
+        ),
+        border = ButtonDefaults.border(
+            border = Border(BorderStroke(1.5.dp, Color.Transparent), shape = shape),
+            focusedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
+            pressedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
+        ),
+        contentPadding = PaddingValues(0.dp),
+    ) {
+        val contentColor = LocalContentColor.current
+        Canvas(Modifier.size(15.dp)) {
+            val left = if (direction == CatalogPagerTarget.Previous) size.width * 0.66f else size.width * 0.34f
+            val right = if (direction == CatalogPagerTarget.Previous) size.width * 0.34f else size.width * 0.66f
+            drawLine(
+                color = contentColor,
+                start = androidx.compose.ui.geometry.Offset(left, size.height * 0.18f),
+                end = androidx.compose.ui.geometry.Offset(right, size.height * 0.50f),
+                strokeWidth = 1.8.dp.toPx(),
+                cap = StrokeCap.Round,
+            )
+            drawLine(
+                color = contentColor,
+                start = androidx.compose.ui.geometry.Offset(right, size.height * 0.50f),
+                end = androidx.compose.ui.geometry.Offset(left, size.height * 0.82f),
+                strokeWidth = 1.8.dp.toPx(),
+                cap = StrokeCap.Round,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CatalogRetryButton(
+    loading: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
     val shape = RoundedCornerShape(8.dp)
     Button(
         enabled = !loading,
         onClick = onClick,
-        modifier = Modifier.size(width = 170.dp, height = 95.dp),
+        modifier = modifier.size(width = 170.dp, height = 95.dp),
         shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
         scale = ButtonDefaults.scale(focusedScale = 1.025f),
         colors = lockupButtonColors(),
@@ -3230,8 +3532,8 @@ private fun LoadMoreBlock(nextPage: Int, loading: Boolean, onClick: () -> Unit) 
         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
     ) {
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
-            Text(if (loading) "正在加载" else "加载更多", fontSize = 12.sp)
-            Text("第 $nextPage 页", color = FnColors.Muted, fontSize = 9.sp)
+            Text(if (loading) "正在加载" else "重试", fontSize = 12.sp)
+            Text("重新加载列表", color = FnColors.Muted, fontSize = 9.sp)
         }
     }
 }

@@ -32,6 +32,7 @@ internal data class RetainedPageSnapshot<T>(
     val entries: List<T> = emptyList(),
     val page: Int = 0,
     val hasNext: Boolean = false,
+    val total: Int? = null,
     val error: AppError? = null,
     val initialLoadCompleted: Boolean = false,
 )
@@ -44,9 +45,50 @@ internal fun <T> retainLoadedPage(
     entries = (current.entries + loaded.items).distinctBy(key),
     page = loaded.page,
     hasNext = loaded.hasNext,
+    total = loaded.total,
     error = null,
     initialLoadCompleted = current.initialLoadCompleted || loaded.page == 1,
 )
+
+internal fun catalogPageCount(total: Int?, loadedCount: Int, pageSize: Int): Int {
+    require(pageSize > 0)
+    val itemCount = total?.coerceAtLeast(loadedCount) ?: loadedCount
+    return ((itemCount + pageSize - 1) / pageSize).coerceAtLeast(1)
+}
+
+internal fun catalogPageStartIndex(page: Int, pageSize: Int): Int {
+    require(pageSize > 0)
+    return (page.coerceAtLeast(1) - 1) * pageSize
+}
+
+internal fun <T> catalogPageEntries(entries: List<T>, page: Int, pageSize: Int): List<T> =
+    entries.drop(catalogPageStartIndex(page, pageSize)).take(pageSize)
+
+internal fun shouldPrefetchCatalogContinuation(
+    currentPage: Int,
+    pageSize: Int,
+    loadedCount: Int,
+    hasNext: Boolean,
+): Boolean = hasNext && currentPage.coerceAtLeast(1) * pageSize >= loadedCount
+
+internal enum class CatalogPagerTarget { Previous, Next }
+
+internal fun catalogPagerTarget(
+    column: Int,
+    columns: Int,
+    canPrevious: Boolean,
+    canNext: Boolean,
+): CatalogPagerTarget? {
+    require(columns > 0)
+    if (!canPrevious && !canNext) return null
+    if (!canPrevious) return CatalogPagerTarget.Next
+    if (!canNext) return CatalogPagerTarget.Previous
+    return if (column.coerceIn(0, columns - 1) < columns / 2) {
+        CatalogPagerTarget.Previous
+    } else {
+        CatalogPagerTarget.Next
+    }
+}
 
 internal fun shouldLoadInitialPage(snapshot: RetainedPageSnapshot<*>): Boolean =
     !snapshot.initialLoadCompleted

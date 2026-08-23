@@ -67,6 +67,23 @@ Validation:
 - [ ] 检查真实 NAS 数据、空收藏 / 少封面回退、网络失败、触屏和 D-pad。
 - [ ] 完成 Trellis quality check；若实现暴露新的稳定 TV 交互约束，再更新 spec。
 
+## 6. Reuse the fixed full-catalog pager
+
+- [x] 抽取 `PagedCatalogPage<T>`，全部歌手和全部专辑共享 4 列 x 3 行、底部分页器与显式 D-pad 邻接。
+- [x] Repository 将 `size = 12` 直接传给歌手 / 专辑接口，并把 size 纳入响应和磁盘缓存键。
+- [x] 保留媒体差异：歌手继续使用圆形头像，专辑继续使用方形封面。
+- [x] 当前页稳定后异步预取下一服务端页；翻页期间不改变当前页或抢占焦点。
+- [x] 增加分页计算、缓存键及 API 查询参数的回归测试。
+- [x] 封住 My 横向媒体带首尾焦点边界，终端“全部”项继续按右键不再跳到顶部控件。
+- [x] 修正 Repository 构造分页结果时遗留的 50 条页大小，确保 12 条请求不会在第 7 页错误结束。
+- [x] 删除 Home 无媒体顶部栏遗留的“回声台”回退文字，仅在启动品牌过渡保留 Logo + 品牌名。
+
+Validation:
+
+```sh
+./gradlew :core:data:testDebugUnitTest :app:testSideloadDebugUnitTest :app:compileSideloadDebugKotlin
+```
+
 Validation:
 
 ```sh

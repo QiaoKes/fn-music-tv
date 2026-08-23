@@ -150,6 +150,24 @@ fun mediaBandReturnFocusKey(
     lastFocusedKey: String?,
 ): String
 
+fun catalogPageCount(total: Int?, loadedCount: Int, pageSize: Int): Int
+fun catalogPageStartIndex(page: Int, pageSize: Int): Int
+fun <T> catalogPageEntries(entries: List<T>, page: Int, pageSize: Int): List<T>
+fun shouldPrefetchCatalogContinuation(
+    currentPage: Int,
+    pageSize: Int,
+    loadedCount: Int,
+    hasNext: Boolean,
+): Boolean
+
+enum class CatalogPagerTarget { Previous, Next }
+fun catalogPagerTarget(
+    column: Int,
+    columns: Int,
+    canPrevious: Boolean,
+    canNext: Boolean,
+): CatalogPagerTarget?
+
 suspend fun ArtworkBitmapCache.getProgressively(
     coverId: String,
     variant: CoverVariant,
@@ -395,9 +413,10 @@ interface AuthenticatedAppActions {
   cross-module operations through `AuthenticatedAppActions`. Do not expose `AppContainer` to UI or
   duplicate logout/cache/playback ordering in a page callback. Playback error display may use the
   typed failure's display name, but behavior must use its typed properties.
-- The user-facing product name is `回声台`. `@string/app_name`, loading/login/top-bar text,
+- The user-facing product name is `回声台`. `@string/app_name`, loading/login branding,
   launcher label, baseline-profile selectors, README title, launcher icon, and TV banner must move
-  together. The icon uses a charcoal background, a coral primary waveform, and a warm-white echo
+  together. The authenticated Home/My top bar keeps its left slot empty when no media is available;
+  it does not repeat the product name. The icon uses a charcoal background, a coral primary waveform, and a warm-white echo
   waveform. Keep the same flat double-wave mark in both `ic_logo.xml` and `tv_banner.xml`; do not
   add the retired teal node or play triangle. Internal package and command namespaces stay
   `com.fnmusic.tv` so a visual rebrand remains an in-place signed Android upgrade.
@@ -413,6 +432,22 @@ interface AuthenticatedAppActions {
   index zero: after the row scrolls to its end, index zero may leave composition and Up -> chrome ->
   Down will have no live target. If the remembered key was removed, fall back to the first live entry;
   an otherwise empty media band falls back to its terminal item.
+- A My media band's horizontal focus is bounded: Left on its first media item and Right on its
+  terminal "All" item use `FocusRequester.Cancel`. Do not leave either edge to spatial focus search,
+  which can escape to profile actions or top navigation after the row has scrolled.
+- Full Artists and Albums use one `PagedCatalogPage<T>` framework. At 1920x1080 it renders exactly
+  four columns by three rows (12 items) plus a bottom previous/page-count/next pager, with vertical
+  scrolling disabled. Keep the existing fixed card dimensions and typography.
+- Full Artists and Albums pass `size = 12` through Repository to the existing API so one server page
+  equals one TV page. Include the requested size in every response/disk cache source key; a cached
+  default 50-item response must never satisfy a 12-item TV request. The resulting domain `Page`
+  must also retain that requested size when computing `hasNext`; do not request 12 and then construct
+  a legacy 50-item page. Retain the API `total`, merge
+  prefetched pages by stable media key, and do not add a "Load more" media card to the fixed grid.
+- Full-catalog cards own explicit four-way neighbors. Bottom-row Down routes to an enabled pager
+  arrow (left columns prefer Previous, right columns prefer Next); when only one arrow is enabled,
+  every column routes to it. Pager Up returns to the last focused grid slot. Paging keeps focus on
+  the pager, and disabling the focused boundary arrow hands focus to the remaining enabled arrow.
 - Home playlists and All Playlists share one session-owned `RetainedListSnapshot`. My and the full
   Artists/Albums grids share the same retained paged snapshots; shared libraries use another
   retained list. A successful initial load is not repeated on route re-entry. An empty failed list
@@ -524,6 +559,10 @@ interface AuthenticatedAppActions {
 | Exact artwork bitmap is already decoded | Render it on the first composition without an empty/placeholder frame |
 | Home feature Grid artwork misses but Compact exists | Render Compact immediately, then replace it asynchronously with Grid without remote input |
 | Home feature exact Grid load fails after Compact succeeds | Keep the real Compact image; do not regress to a title/initial card |
+| Open All Artists or All Albums at 1920x1080 | Render 12 fixed-size cards and the complete pager without vertical scrolling |
+| TV page reaches the end of retained API entries | Prefetch the next API page asynchronously; keep the current TV page stable |
+| Bottom-row card presses Down | Enter the deterministic enabled pager arrow for that column |
+| Paging reaches the first or last boundary | Keep focus on the remaining enabled arrow; never leave the route without focus |
 | Detail Grid artwork is still loading | Keep the fixed deterministic placeholder; never substitute the Compact list bitmap |
 | Artist/album lockup receives focus | Prefetch its exact Grid artwork without changing the displayed Compact artwork |
 | Favorites or an artist has no artwork | Reuse the Favorites feature art or circular artist initial consistently on card and detail |
@@ -618,6 +657,8 @@ interface AuthenticatedAppActions {
 - Bad: requesting first focus before data is composed, or always requesting index zero after Back.
 - Bad: permanently attaching a media band's vertical-entry requester to index zero; once the row is
   scrolled to the end that item can be detached, so Down from the profile or previous band does nothing.
+- Bad: relying on the API's default 50-item size, omitting size from the response cache key,
+  appending a "Load more" card, or vertically scrolling All Artists/Albums.
 - Bad: showing a title/initial card in a Home feature deck while its real cover is loading, requiring
   a D-pad event to reveal a completed bitmap, or stretching a cached Compact bitmap into a detail
   header before swapping to Grid.
@@ -685,6 +726,10 @@ interface AuthenticatedAppActions {
 - Artwork continuity tests: exact decoded hits are available synchronously, cache entries stay
   variant-isolated, Home progressive requests publish Compact before Grid and retain Compact when
   Grid fails, focused artist/album items request Grid prefetch, and a miss retains stable bounds.
+- Full-catalog pagination tests: assert 12-item page slicing, total-page projection from the server
+  total, `size=12` HTTP requests, page-size cache-key isolation, adjacent-page prefetch, and bottom-row
+  column mapping to enabled pager actions. Device checks cover first/middle/last page focus handoff
+  and detail-return restoration for both media types.
 - Library fallback screenshot checks: Favorites detail matches its Home artwork, an artist without
   a cover shows the same initial on card and detail, and source search finds no retired record
   fallback implementation or call site.
