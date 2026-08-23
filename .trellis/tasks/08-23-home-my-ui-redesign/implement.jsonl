@@ -1,0 +1,2 @@
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend spec index and layer routing for the Home/My Compose UI change."}
+{"file":".trellis/spec/frontend/android-tv-interaction.md","reason":"Required D-pad focus, touch, retained-state, artwork and Home/My interaction contracts."}

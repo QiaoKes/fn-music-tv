@@ -115,6 +115,7 @@ internal fun retainTrackCollectionPage(
 internal class RetainedPagedGridState<T> {
     var snapshot by mutableStateOf(RetainedPageSnapshot<T>())
     var loading by mutableStateOf(false)
+    var contentRevision by mutableStateOf<Long?>(null)
 }
 
 internal class RetainedListState<T> {
@@ -192,7 +193,45 @@ internal class LibraryRetainedStateStore(val scope: CoroutineScope) {
             state.loading = false
         }
     }
+
+    fun <T> loadFirstPageForRevision(
+        state: RetainedPagedGridState<T>,
+        revision: Long,
+        loader: suspend (Int) -> Page<T>,
+        key: (T) -> String,
+    ) {
+        val revisionChanged = shouldRefreshPagedPreview(state.contentRevision, revision)
+        if (!revisionChanged && (state.loading || !shouldLoadInitialPage(state.snapshot))) return
+        if (revisionChanged) {
+            state.contentRevision = revision
+            state.snapshot = RetainedPageSnapshot()
+        }
+        if (state.loading) return
+
+        state.loading = true
+        scope.launch {
+            while (true) {
+                val loadingRevision = state.contentRevision ?: break
+                val result = runCatching { loader(1) }
+                if (state.contentRevision == loadingRevision) {
+                    result
+                        .onSuccess { state.snapshot = retainLoadedPage(state.snapshot, it, key) }
+                        .onFailure {
+                            state.snapshot = state.snapshot.copy(
+                                error = (it as? AppException)?.error ?: AppError.Unknown(),
+                                initialLoadCompleted = true,
+                            )
+                        }
+                    break
+                }
+            }
+            state.loading = false
+        }
+    }
 }
+
+internal fun shouldRefreshPagedPreview(loadedRevision: Long?, currentRevision: Long): Boolean =
+    loadedRevision != currentRevision
 
 internal class LibraryRouteStateLifecycle {
     private var activeRoutesByKey = emptyMap<String, LibraryRoute>()

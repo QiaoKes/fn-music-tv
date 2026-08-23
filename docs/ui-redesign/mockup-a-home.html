@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>设计稿 A · 首页</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1920px; height: 1080px; background: #101214; overflow: hidden; }
+  body { font-family: -apple-system, "SF Pro Display", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; color: #F4F2EC; -webkit-font-smoothing: antialiased; }
+  .screen { width: 1920px; height: 1080px; padding: 76px 128px; display: flex; flex-direction: column; }
+
+  /* 顶栏 */
+  .topbar { display: flex; justify-content: space-between; align-items: center; height: 128px; flex: none; }
+  .pill { width: 372px; height: 84px; border-radius: 999px; background: #232827; border: 1px solid #454C49; display: flex; align-items: center; padding: 10px 18px 10px 10px; }
+  .pill-cover { width: 54px; height: 54px; border-radius: 50%; flex: none; background: linear-gradient(135deg, #FF7657, #55C5A5); display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 700; color: #101214; }
+  .pill-text { flex: 1; min-width: 0; margin: 0 12px; display: flex; flex-direction: column; gap: 3px; }
+  .pill-status { display: flex; align-items: center; gap: 7px; font-size: 18px; color: #B7BBB7; line-height: 1; }
+  .pill-dot { width: 7px; height: 7px; border-radius: 50%; background: #FF7657; }
+  .pill-track { display: flex; align-items: baseline; gap: 9px; }
+  .pill-title { font-size: 24px; font-weight: 700; color: #F4F2EC; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pill-artist { font-size: 18px; color: #A7ABA7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pill-chevron { font-size: 34px; color: #C6C9C5; line-height: 1; }
+
+  /* 分段胶囊导航 */
+  .seg { display: flex; gap: 6px; padding: 6px; background: #171A1E; border: 1px solid #2B3134; border-radius: 999px; }
+  .seg-item { height: 84px; display: flex; align-items: center; padding: 0 34px; border-radius: 999px; font-size: 42px; line-height: 1; }
+  .seg-on { background: #FF7657; color: #101214; font-weight: 700; }
+  .seg-off { color: #A9ADB4; }
+  .seg-focus { box-shadow: inset 0 0 0 3px #FF7657; color: #F4F2EC; }
+
+  /* 页面标题 */
+  .page-title { font-size: 68px; font-weight: 700; margin: 0 0 32px; flex: none; }
+
+  /* 特色入口 */
+  .features { display: flex; gap: 36px; flex: none; }
+  .feature { flex: 1; height: 300px; border-radius: 28px; position: relative; display: flex; align-items: flex-end; padding: 36px 40px; }
+  .glyph { position: absolute; top: 36px; left: 40px; width: 96px; height: 96px; border-radius: 50%; background: rgba(255,255,255,.10); display: flex; align-items: center; justify-content: center; }
+  .glyph svg { width: 48px; height: 48px; }
+  .flabel { font-size: 42px; font-weight: 600; }
+  .roam { background: linear-gradient(135deg, #16302A, #21443A); }
+  .roam .glyph { color: #55C5A5; }
+  .fav { background: linear-gradient(135deg, #2B1F1C, #3C2823); }
+  .fav .glyph { color: #FF7657; }
+  .focused { box-shadow: inset 0 0 0 3px #FF7657; }
+
+  /* 歌单行 */
+  .playlists { display: flex; gap: 28px; margin-top: 32px; }
+  .pl { width: 380px; }
+  .pl-cover { height: 240px; border-radius: 20px; display: flex; align-items: center; justify-content: center; font-size: 80px; font-weight: 700; color: rgba(255,255,255,.92); }
+  .c1 { background: linear-gradient(135deg, #7A3A2E, #B0553F); }
+  .c2 { background: linear-gradient(135deg, #2C3E6B, #45609E); }
+  .c3 { background: linear-gradient(135deg, #3F2D5E, #67508F); }
+  .c4 { background: #171A1E; border: 1px dashed #343A3F; }
+  .pl-name { font-size: 36px; font-weight: 600; margin-top: 14px; }
+  .pl-sub { font-size: 26px; color: #A9ADB4; margin-top: 6px; }
+</style>
+</head>
+<body>
+<div class="screen">
+  <div class="topbar">
+    <div class="pill">
+      <div class="pill-cover">热</div>
+      <div class="pill-text">
+        <div class="pill-status"><span class="pill-dot"></span>已暂停</div>
+        <div class="pill-track"><span class="pill-title">热恋情节</span><span class="pill-artist">Kiya</span></div>
+      </div>
+      <div class="pill-chevron">›</div>
+    </div>
+    <div class="seg">
+      <div class="seg-item seg-on">首页</div>
+      <div class="seg-item seg-off seg-focus">我的</div>
+    </div>
+  </div>
+
+  <h1 class="page-title">听点什么</h1>
+
+  <div class="features">
+    <div class="feature roam focused">
+      <div class="glyph">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
+      </div>
+      <div class="flabel">随机漫游</div>
+    </div>
+    <div class="feature fav">
+      <div class="glyph">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+      </div>
+      <div class="flabel">收藏</div>
+    </div>
+  </div>
+
+  <div class="playlists">
+    <div class="pl">
+      <div class="pl-cover c1">T</div>
+      <div class="pl-name">test</div>
+      <div class="pl-sub">歌单</div>
+    </div>
+    <div class="pl">
+      <div class="pl-cover c2">通</div>
+      <div class="pl-name">通勤路上</div>
+      <div class="pl-sub">歌单</div>
+    </div>
+    <div class="pl">
+      <div class="pl-cover c3">深</div>
+      <div class="pl-name">深夜电台</div>
+      <div class="pl-sub">歌单</div>
+    </div>
+    <div class="pl">
+      <div class="pl-cover c4">
+        <svg viewBox="0 0 24 24" width="56" height="56" fill="none" stroke="#6B7276" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+      </div>
+      <div class="pl-name">全部歌单</div>
+      <div class="pl-sub">浏览全部</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
