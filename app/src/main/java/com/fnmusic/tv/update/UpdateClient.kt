@@ -16,13 +16,17 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 
+internal fun interface UpdateManifestSource {
+    suspend fun fetchManifest(): UpdateManifest
+}
+
 internal class UpdateClient(
     private val endpoint: String,
     private val client: OkHttpClient = defaultUpdateHttpClient(),
-) {
+) : UpdateManifestSource {
     private val json = Json { ignoreUnknownKeys = false; isLenient = false }
 
-    suspend fun fetchManifest(): UpdateManifest {
+    override suspend fun fetchManifest(): UpdateManifest {
         val endpointUri = validateHttpsUri(endpoint, "更新地址")
         val request = Request.Builder()
             .url(endpoint)

@@ -121,12 +121,28 @@ no GitHub, proxy, or user-configurable fallback.
 
 ### Verification and installation
 
-Before `PackageInstaller.Session` commit, require exact byte count and SHA256, archive package
-`com.fnmusic.tv`, candidate `versionCode` equal to the manifest and above the installed version, and
-equal non-empty installed/candidate signer digest sets. Empty signer sets are a verification failure,
-not a match. Missing unknown-source permission opens only the current package's settings page. If the
-user returns without granting permission, delete the verified APK and require a new download.
-`STATUS_PENDING_USER_ACTION` launches the system-owned confirmation; there is no silent install.
+Before handing an APK to AppUpdate's `ApkUtil.installApk`, require exact byte count and SHA256,
+archive package `com.fnmusic.tv`, candidate `versionCode` equal to the manifest and above the
+installed version, and equal non-empty installed/candidate signer digest sets. Empty signer sets are
+a verification failure, not a match. Missing unknown-source permission opens only the current
+package's settings page. If the user returns without granting permission, delete the verified APK
+and require a new download.
+
+The sideload flavor uses AppUpdate only for its `FileProvider + ACTION_VIEW` handoff to the
+system-owned package installer. Its downloader, service, notification flow, and dialog activity are
+forbidden because they bypass this project's TLS, redirect, size, SHA256, package, version, and
+signer authorization boundary. The provider authority is `${applicationId}.fileProvider`, and its
+paths resource grants only internal `cacheDir/updates/`. The store flavor uses AppUpdate's no-op
+artifact and contains no install permission or AppUpdate component. Returning from the system
+installer without app replacement is treated as cancellation/incompletion: delete the candidate and
+require a new download. There is no silent install or manufacturer-private API.
+
+Release signing must explicitly enable both v1 (JAR) and v2 APK signatures. Vidda firmware can fail
+to open a v2-only APK without surfacing an installer error, even though modern Android accepts it.
+This compatibility requirement is independent of `REQUEST_INSTALL_PACKAGES` and AppUpdate: it also
+applies when the user opens the APK from a file manager. Because the App's minSdk is 29, CI must run
+`apksigner verify --min-sdk-version 21 --verbose` when asserting v1; the default verification mode
+may skip/report v1 as unused even when the JAR signature is present.
 
 ### R2 publish ordering and retention
 
@@ -158,7 +174,7 @@ GitHub's unauthenticated per-IP limit is not reliable even for a single administ
 | Condition | Required result |
 |---|---|
 | sideload Release URL missing, non-HTTPS, credentialed, or fragmented | fail the Release build |
-| store flavor | updater disabled; no install permission or receiver in merged manifest |
+| store flavor | updater disabled; no install permission, provider, service, activity, or receiver in merged manifest |
 | manifest too large, unknown schema, wrong package, bad SHA/size/time | reject as check failure |
 | APK host differs from manifest host or redirect occurs | reject; never follow to fallback host |
 | latest `versionCode` is current/older | automatic idle; manual “already latest” |
@@ -166,6 +182,7 @@ GitHub's unauthenticated per-IP limit is not reliable even for a single administ
 | file count/hash/package/version/signer mismatch | delete file; do not open installer |
 | download cancellation/background | close call and delete partial/final transient file |
 | unknown-source permission denied/cancelled | delete verified APK; show retryable error and require a new download |
+| release APK lacks either v1 or v2 signature | fail CI; do not publish the APK |
 | GitHub Release draft | never publish |
 | `GITHUB_TOKEN` missing/expired/revoked or GitHub rate limit exhausted | show the safe reset/retry error; do not mutate R2 |
 | prerelease | hidden by default; explicit visibility and extra confirmation required |
@@ -207,12 +224,17 @@ GitHub's unauthenticated per-IP limit is not reliable even for a single administ
   startup/+12h/+30m transitions, manual joining auto, silent automatic error, player pending prompt,
   and foreground-only download.
 - APK tests: archive package/version and signer set match/mismatch helpers, including two empty signer
-  sets being rejected. Device/emulator coverage must exercise unknown-source denied/allowed, system
-  confirm/cancel, and install status callback.
+  sets being rejected. Installer/coordinator tests cover dynamic provider authority, unknown-source
+  denied/allowed, launch failure, and system-installer return cleanup. Device/emulator coverage must
+  exercise system confirm/cancel.
 - Compose tests: about copy/version source, removed helper wording, default update focus, three unique
   callbacks, ignored badge, progress percentage/cancel, and focus neighbors.
-- Flavor/build checks: sideload and store compile/assemble/lint/unit tests; merged store manifest must
-  contain neither `REQUEST_INSTALL_PACKAGES` nor `UpdateInstallReceiver`.
+- Flavor/build checks: sideload and store compile/assemble/lint/unit tests. The sideload merged
+  manifest must keep the permission and narrow non-exported AppUpdate provider while excluding the
+  unused AppUpdate service/activity and legacy receiver. The store merged manifest must contain none
+  of those install capabilities.
+- Release artifact checks: verify the official package/certificate plus v1 and v2 signatures;
+  validate v1 with an explicit compatibility minimum SDK rather than the APK's declared minSdk.
 - CI metadata script: deterministic fixture verifies file name, size, lowercase hashes, signer, version,
   commit, and invalid-input rejection.
 - Worker tests with local R2: stable/prerelease/draft filters, metadata mismatch, immutable write,
@@ -266,5 +288,5 @@ require(candidate.longVersionCode == manifest.versionCode && candidate.longVersi
 require(signerDigests(candidate).isNotEmpty())
 require(signerDigests(installed).isNotEmpty())
 require(signerDigests(candidate) == signerDigests(installed))
-installer.install(apk) // PackageInstaller still owns final user confirmation.
+installer.install(apk) // AppUpdate opens Android's system-owned confirmation UI.
 ```

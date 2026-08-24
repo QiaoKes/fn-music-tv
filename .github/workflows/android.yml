@@ -148,6 +148,9 @@ jobs:
           printf '%s\n' "$signer_output"
           signer_sha=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<< "$signer_output" | head -n 1 | tr '[:upper:]' '[:lower:]' | tr -d ':[:space:]')
           [[ "$signer_sha" =~ ^[0-9a-f]{64}$ ]]
+          compatibility_signer_output=$("$apksigner" verify --min-sdk-version 21 --verbose "$source_apk")
+          grep -F "Verified using v1 scheme (JAR signing): true" <<< "$compatibility_signer_output"
+          grep -F "Verified using v2 scheme (APK Signature Scheme v2): true" <<< "$compatibility_signer_output"
 
           mkdir -p dist
           release_apk="dist/fn-music-tv-$VERSION_NAME-universal.apk"
