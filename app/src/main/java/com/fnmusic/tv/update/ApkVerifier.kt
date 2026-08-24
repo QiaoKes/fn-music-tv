@@ -8,8 +8,12 @@ import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-internal class ApkVerifier(private val context: Context) {
-    suspend fun verify(file: File, manifest: UpdateManifest): File = withContext(Dispatchers.IO) {
+internal fun interface UpdateApkVerifier {
+    suspend fun verify(file: File, manifest: UpdateManifest): File
+}
+
+internal class ApkVerifier(private val context: Context) : UpdateApkVerifier {
+    override suspend fun verify(file: File, manifest: UpdateManifest): File = withContext(Dispatchers.IO) {
         val packageManager = context.packageManager
         val candidate = packageManager.getPackageArchiveInfo(
             file.absolutePath,

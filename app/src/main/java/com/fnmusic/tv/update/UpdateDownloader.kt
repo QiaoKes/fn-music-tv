@@ -16,6 +16,11 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import kotlin.coroutines.coroutineContext
 
+internal interface UpdateApkDownloader {
+    suspend fun download(manifest: UpdateManifest, onProgress: (Long) -> Unit): File
+    fun cleanAll()
+}
+
 internal class UpdateDownloader(
     context: Context,
     private val client: OkHttpClient = OkHttpClient.Builder()
@@ -24,10 +29,10 @@ internal class UpdateDownloader(
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build(),
-) {
+) : UpdateApkDownloader {
     private val directory = File(context.cacheDir, "updates")
 
-    suspend fun download(manifest: UpdateManifest, onProgress: (Long) -> Unit): File = coroutineScope {
+    override suspend fun download(manifest: UpdateManifest, onProgress: (Long) -> Unit): File = coroutineScope {
         directory.mkdirs()
         val partial = File(directory, "${manifest.versionCode}.apk.part")
         val verified = File(directory, "${manifest.versionCode}.apk")
@@ -90,7 +95,7 @@ internal class UpdateDownloader(
         }
     }
 
-    fun cleanAll() {
+    override fun cleanAll() {
         directory.listFiles()?.forEach(File::delete)
     }
 

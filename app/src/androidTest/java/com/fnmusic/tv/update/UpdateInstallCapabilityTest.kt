@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.Settings
 import androidx.core.net.toUri
+import androidx.core.content.FileProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.fnmusic.tv.BuildConfig
@@ -28,11 +29,20 @@ class UpdateInstallCapabilityTest {
         )
         val requestsInstallPackages = packageInfo.requestedPermissions
             ?.contains(Manifest.permission.REQUEST_INSTALL_PACKAGES) == true
-        val receiver = ComponentName(context, UpdateInstallReceiver::class.java)
+        val legacyReceiver = ComponentName(context, "com.fnmusic.tv.update.UpdateInstallReceiver")
+        val appUpdateService = ComponentName(context, "com.azhon.appupdate.service.DownloadService")
+        val appUpdateDialog = ComponentName(context, "com.azhon.appupdate.view.UpdateDialogActivity")
+        val provider = packageManager.resolveContentProvider(providerAuthority(context.packageName), PackageManager.GET_META_DATA)
 
         if (BuildConfig.SELF_UPDATE_ENABLED) {
             assertTrue(requestsInstallPackages)
-            assertFalse(packageManager.getReceiverInfo(receiver, 0).exported)
+            assertNotNull(provider)
+            assertFalse(requireNotNull(provider).exported)
+            val updateDirectory = java.io.File(context.cacheDir, "updates").apply { mkdirs() }
+            val apk = java.io.File(updateDirectory, "provider-test.apk").apply { writeBytes(byteArrayOf(1)) }
+            val uri = FileProvider.getUriForFile(context, providerAuthority(context.packageName), apk)
+            assertTrue(uri.toString().contains("/verified_updates/"))
+            apk.delete()
             val settingsIntent = Intent(
                 Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                 "package:${context.packageName}".toUri(),
@@ -40,9 +50,16 @@ class UpdateInstallCapabilityTest {
             assertNotNull(packageManager.resolveActivity(settingsIntent, PackageManager.MATCH_DEFAULT_ONLY))
         } else {
             assertFalse(requestsInstallPackages)
-            assertThrows(PackageManager.NameNotFoundException::class.java) {
-                packageManager.getReceiverInfo(receiver, 0)
-            }
+            assertTrue(provider == null)
+        }
+        assertThrows(PackageManager.NameNotFoundException::class.java) {
+            packageManager.getReceiverInfo(legacyReceiver, 0)
+        }
+        assertThrows(PackageManager.NameNotFoundException::class.java) {
+            packageManager.getServiceInfo(appUpdateService, 0)
+        }
+        assertThrows(PackageManager.NameNotFoundException::class.java) {
+            packageManager.getActivityInfo(appUpdateDialog, 0)
         }
     }
 }

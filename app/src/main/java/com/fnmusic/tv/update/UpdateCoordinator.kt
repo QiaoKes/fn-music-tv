@@ -2,7 +2,6 @@ package com.fnmusic.tv.update
 
 import android.app.Application
 import android.content.Intent
-import android.content.pm.PackageInstaller
 import android.os.SystemClock
 import android.provider.Settings
 import androidx.core.net.toUri
@@ -26,11 +25,12 @@ internal class UpdateCoordinator(
     private val application: Application,
     private val scope: CoroutineScope,
     private val preferences: UpdatePreferences = UpdatePreferences(application),
-    private val client: UpdateClient? = BuildConfig.UPDATE_MANIFEST_URL.takeIf { BuildConfig.SELF_UPDATE_ENABLED && it.isNotBlank() }
+    private val client: UpdateManifestSource? = BuildConfig.UPDATE_MANIFEST_URL.takeIf { BuildConfig.SELF_UPDATE_ENABLED && it.isNotBlank() }
         ?.let(::UpdateClient),
-    private val downloader: UpdateDownloader = UpdateDownloader(application),
-    private val verifier: ApkVerifier = ApkVerifier(application),
-    private val installer: UpdateInstaller = UpdateInstaller(application),
+    private val downloader: UpdateApkDownloader = UpdateDownloader(application),
+    private val verifier: UpdateApkVerifier = ApkVerifier(application),
+    private val installer: UpdateApkInstaller = UpdateInstaller(application),
+    private val canRequestPackageInstalls: () -> Boolean = application.packageManager::canRequestPackageInstalls,
     private val clock: () -> Long = SystemClock::elapsedRealtime,
 ) : UpdateController {
     private val mutableState = MutableStateFlow<UpdateUiState>(if (client == null) UpdateUiState.Disabled else UpdateUiState.Idle)
@@ -49,7 +49,7 @@ internal class UpdateCoordinator(
     private var downloadJob: Job? = null
     private var manualDemand = false
     private var verifiedApk: File? = null
-    private var systemHandoff = false
+    private var systemHandoff: SystemHandoff? = null
 
     init {
         preferences.cleanBelow(BuildConfig.VERSION_CODE.toLong())
@@ -69,13 +69,21 @@ internal class UpdateCoordinator(
 
     fun onResumeFromSystem() {
         val current = mutableState.value
-        if (current is UpdateUiState.AwaitingInstallPermission && systemHandoff) {
-            systemHandoff = false
-            if (application.packageManager.canRequestPackageInstalls()) {
-                prepareInstaller(current.manifest)
-            } else {
-                finishInstallError("未允许回声台安装更新，请重新下载后再试", current.manifest)
+        when (systemHandoff) {
+            SystemHandoff.InstallPermission -> {
+                if (current !is UpdateUiState.AwaitingInstallPermission) return
+                systemHandoff = null
+                if (canRequestPackageInstalls()) {
+                    prepareInstaller(current.manifest)
+                } else {
+                    finishInstallError("未允许回声台安装更新，请重新下载后再试", current.manifest)
+                }
             }
+            SystemHandoff.Installer -> {
+                if (current !is UpdateUiState.AwaitingSystemConfirmation) return
+                finishInstallError("安装已取消或未完成，请重新下载后再试", current.manifest)
+            }
+            null -> Unit
         }
     }
 
@@ -84,7 +92,7 @@ internal class UpdateCoordinator(
         visible = false
         timerJob?.cancel()
         timerJob = null
-        if (!systemHandoff) cancelDownload()
+        if (systemHandoff == null) cancelDownload()
     }
 
     override fun checkManually() {
@@ -225,7 +233,7 @@ internal class UpdateCoordinator(
                 }
                 mutableState.value = UpdateUiState.Verifying(manifest)
                 verifiedApk = verifier.verify(file, manifest)
-                if (application.packageManager.canRequestPackageInstalls()) {
+                if (canRequestPackageInstalls()) {
                     prepareInstaller(manifest)
                 } else {
                     mutableState.value = UpdateUiState.AwaitingInstallPermission(manifest)
@@ -252,6 +260,7 @@ internal class UpdateCoordinator(
         downloader.cleanAll()
         verifiedApk?.delete()
         verifiedApk = null
+        systemHandoff = null
         if (
             mutableState.value is UpdateUiState.Downloading ||
             mutableState.value is UpdateUiState.Verifying ||
@@ -263,7 +272,7 @@ internal class UpdateCoordinator(
 
     override fun openInstallPermissionSettings() {
         if (mutableState.value !is UpdateUiState.AwaitingInstallPermission) return
-        systemHandoff = true
+        systemHandoff = SystemHandoff.InstallPermission
         effectChannel.trySend(
             UpdateEffect.LaunchIntent(
                 Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, "package:${application.packageName}".toUri()),
@@ -279,52 +288,15 @@ internal class UpdateCoordinator(
         mutableState.value = UpdateUiState.PreparingInstaller(manifest)
         scope.launch {
             try {
+                systemHandoff = SystemHandoff.Installer
+                mutableState.value = UpdateUiState.AwaitingSystemConfirmation(manifest)
                 installer.install(apk)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Throwable) {
-                apk.delete()
-                verifiedApk = null
-                mutableState.value = UpdateUiState.Error("无法打开系统安装程序，请重试", manifest)
+                finishInstallError("无法打开系统安装程序，请重新下载后再试", manifest)
             }
         }
-    }
-
-    fun handleInstallStatus(intent: Intent): Boolean {
-        val current = mutableState.value
-        val manifest = when (current) {
-            is UpdateUiState.PreparingInstaller -> current.manifest
-            is UpdateUiState.AwaitingSystemConfirmation -> current.manifest
-            else -> return false
-        }
-        when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
-            PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                @Suppress("DEPRECATION")
-                val confirmation = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
-                if (confirmation == null) {
-                    mutableState.value = UpdateUiState.Error("系统安装确认页不可用", manifest)
-                } else {
-                    systemHandoff = true
-                    mutableState.value = UpdateUiState.AwaitingSystemConfirmation(manifest)
-                    effectChannel.trySend(UpdateEffect.LaunchIntent(confirmation.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)))
-                }
-            }
-            PackageInstaller.STATUS_SUCCESS -> {
-                verifiedApk?.delete()
-                verifiedApk = null
-                preferences.cleanBelow(manifest.versionCode)
-                systemHandoff = false
-                mutableState.value = UpdateUiState.Idle
-            }
-            PackageInstaller.STATUS_FAILURE_ABORTED -> finishInstallError("已取消安装", manifest)
-            else -> finishInstallError(
-                intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)?.take(160)
-                    ?.let { "安装失败：$it" }
-                    ?: "安装失败，请重试",
-                manifest,
-            )
-        }
-        return true
     }
 
     fun handleIntentLaunchFailure() {
@@ -334,14 +306,14 @@ internal class UpdateCoordinator(
             is UpdateUiState.AwaitingSystemConfirmation -> current.manifest
             else -> return
         }
-        systemHandoff = false
-        finishInstallError("无法打开系统设置或安装确认页", manifest)
+        systemHandoff = null
+        finishInstallError("无法打开系统设置页，请重新下载后再试", manifest)
     }
 
     private fun finishInstallError(message: String, manifest: UpdateManifest) {
         verifiedApk?.delete()
         verifiedApk = null
-        systemHandoff = false
+        systemHandoff = null
         mutableState.value = UpdateUiState.Error(message, manifest)
     }
 
@@ -369,4 +341,6 @@ internal class UpdateCoordinator(
         const val AUTO_CHECK_INTERVAL_MS = 12L * 60L * 60L * 1_000L
         const val AUTO_RETRY_INTERVAL_MS = 30L * 60L * 1_000L
     }
+
+    private enum class SystemHandoff { InstallPermission, Installer }
 }

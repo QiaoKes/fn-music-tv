@@ -473,3 +473,25 @@ Replaced legacy lyric parsing and UI with Accompanist Lyrics, added YRC/QRC/KRC 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 22: Refactor TV update installation and prepare 1.0.8
+
+**Date**: 2026-08-24
+**Task**: Refactor TV update installation and prepare 1.0.8
+**Branch**: `feature-upgrade-saki`
+
+### Summary
+
+Replaced the sideload installer handoff with AppUpdate, restored v1+v2 APK signing for Vidda compatibility, added verification coverage, prepared the user-edited 1.0.8 re-release notes, and validated the flow on hardware.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `14fd152` | (see git log) |
+| `afa5ddd` | (see git log) |
+
+### Status
+
+[OK] **Completed**

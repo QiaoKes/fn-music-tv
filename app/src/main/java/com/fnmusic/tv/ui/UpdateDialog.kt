@@ -70,7 +70,7 @@ internal fun UpdateDialogHost(state: UpdateUiState, controller: UpdateController
         is UpdateUiState.Available -> UpdateAvailableDialog(state, controller)
         is UpdateUiState.Downloading -> UpdateProgressDialog(
             title = "正在下载更新",
-            message = "下载完成后会先校验安装包，再由系统确认安装。",
+            message = "下载完成后将打开安装界面。",
             progress = state.downloadedBytes.toFloat() / state.manifest.apkSize.toFloat(),
             progressText = "${((state.downloadedBytes * 100) / state.manifest.apkSize).coerceIn(0, 100)}% · " +
                 "${formatUpdateBytes(state.downloadedBytes)} / ${formatUpdateBytes(state.manifest.apkSize)}",

@@ -78,6 +78,8 @@ android {
                 storePassword = requireNotNull(releaseSigningPassword)
                 keyAlias = "fn-music-tv"
                 keyPassword = releaseSigningPassword
+                enableV1Signing = true
+                enableV2Signing = true
             }
         }
     }
@@ -193,6 +195,8 @@ dependencies {
     implementation(libs.accompanist.lyrics.ui)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp)
+    "sideloadImplementation"(libs.appupdate)
+    "storeImplementation"(libs.appupdate.noop)
     baselineProfile(project(":baselineprofile"))
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
