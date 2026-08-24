@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 21
+- **Total Sessions**: 22
 - **Last Active**: 2026-08-24
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~475 | Active |
+| `journal-1.md` | ~497 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 22 | 2026-08-24 | Refactor TV update installation and prepare 1.0.8 | `14fd152`, `afa5ddd` | `feature-upgrade-saki` |
 | 21 | 2026-08-24 | 完成首页与我的 UI 改版 | `fdea908` | `opt-ui-saki` |
 | 20 | 2026-08-12 | 完成设置页与应用内更新 | `8c63e4b`, `851956a`, `2d59a9b` | `feature-version-saki` |
 | 19 | 2026-08-10 | Replace TV lyrics stack and release 1.0.5 | `129470c`, `87fac0f`, `61bfef4` | `feature-lyricsrecode-saki` |
