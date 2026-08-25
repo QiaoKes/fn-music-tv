@@ -495,3 +495,24 @@ Replaced the sideload installer handoff with AppUpdate, restored v1+v2 APK signi
 ### Status
 
 [OK] **Completed**
+
+
+## Session 23: Vendor lyrics libraries for API 23
+
+**Date**: 2026-08-25
+**Task**: Vendor lyrics libraries for API 23
+**Branch**: `main`
+
+### Summary
+
+Vendored Accompanist Lyrics UI and Gaze Capsule as local Android modules at minSdk 23, preserved public APIs, added API 23 guards in update verification/client/coordinator, and validated builds, lint, R8, unit/instrumentation tests, and startup on an API 23 emulator.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3df2464` | (see git log) |
+
+### Status
+
+[OK] **Completed**
