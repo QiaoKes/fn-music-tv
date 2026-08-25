@@ -43,6 +43,14 @@
   <img src="docs/images/full-screen-play.png" alt="大海报播放器">
 </p>
 
+## 爱发电
+
+<a href="https://afdian.com/a/qiaoke" target="_blank">
+  <img src="docs/images/support_aifadian.svg" alt="support_aifadian">
+</a>
+
+如果这个项目对你有所帮助，欢迎留下 Star 或通过爱发电支持项目。您的每一份认可，都会成为我持续完善体验的动力。
+
 ## 安装
 
 ### 下载预编译版本
