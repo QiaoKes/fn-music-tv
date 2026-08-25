@@ -2405,8 +2405,10 @@ private fun DetailTrackCollection(
             )
             Spacer(Modifier.width(24.dp))
             Column(Modifier.weight(1f).fillMaxHeight()) {
-                Text(header.kind, color = FnColors.Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(7.dp))
+                if (header.kind.isNotBlank() && header.kind != title) {
+                    Text(header.kind, color = FnColors.Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(7.dp))
+                }
                 Text(
                     title,
                     fontSize = 31.sp,
