@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.provider.Settings
 import androidx.core.net.toUri
 import androidx.core.content.FileProvider
@@ -43,10 +44,14 @@ class UpdateInstallCapabilityTest {
             val uri = FileProvider.getUriForFile(context, providerAuthority(context.packageName), apk)
             assertTrue(uri.toString().contains("/verified_updates/"))
             apk.delete()
-            val settingsIntent = Intent(
-                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                "package:${context.packageName}".toUri(),
-            )
+            val settingsIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    "package:${context.packageName}".toUri(),
+                )
+            } else {
+                Intent(Settings.ACTION_SECURITY_SETTINGS)
+            }
             assertNotNull(packageManager.resolveActivity(settingsIntent, PackageManager.MATCH_DEFAULT_ONLY))
         } else {
             assertFalse(requestsInstallPackages)
