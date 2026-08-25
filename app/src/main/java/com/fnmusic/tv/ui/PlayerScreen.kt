@@ -1481,11 +1481,6 @@ internal fun PlayerControlOverlay(
                     }
                 }
                 .focusable()
-                .background(if (progressFocused) Color.White.copy(alpha = 0.12f) else Color.Transparent, RoundedCornerShape(3.dp))
-                .graphicsLayer {
-                    scaleX = if (progressFocused) 1.02f else 1f
-                    scaleY = if (progressFocused) 1.04f else 1f
-                }
                 .semantics { contentDescription = "播放进度 ${formatDuration(positionMs)} / ${formatDuration(durationMs)}" },
         ) {
             val centerY = size.height / 2f

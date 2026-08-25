@@ -23,7 +23,6 @@ ksp = "2.3.6"
 androidxTestCore = "1.7.0"
 robolectric = "4.16.1"
 accompanistLyricsCore = "0.4.7"
-accompanistLyricsUi = "1.0.19"
 appUpdate = "4.3.6"
 
 [libraries]
@@ -65,7 +64,6 @@ androidx-test-core = { module = "androidx.test:core", version.ref = "androidxTes
 androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTestCore" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 accompanist-lyrics-core = { module = "com.mocharealm.accompanist:lyrics-core", version.ref = "accompanistLyricsCore" }
-accompanist-lyrics-ui = { module = "com.mocharealm.accompanist:lyrics-ui", version.ref = "accompanistLyricsUi" }
 appupdate = { module = "io.github.azhon:appupdate", version.ref = "appUpdate" }
 appupdate-noop = { module = "io.github.azhon:appupdate-no-op", version.ref = "appUpdate" }
 

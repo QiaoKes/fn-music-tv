@@ -495,3 +495,51 @@ Replaced the sideload installer handoff with AppUpdate, restored v1+v2 APK signi
 ### Status
 
 [OK] **Completed**
+
+
+## Session 23: Vendor lyrics libraries for API 23
+
+**Date**: 2026-08-25
+**Task**: Vendor lyrics libraries for API 23
+**Branch**: `main`
+
+### Summary
+
+Vendored Accompanist Lyrics UI and Gaze Capsule as local Android modules at minSdk 23, preserved public APIs, added API 23 guards in update verification/client/coordinator, and validated builds, lint, R8, unit/instrumentation tests, and startup on an API 23 emulator.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3df2464` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 24: API 23 兼容、电视界面统一与 1.1.0 发布准备
+
+**Date**: 2026-08-25
+**Task**: API 23 兼容、电视界面统一与 1.1.0 发布准备
+**Branch**: `feature-androidver-saki`
+
+### Summary
+
+将最低支持版本恢复到 Android 6.0/API 23，内置歌词相关依赖并补齐旧系统更新校验兼容性；修复播放器进度条获得焦点时的白条和尺寸变化；统一歌单、收藏、全部歌曲和专辑详情的新布局，修复收藏页重复标题；准备 1.1.0 版本与面向用户的更新日志，并在 README 界面预览后加入原样爱发电入口和按钮资源。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f50a4ba` | (see git log) |
+| `d44cd6a` | (see git log) |
+| `e723620` | (see git log) |
+| `4787f6b` | (see git log) |
+| `ac91212` | (see git log) |
+| `f5fc692` | (see git log) |
+| `53bccc3` | (see git log) |
+
+### Status
+
+[OK] **Completed**

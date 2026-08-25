@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 22
-- **Last Active**: 2026-08-24
+- **Total Sessions**: 24
+- **Last Active**: 2026-08-25
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~497 | Active |
+| `journal-1.md` | ~545 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,8 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 24 | 2026-08-25 | API 23 兼容、电视界面统一与 1.1.0 发布准备 | `f50a4ba`, `d44cd6a`, `e723620`, `4787f6b`, `ac91212`, `f5fc692`, `53bccc3` | `feature-androidver-saki` |
+| 23 | 2026-08-25 | Vendor lyrics libraries for API 23 | `3df2464` | `main` |
 | 22 | 2026-08-24 | Refactor TV update installation and prepare 1.0.8 | `14fd152`, `afa5ddd` | `feature-upgrade-saki` |
 | 21 | 2026-08-24 | 完成首页与我的 UI 改版 | `fdea908` | `opt-ui-saki` |
 | 20 | 2026-08-12 | 完成设置页与应用内更新 | `8c63e4b`, `851956a`, `2d59a9b` | `feature-version-saki` |

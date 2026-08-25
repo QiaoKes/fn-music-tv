@@ -50,7 +50,7 @@ android {
 
     defaultConfig {
         applicationId = "com.fnmusic.tv"
-        minSdk = 29
+        minSdk = 23
         targetSdk = 36
         versionCode = managedVersionCode
         versionName = managedVersionName
@@ -192,7 +192,7 @@ dependencies {
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.tv.material)
-    implementation(libs.accompanist.lyrics.ui)
+    implementation(project(":third_party:accompanist-lyrics-ui"))
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp)
     "sideloadImplementation"(libs.appupdate)

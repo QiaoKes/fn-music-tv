@@ -43,6 +43,14 @@
   <img src="docs/images/full-screen-play.png" alt="大海报播放器">
 </p>
 
+## 爱发电
+
+<a href="https://afdian.com/a/qiaoke" target="_blank">
+  <img src="docs/images/support_aifadian.svg" alt="support_aifadian">
+</a>
+
+如果这个项目对你有所帮助，欢迎留下 Star 或通过爱发电支持项目。您的每一份认可，都会成为我持续完善体验的动力。
+
 ## 安装
 
 ### 下载预编译版本
@@ -53,7 +61,7 @@
 fn-music-tv-<version>-universal.apk
 ```
 
-通用包包含 `arm64-v8a`、`armeabi-v7a`、`x86` 与 `x86_64`，支持 Android 10.0 及以上
+通用包包含 `arm64-v8a`、`armeabi-v7a`、`x86` 与 `x86_64`，支持 Android 6.0 及以上
 系统。下载后可通过 U 盘、文件管理器或 ADB 安装：
 
 ```sh
@@ -154,7 +162,7 @@ baselineprofile/ 基准配置生成模块
 
 ## 兼容性说明
 
-- 通用侧载包可安装在 Android 10 及以上的普通安卓车机，使用横屏触控界面运行；当前尚未在
+- 通用侧载包可安装在 Android 6.0 及以上的普通安卓车机，使用横屏触控界面运行；当前尚未在
   具体车机上实测，低分辨率屏幕、方向盘按键和车机音频策略可能因设备而异。
 - 车机侧载运行不等同于 Android Auto、CarPlay 或经过车厂认证的 Android Automotive 应用；
   Android Automotive OS 是否允许安装和启动普通 APK 取决于车厂系统限制。请勿在驾驶过程中操作。

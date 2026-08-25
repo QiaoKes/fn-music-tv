@@ -3,7 +3,9 @@ package com.fnmusic.tv.update
 import java.io.IOException
 import java.io.ByteArrayOutputStream
 import java.net.URI
-import java.time.Instant
+import java.text.ParsePosition
+import java.text.SimpleDateFormat
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -77,7 +79,7 @@ internal fun validateManifest(dto: UpdateManifestDto, endpointUri: URI): UpdateM
     if (!apkUri.host.equals(endpointUri.host, ignoreCase = true)) {
         throw UpdateFailure("APK 与更新信息必须使用同一下载域名")
     }
-    if (runCatching { Instant.parse(dto.publishedAt) }.isFailure) throw UpdateFailure("发布时间无效")
+    if (!isValidPublishedAt(dto.publishedAt)) throw UpdateFailure("发布时间无效")
     validateHttpsUri(dto.githubReleaseUrl, "GitHub Release 地址")
     return UpdateManifest(
         versionName = dto.versionName,
@@ -88,6 +90,21 @@ internal fun validateManifest(dto: UpdateManifestDto, endpointUri: URI): UpdateM
         apkSize = dto.apk.size,
         apkSha256 = dto.apk.sha256,
     )
+}
+
+private fun isValidPublishedAt(value: String): Boolean {
+    val match = PUBLISHED_AT_PATTERN.matchEntire(value) ?: return false
+    val fraction = match.groups[1]?.value.orEmpty().padEnd(3, '0').take(3)
+    val zoneStart = sequenceOf(value.indexOf('Z', 10), value.indexOf('+', 10), value.indexOf('-', 10))
+        .filter { it >= 0 }
+        .minOrNull() ?: return false
+    val zone = value.substring(zoneStart).let { if (it == "Z") "+0000" else it.replace(":", "") }
+    val normalized = value.substring(0, zoneStart).substringBefore('.') + "." + fraction + zone
+    val position = ParsePosition(0)
+    SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US).apply {
+        isLenient = false
+    }.parse(normalized, position)
+    return position.index == normalized.length && position.errorIndex < 0
 }
 
 internal fun validateHttpsUri(value: String, label: String): URI {
@@ -104,6 +121,9 @@ internal fun validateHttpsUri(value: String, label: String): URI {
 internal class UpdateFailure(message: String, cause: Throwable? = null) : IOException(message, cause)
 
 private val LOWERCASE_SHA256 = Regex("^[0-9a-f]{64}$")
+private val PUBLISHED_AT_PATTERN = Regex(
+    "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.(\\d{1,9}))?(?:Z|[+-]\\d{2}:\\d{2})$",
+)
 
 private fun defaultUpdateHttpClient() = OkHttpClient.Builder()
     .followRedirects(false)
