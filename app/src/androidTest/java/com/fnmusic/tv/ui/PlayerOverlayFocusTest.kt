@@ -408,6 +408,20 @@ class PlayerOverlayFocusTest {
         composeRule.runOnIdle { assertTrue(seekDelta.get() in 77_000L..79_000L) }
     }
 
+    @Test fun focusingProgressKeepsTrackBoundsStable() {
+        renderControls(roaming = false)
+
+        val progress = composeRule.onNodeWithContentDescription("播放进度 0:12 / 3:00")
+        val before = progress.fetchSemanticsNode().boundsInRoot
+        composeRule.onNodeWithContentDescription("播放")
+            .performKeyInput { pressKey(Key.DirectionUp) }
+        progress.assertIsFocused()
+        val after = progress.fetchSemanticsNode().boundsInRoot
+
+        assertEquals(before.width, after.width, 0.01f)
+        assertEquals(before.height, after.height, 0.01f)
+    }
+
     @Test fun touchingTransportInvokesTheExistingPlaybackCallback() {
         val playPauseCalls = AtomicInteger(0)
         composeRule.setContent {
