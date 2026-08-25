@@ -2,6 +2,7 @@ package com.fnmusic.tv.update
 
 import android.app.Application
 import android.content.Intent
+import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
 import androidx.core.net.toUri
@@ -30,7 +31,7 @@ internal class UpdateCoordinator(
     private val downloader: UpdateApkDownloader = UpdateDownloader(application),
     private val verifier: UpdateApkVerifier = ApkVerifier(application),
     private val installer: UpdateApkInstaller = UpdateInstaller(application),
-    private val canRequestPackageInstalls: () -> Boolean = application.packageManager::canRequestPackageInstalls,
+    private val canRequestPackageInstalls: () -> Boolean = application::canRequestPackageInstallsCompat,
     private val clock: () -> Long = SystemClock::elapsedRealtime,
 ) : UpdateController {
     private val mutableState = MutableStateFlow<UpdateUiState>(if (client == null) UpdateUiState.Disabled else UpdateUiState.Idle)
@@ -273,10 +274,13 @@ internal class UpdateCoordinator(
     override fun openInstallPermissionSettings() {
         if (mutableState.value !is UpdateUiState.AwaitingInstallPermission) return
         systemHandoff = SystemHandoff.InstallPermission
+        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, "package:${application.packageName}".toUri())
+        } else {
+            Intent(Settings.ACTION_SECURITY_SETTINGS)
+        }
         effectChannel.trySend(
-            UpdateEffect.LaunchIntent(
-                Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, "package:${application.packageName}".toUri()),
-            ),
+            UpdateEffect.LaunchIntent(intent),
         )
     }
 
@@ -344,3 +348,10 @@ internal class UpdateCoordinator(
 
     private enum class SystemHandoff { InstallPermission, Installer }
 }
+
+private fun Application.canRequestPackageInstallsCompat(): Boolean =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        packageManager.canRequestPackageInstalls()
+    } else {
+        true
+    }
