@@ -252,6 +252,11 @@ internal fun AuthenticatedApp(
             loader = { container.musicRepository.playlistTracks(route.playlist.guid.value, it) },
             queueSource = { sort -> QueueSource.Playlist(route.playlist.guid.value, sort) },
             onPlayer = { open(LibraryRoute.Player(it)) },
+            detailHeader = TrackDetailHeader(
+                kind = "歌单",
+                declaredTrackCount = route.playlist.trackCount,
+                onBack = back,
+            ),
         )
         LibraryRoute.Artists -> ArtistGrid(container, onOpen = { open(LibraryRoute.ArtistDetail(it)) })
         LibraryRoute.Albums -> AlbumGrid(container, onOpen = { open(LibraryRoute.AlbumDetail(it)) })
@@ -2161,7 +2166,7 @@ private fun TrackCollection(
     onPlayer: (Track) -> Unit,
     initialFocusEnabled: Boolean = true,
     onFocusOwnerChanged: () -> Unit = {},
-    detailHeader: TrackDetailHeader? = null,
+    detailHeader: TrackDetailHeader,
     primaryAction: TrackCollectionPrimaryAction = TrackCollectionPrimaryAction.PlayAll,
     showTrackList: Boolean = true,
     alternateContent: @Composable () -> Unit = {},
@@ -2301,9 +2306,9 @@ private fun TrackCollection(
         if (!initialFocusEnabled || !snapshot.initialLoadCompleted || initialFocusRequested) return@LaunchedEffect
         val availableKeys = buildList {
             if (primaryActionEnabled) add("primary-action")
-            detailHeader?.tabs?.filter { it.selected }?.forEach { add(it.key) }
+            detailHeader.tabs.filter { it.selected }.forEach { add(it.key) }
             if (showTrackList) addAll(playableTracks.map { it.guid.value })
-            if (detailHeader != null) add("detail-back")
+            add("detail-back")
         }
         val targetKey = focusedKey?.takeIf(availableKeys::contains) ?: availableKeys.firstOrNull()
         if (focusedKey != targetKey) {
@@ -2320,136 +2325,38 @@ private fun TrackCollection(
             }
         }
     }
-    if (detailHeader != null) {
-        DetailTrackCollection(
-            container = container,
-            header = detailHeader,
-            title = title,
-            subtitle = subtitle,
-            coverId = coverId,
-            trackCount = detailHeader.declaredTrackCount ?: expectedTotal?.takeIf { it > 0 },
-            tracks = tracks,
-            loading = loading,
-            error = error,
-            hasNext = hasNext,
-            listState = listState,
-            focusedKey = focusedKey,
-            restoredFocus = restoredFocus,
-            primaryActionLabel = primaryActionLabel,
-            primaryActionEnabled = primaryActionEnabled,
-            showTrackList = showTrackList,
-            onFocusKey = {
-                focusedKey = it
-                onFocusOwnerChanged()
-            },
-            onPrimaryAction = ::runPrimaryAction,
-            onTrackFocused = { index, key ->
-                focusedKey = key
-                onFocusOwnerChanged()
-                if (hasNext && index >= tracks.size - 15) load(page + 1)
-            },
-            onTrack = ::play,
-            onLoadMore = { load(page + 1) },
-            alternateContent = alternateContent,
-            emptyMessage = emptyMessage,
-        )
-    } else {
-        LegacyTrackCollection(
-            container = container,
-            title = title,
-            subtitle = subtitle,
-            coverId = coverId,
-            tracks = tracks,
-            loading = loading,
-            error = error,
-            hasNext = hasNext,
-            listState = listState,
-            focusedKey = focusedKey,
-            restoredFocus = restoredFocus,
-            primaryActionEnabled = primaryActionEnabled,
-            onFocusKey = {
-                focusedKey = it
-                onFocusOwnerChanged()
-            },
-            onPrimaryAction = ::runPrimaryAction,
-            onTrackFocused = { index, key ->
-                focusedKey = key
-                onFocusOwnerChanged()
-                if (hasNext && index >= tracks.size - 15) load(page + 1)
-            },
-            onTrack = ::play,
-            onLoadMore = { load(page + 1) },
-            emptyMessage = emptyMessage,
-        )
-    }
-}
-
-@Composable
-private fun LegacyTrackCollection(
-    container: AuthenticatedAppDependencies,
-    title: String,
-    subtitle: String,
-    coverId: String?,
-    tracks: List<Track>,
-    loading: Boolean,
-    error: AppError?,
-    hasNext: Boolean,
-    listState: androidx.compose.foundation.lazy.LazyListState,
-    focusedKey: String?,
-    restoredFocus: FocusRequester,
-    primaryActionEnabled: Boolean,
-    onFocusKey: (String) -> Unit,
-    onPrimaryAction: () -> Unit,
-    onTrackFocused: (Int, String) -> Unit,
-    onTrack: (Int) -> Unit,
-    onLoadMore: () -> Unit,
-    emptyMessage: String,
-) {
-    Row(Modifier.fillMaxSize().padding(horizontal = 56.dp, vertical = 38.dp), horizontalArrangement = Arrangement.spacedBy(34.dp)) {
-        Column(Modifier.width(330.dp)) {
-            val artworkShape = RoundedCornerShape(8.dp)
-            CollectionArtwork(
-                container = container,
-                title = title,
-                coverId = coverId,
-                fallback = CollectionArtworkFallback.Initial,
-                modifier = Modifier.size(300.dp),
-                shape = artworkShape,
-            )
-            Text(title, fontSize = 36.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (subtitle.isNotBlank()) Text(subtitle, color = FnColors.Muted, fontSize = 21.sp)
-            Spacer(Modifier.height(18.dp))
-            Button(
-                enabled = primaryActionEnabled,
-                onClick = onPrimaryAction,
-                modifier = Modifier
-                    .then(if (focusedKey == "primary-action") Modifier.focusRequester(restoredFocus) else Modifier)
-                    .onFocusChanged { if (it.isFocused) onFocusKey("primary-action") },
-            ) {
-                Text("播放全部")
-            }
-            error?.let { InlineError(it) }
-        }
-        LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (tracks.isEmpty() && !loading && error == null) {
-                item { Text(emptyMessage, color = FnColors.Muted, fontSize = 17.sp, modifier = Modifier.padding(vertical = 24.dp)) }
-            }
-            itemsIndexed(tracks, key = { _, track -> track.guid.value }) { index, track ->
-                TrackRow(
-                    track,
-                    enabled = isTrackPlayable(track),
-                    modifier = Modifier
-                        .then(if (focusedKey == track.guid.value) Modifier.focusRequester(restoredFocus) else Modifier)
-                        .onFocusChanged { if (it.isFocused) onTrackFocused(index, track.guid.value) },
-                ) { onTrack(index) }
-            }
-            if (hasNext) item {
-                Button(enabled = !loading, onClick = onLoadMore, modifier = Modifier.fillMaxWidth().height(58.dp)) {
-                    Text(if (loading) "正在加载" else "加载更多")
-                }
-            }
-        }
-    }
+    DetailTrackCollection(
+        container = container,
+        header = detailHeader,
+        title = title,
+        subtitle = subtitle,
+        coverId = coverId,
+        trackCount = detailHeader.declaredTrackCount ?: expectedTotal?.takeIf { it > 0 },
+        tracks = tracks,
+        loading = loading,
+        error = error,
+        hasNext = hasNext,
+        listState = listState,
+        focusedKey = focusedKey,
+        restoredFocus = restoredFocus,
+        primaryActionLabel = primaryActionLabel,
+        primaryActionEnabled = primaryActionEnabled,
+        showTrackList = showTrackList,
+        onFocusKey = {
+            focusedKey = it
+            onFocusOwnerChanged()
+        },
+        onPrimaryAction = ::runPrimaryAction,
+        onTrackFocused = { index, key ->
+            focusedKey = key
+            onFocusOwnerChanged()
+            if (hasNext && index >= tracks.size - 15) load(page + 1)
+        },
+        onTrack = ::play,
+        onLoadMore = { load(page + 1) },
+        alternateContent = alternateContent,
+        emptyMessage = emptyMessage,
+    )
 }
 
 @Composable
@@ -2870,46 +2777,6 @@ internal fun exactTrackQueueWindow(
 
 private fun isTrackPlayable(track: Track): Boolean =
     !track.isCue && (track.accessStatus == null || track.accessStatus == 0)
-
-@Composable
-private fun TrackRow(track: Track, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Button(enabled = enabled, onClick = onClick, modifier = modifier.fillMaxWidth().height(72.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            val artworkShape = RoundedCornerShape(5.dp)
-            val trackCoverId = track.coverId
-            if (trackCoverId != null) {
-                RemoteArtwork(
-                    container = LocalAuthenticatedDependencies.current,
-                    coverId = trackCoverId,
-                    variant = CoverVariant.Compact,
-                    modifier = Modifier.size(52.dp),
-                    shape = artworkShape,
-                    contentScale = ContentScale.Crop,
-                    placeholderContent = {
-                        InitialArtworkPlaceholder(
-                            text = track.title,
-                            accent = FnColors.Teal,
-                            modifier = Modifier.fillMaxSize(),
-                            shape = artworkShape,
-                        )
-                    },
-                )
-            } else {
-                InitialArtworkPlaceholder(
-                    text = track.title,
-                    accent = FnColors.Teal,
-                    modifier = Modifier.size(52.dp),
-                    shape = artworkShape,
-                )
-            }
-            Column(Modifier.weight(1f)) {
-                Text(track.title, fontSize = 22.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(track.artistName.orEmpty(), color = FnColors.Muted, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            Text(if (track.isCue) "需兼容播放" else formatDuration(track.durationMs ?: 0), color = FnColors.Muted, fontSize = 17.sp)
-        }
-    }
-}
 
 @Composable
 private fun PlaylistTile(
