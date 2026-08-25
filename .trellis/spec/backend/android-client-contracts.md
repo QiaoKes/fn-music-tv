@@ -330,6 +330,9 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 - TV lyric views use Accompanist Lyrics UI's `KaraokeLyricsView` for multi-line auto-scroll and word
   highlighting. Both player styles show translations, hide phonetic rows, use compact typography,
   disable blur, and keep the lyric surface out of the remote focus graph.
+- The app minimum SDK is API 23. The Android-only lyrics UI and Gaze Capsule sources are vendored
+  under `third_party/` at pinned upstream revisions and must remain local project dependencies;
+  do not reintroduce the published artifacts whose manifests require newer Android versions.
 
 ### Playback, snapshot, and current presentation
 
