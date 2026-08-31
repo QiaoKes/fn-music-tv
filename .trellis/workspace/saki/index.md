@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 24
-- **Last Active**: 2026-08-25
+- **Total Sessions**: 25
+- **Last Active**: 2026-08-31
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~545 | Active |
+| `journal-1.md` | ~567 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 25 | 2026-08-31 | Add API 23 FLAC software decoding | `9dd0627`, `f50fabe` | `fix-xiaomi-saki` |
 | 24 | 2026-08-25 | API 23 兼容、电视界面统一与 1.1.0 发布准备 | `f50a4ba`, `d44cd6a`, `e723620`, `4787f6b`, `ac91212`, `f5fc692`, `53bccc3` | `feature-androidver-saki` |
 | 23 | 2026-08-25 | Vendor lyrics libraries for API 23 | `3df2464` | `main` |
 | 22 | 2026-08-24 | Refactor TV update installation and prepare 1.0.8 | `14fd152`, `afa5ddd` | `feature-upgrade-saki` |

@@ -1,4 +1,5 @@
 import java.net.URI
+import java.security.MessageDigest
 import java.util.Properties
 
 plugins {
@@ -31,6 +32,13 @@ val allowUnsignedRelease = providers.gradleProperty("allowUnsignedRelease").orNu
 val updateManifestUrl = providers.gradleProperty("fnMusicUpdateManifestUrl").orNull
     ?: providers.environmentVariable("FN_MUSIC_UPDATE_MANIFEST_URL").orNull
     ?: ""
+val flacDecoderAar = rootProject.file(
+    "third_party/media3-decoder-flac/media3-decoder-flac-1.10.1-libflac-1.5.0.aar",
+)
+val flacDecoderChecksum = rootProject.file(
+    "third_party/media3-decoder-flac/media3-decoder-flac-1.10.1-libflac-1.5.0.aar.sha256",
+)
+val requiredFlacDecoderAbis = setOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
 
 fun String.asBuildConfigString(): String = buildString {
     append('"')
@@ -153,6 +161,36 @@ val verifySideloadUpdateConfiguration by tasks.registering {
     }
 }
 
+val verifyFlacDecoderArtifact by tasks.registering {
+    group = "verification"
+    description = "Verifies the bundled Media3 libFLAC decoder artifact."
+    inputs.files(flacDecoderAar, flacDecoderChecksum)
+    doLast {
+        check(flacDecoderAar.isFile) { "Bundled FLAC decoder is missing: $flacDecoderAar" }
+        check(flacDecoderChecksum.isFile) { "FLAC decoder checksum is missing: $flacDecoderChecksum" }
+
+        val expectedChecksum = flacDecoderChecksum.readText().trim().substringBefore(' ')
+        val actualChecksum = MessageDigest.getInstance("SHA-256")
+            .digest(flacDecoderAar.readBytes())
+            .joinToString("") { byte -> "%02x".format(byte) }
+        check(actualChecksum == expectedChecksum) {
+            "Bundled FLAC decoder checksum mismatch: expected $expectedChecksum, got $actualChecksum"
+        }
+
+        val packagedAbis = zipTree(flacDecoderAar)
+            .matching { include("jni/*/libflacJNI.so") }
+            .files
+            .mapTo(mutableSetOf()) { nativeLibrary -> nativeLibrary.parentFile.name }
+        check(packagedAbis == requiredFlacDecoderAbis) {
+            "Bundled FLAC decoder ABIs must be $requiredFlacDecoderAbis, got $packagedAbis"
+        }
+    }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(verifyFlacDecoderArtifact)
+}
+
 tasks.configureEach {
     if (
         name == "packageSideloadRelease" ||
@@ -183,6 +221,7 @@ dependencies {
     implementation(project(":core:lyrics"))
     implementation(project(":core:data"))
     implementation(project(":core:playback"))
+    implementation(files(flacDecoderAar))
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.palette)
@@ -203,6 +242,7 @@ dependencies {
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.media3.exoplayer)
     androidTestImplementation(libs.androidx.uiautomator)
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)

@@ -1,0 +1,28 @@
+def redirectRepository = { repository ->
+    if (!repository.hasProperty('url')) return
+
+    def host = repository.url.host
+    if (host == 'repo.maven.apache.org' || host == 'repo1.maven.org') {
+        repository.url = uri('https://maven.aliyun.com/repository/central')
+    } else if (host == 'dl.google.com' || host == 'maven.google.com') {
+        repository.url = uri('https://maven.aliyun.com/repository/google')
+    }
+}
+
+beforeSettings { settings ->
+    settings.pluginManagement.repositories.whenObjectAdded(redirectRepository)
+}
+
+beforeProject { project ->
+    project.buildscript.repositories.whenObjectAdded(redirectRepository)
+    project.repositories.whenObjectAdded(redirectRepository)
+}
+
+afterProject { project ->
+    project.buildscript.repositories.each(redirectRepository)
+    project.repositories.each(redirectRepository)
+    if (project.path.endsWith('lib-decoder-flac')) {
+        project.android.ndkVersion = '28.2.13676358'
+        project.android.externalNativeBuild.cmake.version = '3.22.1'
+    }
+}

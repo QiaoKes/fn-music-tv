@@ -543,3 +543,25 @@ Vendored Accompanist Lyrics UI and Gaze Capsule as local Android modules at minS
 ### Status
 
 [OK] **Completed**
+
+
+## Session 25: Add API 23 FLAC software decoding
+
+**Date**: 2026-08-31
+**Task**: Add API 23 FLAC software decoding
+**Branch**: `fix-xiaomi-saki`
+
+### Summary
+
+Bundled and preferred the official Media3 libFLAC decoder for reliable API 23+ FLAC playback, added four-ABI and runtime verification, and prepared the 1.1.1 user release notes.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9dd0627` | (see git log) |
+| `f50fabe` | (see git log) |
+
+### Status
+
+[OK] **Completed**
