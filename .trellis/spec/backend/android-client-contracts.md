@@ -3,10 +3,10 @@
 ## 1. Scope / Trigger
 
 Use this contract for changes crossing the NAS API, session repository, process response cache,
-artwork cache, Room store, application playback runtime, Media3 service, current-presentation
-pipeline, or build pipeline. These boundaries own credentials, namespace isolation, persisted
-schemas, playback authorization, current-track identity, and distributable APKs, so changes require
-contract-level tests.
+artwork cache, Room store, application playback runtime, Media3 service, native decoder packaging,
+current-presentation pipeline, or build pipeline. These boundaries own credentials, namespace
+isolation, persisted schemas, playback authorization, codec compatibility, current-track identity,
+and distributable APKs, so changes require contract-level tests.
 
 ## 2. Signatures
 
@@ -90,6 +90,10 @@ PlaybackTransition.awaitCommitted()
 PlaybackController.state: StateFlow<PlaybackUiState>
 PlaybackController.progress: StateFlow<PlaybackProgressState>
 PlaybackController.removeQueueItem(queueIndex: Int): PlaybackTransition?
+createPlaybackRenderersFactory(context: Context): DefaultRenderersFactory
+third_party/media3-decoder-flac/media3-decoder-flac-1.10.1-libflac-1.5.0.aar
+third_party/media3-decoder-flac/build.sh
+./gradlew :app:verifyFlacDecoderArtifact
 interface PlaybackSessionStore
 interface PlaybackContentSource
 data class PlaybackFailure(val code: Int, val displayName: String)
@@ -350,6 +354,21 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 - `PlaybackService` constructs `DefaultMediaSourceFactory` directly from an authenticated
   `DefaultHttpDataSource.Factory`. Persistent audio cache classes (`SimpleCache`,
   `CacheDataSource`, cache-key factories, download stores) are forbidden.
+- API 23+ FLAC support comes from the checked-in official Media3 1.10.1 decoder extension built
+  with libFLAC 1.5.0. The app module packages the local AAR because `core:playback` is itself an
+  Android library; `core:playback` owns only `DefaultRenderersFactory` configuration. Do not add a
+  direct local-AAR dependency to an Android library or mix Media3 extension versions.
+- `createPlaybackRenderersFactory` uses `EXTENSION_RENDERER_MODE_PREFER`, so libFLAC wins even when
+  an OEM advertises a silent/broken FLAC `MediaCodec`. The AAR contains no decoder for MP3, AAC,
+  WAV, or other formats, so their existing renderer selection remains unchanged.
+- `/track/stream?guid=...` is a multi-format, extensionless endpoint. Keep `MediaItem` MIME-neutral
+  and let Media3 use response headers plus content sniffing. The FLAC extension may decode during
+  extraction and output PCM, so a successful FLAC path does not necessarily emit an audio-decoder
+  initialization callback. Never infer `audio/flac` from display metadata or the URL shape.
+- Every application build verifies the decoder AAR SHA-256 and requires exactly `arm64-v8a`,
+  `armeabi-v7a`, `x86`, and `x86_64` copies of `libflacJNI.so`. Source revisions, NDK/CMake pins,
+  licenses, and the rebuild command live beside the artifact. Release shrinking must consume the
+  upstream Media3/FLAC consumer rules and retain reflective constructors plus JNI members.
 - Forward buffering uses both minimum and maximum `50_000` ms. Back buffering uses `15_000` ms
   with keyframe retention disabled. Cross-protocol redirects remain disabled.
 - Service startup idempotently deletes the legacy `cacheDir/media` tree. If that path is a symbolic
@@ -533,6 +552,11 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 | Other Media3 failure | Publish typed failure for display; do not verify the session |
 | Account switch is activated | Clear playback, artwork, local namespace, then logout through the coordinator |
 | Legacy `cacheDir/media` exists at service startup | Delete safely; continue with direct HTTP and do not recreate it |
+| FLAC stream on API 23+ | Load bundled `libflacJNI`, prefer the Media3 FLAC extension, and decode to PCM |
+| Extensionless `/track/stream` returns a non-FLAC format | Content-detect it normally; do not apply a forced FLAC MIME |
+| FLAC AAR checksum differs from its sidecar | Fail `verifyFlacDecoderArtifact` before application packaging |
+| FLAC AAR has a missing or extra ABI | Fail `verifyFlacDecoderArtifact`; do not emit a partial universal APK |
+| Native library cannot load or FLAC playback errors | Surface the normal Media3 playback failure; never report silent success |
 | DB payload or physical budget exceeded | LRU batch eviction, checkpoint, incremental vacuum |
 | CI produces no APK | Artifact upload fails the job |
 | Release merged art profile contains no `Lcom/fnmusic/tv` rule | Profile wiring is incomplete; fail performance acceptance |
@@ -568,6 +592,10 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   dispatcher, and remain separated by the same structural durability barrier.
 - Good: playback compiles against model and Media3 capabilities only; the app adapts data
   repositories and a typed bad-HTTP-status failure triggers coordinator-owned verification.
+- Good: an extensionless FLAC stream on API 23 loads the bundled `arm64-v8a` library, content-sniffs
+  as FLAC, plays to completion, and leaves MP3/AAC renderer selection untouched.
+- Base: the FLAC extension extractor outputs raw PCM before renderer decoder initialization; the
+  playback succeeds even though analytics has no audio-decoder name callback.
 - Good: a switch A(revision 5) -> B(6) -> A(7) accepts only revision 7 metadata/artwork/lyrics even
   when revision 5 completes last.
 - Good: `10.0.0.115` normalizes to `http://10.0.0.115:5666/music/api/v1/` and is shown again as
@@ -605,6 +633,9 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
   or launching independent decode jobs from every composable.
 - Bad: `SimpleCache`, `CacheDataSource`, a Media3 `ClearCache` command, or any normal playback write
   below `cacheDir/media`.
+- Bad: setting every `/track/stream` item to `audio/flac`, enabling the extension only after an OEM
+  decoder claims support, shipping fewer than four ABIs, or consuming a decoder built for a
+  different Media3 version.
 - Bad: `core:playback` importing a concrete data repository, UI parsing `errorCodeName`, or a page
   independently coordinating playback, cache, namespace, and logout operations.
 - Bad: accepting a shuffle list that merely has the same length, or activating shuffle before an
@@ -665,7 +696,12 @@ Command failures use `SessionError` codes, not removed `SessionResult.RESULT_ERR
 - `PlaybackServiceConfigurationTest`: direct `DefaultHttpDataSource`, access-code and relay request
   headers, 50,000 ms min/max forward
   buffer, 15,000 ms back buffer, no retained back-buffer keyframes, safe/idempotent legacy media
-  deletion, exact shuffle permutation validation, and explicit unstable-API opt-in/lint.
+  deletion, exact shuffle permutation validation, `EXTENSION_RENDERER_MODE_PREFER`, and explicit
+  unstable-API opt-in/lint.
+- `FlacPlaybackIntegrationTest` on API 23: load `libflacJNI`, play the checked-in 16-bit/44.1 kHz
+  extensionless FLAC fixture to `STATE_ENDED`, and assert no `PlaybackException`. App artifact
+  verification asserts the AAR hash and exact four-ABI set; Debug and Release APK inspection
+  asserts the same native paths, while Release mapping confirms reflective/JNI rules survive R8.
 - `PlaybackSnapshotCodecTest`/`PlaybackSnapshotWriterTest`: strict version-2 round trip and rejection
   matrix, exact queue page segments, 250-item/unique-ID bounds, roam/frozen constraints, legacy
   rewrite, FIFO structural acknowledgements, background encoding dispatcher, stale-checkpoint
@@ -910,6 +946,18 @@ if (playback.error?.contains("BAD_HTTP_STATUS") == true) verifySession()
 // Correct: app adapters satisfy playback-owned ports and errors carry typed behavior.
 PlaybackController(context, sessionStore, contentSource)
 if (playback.error?.requiresSessionVerification == true) actions.verifyCurrentSession()
+```
+
+```kotlin
+// Wrong: a multi-format endpoint is mislabeled and the OEM decoder may still win.
+MediaItem.Builder().setUri(streamUrl).setMimeType(MimeTypes.AUDIO_FLAC).build()
+ExoPlayer.Builder(context).build()
+
+// Correct: preserve content detection and prefer the bundled FLAC-only extension.
+val item = MediaItem.fromUri(streamUrl)
+val renderers = DefaultRenderersFactory(context)
+    .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+ExoPlayer.Builder(context, renderers).build()
 ```
 
 ```kotlin

@@ -3,6 +3,7 @@ package com.fnmusic.tv.core.playback
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -13,8 +14,14 @@ import org.junit.Assume.assumeNoException
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
 
 @androidx.annotation.OptIn(UnstableApi::class)
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [28])
 class PlaybackServiceConfigurationTest {
     @get:Rule
     val temporaryFolder = TemporaryFolder()
@@ -49,6 +56,16 @@ class PlaybackServiceConfigurationTest {
             loadControl.privateDurationUs("backBufferDurationUs"),
         )
         assertFalse(loadControl.privateBoolean("retainBackBufferFromKeyframe"))
+    }
+
+    @Test
+    fun `playback prefers bundled decoder extensions`() {
+        val renderersFactory = createPlaybackRenderersFactory(RuntimeEnvironment.getApplication())
+
+        assertEquals(
+            DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER,
+            renderersFactory.privateInt("extensionRendererMode"),
+        )
     }
 
     @Test
@@ -101,5 +118,11 @@ class PlaybackServiceConfigurationTest {
         DefaultLoadControl::class.java.getDeclaredField(name).run {
             isAccessible = true
             getBoolean(this@privateBoolean)
+        }
+
+    private fun DefaultRenderersFactory.privateInt(name: String): Int =
+        DefaultRenderersFactory::class.java.getDeclaredField(name).run {
+            isAccessible = true
+            getInt(this@privateInt)
         }
 }

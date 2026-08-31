@@ -1,11 +1,13 @@
 package com.fnmusic.tv.core.playback
 
+import android.content.Context
 import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.ShuffleOrder.DefaultShuffleOrder
@@ -54,6 +56,11 @@ internal fun createPlaybackLoadControl(): DefaultLoadControl = DefaultLoadContro
     .build()
 
 @androidx.annotation.OptIn(UnstableApi::class)
+internal fun createPlaybackRenderersFactory(context: Context): DefaultRenderersFactory =
+    DefaultRenderersFactory(context)
+        .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+
+@androidx.annotation.OptIn(UnstableApi::class)
 internal fun createPlaybackHttpDataSourceFactory(): DefaultHttpDataSource.Factory =
     DefaultHttpDataSource.Factory()
         .setAllowCrossProtocolRedirects(false)
@@ -97,7 +104,7 @@ class PlaybackService : MediaSessionService() {
             .setUsage(C.USAGE_MEDIA)
             .build()
         val httpFactory = createPlaybackHttpDataSourceFactory()
-        val exoPlayer = ExoPlayer.Builder(this)
+        val exoPlayer = ExoPlayer.Builder(this, createPlaybackRenderersFactory(this))
             .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
             .setLoadControl(createPlaybackLoadControl())
             .build().apply {
