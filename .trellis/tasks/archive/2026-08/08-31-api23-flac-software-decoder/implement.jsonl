@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Avoid duplicate renderer and dependency configuration"}
+{"file": ".trellis/spec/backend/android-client-contracts.md", "reason": "Playback, Media3, API 23, packaging, and validation contracts"}
