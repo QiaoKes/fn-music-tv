@@ -79,4 +79,102 @@ class ServerUrlNormalizerTest {
             ServerUrlNormalizer.editableInput("https://nas.local:7443/music/api/v1/", false),
         )
     }
+
+    @Test fun `supports five digit explicit ports`() {
+        assertEquals(
+            "http://nas.local:12345/music/api/v1/",
+            (ServerUrlNormalizer.normalize("nas.local:12345", false) as ServerUrlResult.Valid)
+                .server.apiBase.toString(),
+        )
+    }
+
+    @Test fun `normalizes ipv4 ipv6 and domain combinations`() {
+        val cases = listOf(
+            Triple(
+                "192.168.1.20",
+                false,
+                "http://192.168.1.20:5666/music/api/v1/",
+            ),
+            Triple(
+                "192.168.1.20:12345",
+                false,
+                "http://192.168.1.20:12345/music/api/v1/",
+            ),
+            Triple(
+                "https://192.168.1.20",
+                false,
+                "https://192.168.1.20/music/api/v1/",
+            ),
+            Triple(
+                "https://192.168.1.20:5443",
+                false,
+                "https://192.168.1.20:5443/music/api/v1/",
+            ),
+            Triple(
+                "http://nas.example.com",
+                true,
+                "http://nas.example.com/music/api/v1/",
+            ),
+            Triple(
+                "nas.example.com:8080",
+                false,
+                "http://nas.example.com:8080/music/api/v1/",
+            ),
+            Triple(
+                "nas.example.com",
+                true,
+                "https://nas.example.com/music/api/v1/",
+            ),
+            Triple(
+                "nas.example.com:5443",
+                true,
+                "https://nas.example.com:5443/music/api/v1/",
+            ),
+            Triple(
+                "[2001:db8::20]",
+                false,
+                "http://[2001:db8::20]:5666/music/api/v1/",
+            ),
+            Triple(
+                "[2001:db8::20]:12345",
+                false,
+                "http://[2001:db8::20]:12345/music/api/v1/",
+            ),
+            Triple(
+                "https://[2001:db8::20]",
+                false,
+                "https://[2001:db8::20]/music/api/v1/",
+            ),
+            Triple(
+                "https://[2001:db8::20]:5443",
+                false,
+                "https://[2001:db8::20]:5443/music/api/v1/",
+            ),
+        )
+
+        cases.forEach { (input, useHttps, expectedApiBase) ->
+            val result = ServerUrlNormalizer.normalize(input, useHttps) as? ServerUrlResult.Valid
+            assertEquals("input=$input useHttps=$useHttps", expectedApiBase, result?.server?.apiBase.toString())
+            val expectedHttps = when {
+                input.startsWith("https://", ignoreCase = true) -> true
+                input.startsWith("http://", ignoreCase = true) -> false
+                else -> useHttps
+            }
+            assertEquals("input=$input useHttps=$useHttps", expectedHttps, result?.server?.useHttps)
+        }
+    }
+
+    @Test fun `preserves ipv6 brackets and explicit port in persistent address`() {
+        val normalized = ServerUrlNormalizer.normalize("https://[2001:db8::30]:5443", false)
+            as ServerUrlResult.Valid
+
+        assertEquals(
+            "https://[2001:db8::30]:5443/music/api/v1/",
+            normalized.server.persistentApiBase(),
+        )
+        assertEquals(
+            EditableServerInput("[2001:db8::30]:5443", true),
+            ServerUrlNormalizer.editableInput(normalized.server.persistentApiBase(), false),
+        )
+    }
 }

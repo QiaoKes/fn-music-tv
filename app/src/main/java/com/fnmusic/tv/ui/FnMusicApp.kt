@@ -267,9 +267,10 @@ internal fun LoginScreen(
                 TvTextField(
                     value = server,
                     onValueChange = {
-                        val edited = ServerUrlNormalizer.editableInput(it, https)
-                        server = edited.address
-                        https = edited.useHttps
+                        server = it
+                        Regex("^(https?)://", RegexOption.IGNORE_CASE).find(it.trim())
+                            ?.groupValues?.get(1)
+                            ?.let { scheme -> https = scheme.equals("https", ignoreCase = true) }
                         selectedProfileId = null
                         hasSavedPassword = false
                     },
