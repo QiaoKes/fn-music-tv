@@ -70,6 +70,7 @@ internal fun SettingsScreen(container: AuthenticatedAppDependencies) {
     val scope = LocalLibraryRetainedState.current.scope
     val coverStyleFocus = remember { FocusRequester() }
     val posterStyleFocus = remember { FocusRequester() }
+    val spectrumStyleFocus = remember { FocusRequester() }
     val onlineLyricsFocus = remember { FocusRequester() }
     val cacheFocuses = remember { List(CacheBudget.entries.size) { FocusRequester() } }
     val clearCacheFocus = remember { FocusRequester() }
@@ -145,10 +146,23 @@ internal fun SettingsScreen(container: AuthenticatedAppDependencies) {
                             .width(123.dp)
                             .focusProperties {
                                 left = coverStyleFocus
-                                right = FocusRequester.Cancel
+                                right = spectrumStyleFocus
                                 down = onlineLyricsFocus
                             }
                             .focusRequester(posterStyleFocus),
+                    )
+                    SettingsChoiceButton(
+                        label = "频谱模式",
+                        selected = preferences.playerStyle == PlayerStyle.Spectrum,
+                        onClick = { container.appPreferences.setPlayerStyle(PlayerStyle.Spectrum) },
+                        modifier = Modifier
+                            .width(123.dp)
+                            .focusProperties {
+                                left = posterStyleFocus
+                                right = FocusRequester.Cancel
+                                down = onlineLyricsFocus
+                            }
+                            .focusRequester(spectrumStyleFocus),
                     )
                 }
                 SettingsDivider()

@@ -485,6 +485,7 @@ private fun CurrentResourceResult<Track>.matchingTrack(identity: NowPlayingIdent
 
 private fun PlayerStyle.coverVariant(): CoverVariant = when (this) {
     PlayerStyle.Cover -> CoverVariant.Player
+    PlayerStyle.Spectrum -> CoverVariant.Player
     PlayerStyle.Poster -> CoverVariant.Poster
 }
 

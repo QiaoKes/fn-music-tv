@@ -96,7 +96,7 @@ data class PlaybackTrack(
 data class RoamNode(val roamId: String, val track: Track)
 data class RoamWindow(val previous: RoamNode?, val current: RoamNode, val next: RoamNode?)
 
-enum class PlayerStyle { Cover, Poster }
+enum class PlayerStyle { Cover, Poster, Spectrum }
 
 enum class CoverVariant(val width: Int?) {
     Compact(200),

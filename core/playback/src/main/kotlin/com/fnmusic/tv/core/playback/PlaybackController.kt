@@ -132,6 +132,8 @@ class PlaybackController(
     private var streamDiagnosticsJob: Job? = null
     private var autoAdvanceFailure: PlaybackException? = null
     private var autoAdvanceJob: Job? = null
+    private val spectrumCapture = PlaybackSpectrumCapture()
+    val spectrum: StateFlow<PlaybackSpectrumFrame> = spectrumCapture.frame
 
     private val listener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -194,6 +196,14 @@ class PlaybackController(
             },
             ContextCompat.getMainExecutor(context),
         )
+    }
+
+    fun setSpectrumActive(active: Boolean) {
+        spectrumCapture.setActive(active)
+    }
+
+    fun setSpectrumRunning(running: Boolean) {
+        spectrumCapture.setRunning(running)
     }
 
     fun configure(credentials: PlaybackCredentials) {

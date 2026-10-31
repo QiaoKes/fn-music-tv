@@ -332,7 +332,7 @@ internal fun SearchScreen(
 
     Row(Modifier.fillMaxSize().padding(horizontal = 64.dp, vertical = 32.dp)) {
         SearchPanel(
-            panelModifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f),
             query = query,
             onQueryChange = { query = it },
             onOpenIme = { editingSignal++ },
@@ -366,7 +366,7 @@ internal fun SearchScreen(
 
 @Composable
 private fun SearchPanel(
-    panelModifier: Modifier,
+    modifier: Modifier,
     query: String,
     onQueryChange: (String) -> Unit,
     editingSignal: Int,
@@ -381,7 +381,7 @@ private fun SearchPanel(
     onKeyActivated: (Char) -> Unit,
     onKeyDeactivated: () -> Unit,
 ) {
-    Column(panelModifier) {
+    Column(modifier) {
         Text("搜索", fontSize = 30.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(10.dp))
         TvTextField(
