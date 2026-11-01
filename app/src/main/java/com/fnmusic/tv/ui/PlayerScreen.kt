@@ -19,6 +19,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -74,6 +75,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
@@ -769,6 +771,63 @@ private fun PlayerMainContent(
                 controlsVisible = controlsVisible,
             )
         }
+    } else if (playerStyle == PlayerStyle.Spectrum) {
+        // Spectrum: the page splits into exact quarters — blank / info / spectrum / blank.
+        // The info block (cover + title + artist) fills its quarter and is centered.
+        Box(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxSize()) {
+            Column(
+                Modifier.weight(0.49f).fillMaxHeight().padding(end = 14.dp),
+            ) {
+                Spacer(Modifier.weight(1f))
+                Box(
+                    Modifier.weight(1f).fillMaxWidth(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    PlayerSongInfoHeader(
+                        title = title,
+                        artist = artist,
+                        coverBitmap = artworkBitmap,
+                        coverPlaceholder = placeholder,
+                        coverAccent = placeholderAccent,
+                        modifier = Modifier.fillMaxHeight(),
+                    )
+                }
+                PlayerSpectrumBands(
+                    spectrum = spectrumFrame,
+                    isPlaying = isPlaying,
+                    accent = placeholderAccent,
+                    modifier = Modifier.weight(1f).fillMaxWidth().padding(start = 30.dp),
+                )
+                Spacer(Modifier.weight(1f))
+            }
+            SmoothLyricProgress(
+                progress = playbackProgress,
+                isPlaying = isPlaying,
+                identity = lyricIdentity,
+            ) { positionMs ->
+                PlayerSpectrumLyricsPane(
+                    lyrics = syncedLyrics,
+                    positionMs = positionMs,
+                    staticLyric = staticLyric,
+                    loading = lyricsLoading,
+                    failed = lyricsFailed,
+                    controlsVisible = controlsVisible,
+                    modifier = Modifier
+                        .weight(0.51f)
+                        .fillMaxHeight()
+                        .padding(start = 26.dp, end = 44.dp),
+                )
+            }
+            }
+            if (audioFormat.isNotBlank()) {
+                AudioFormatBadge(
+                    audioFormat,
+                    poster = true,
+                    Modifier.align(Alignment.TopEnd).padding(top = 30.dp, end = 44.dp),
+                )
+            }
+        }
     } else {
         Row(Modifier.fillMaxSize()) {
             BoxWithConstraints(
@@ -776,16 +835,7 @@ private fun PlayerMainContent(
                 contentAlignment = Alignment.Center,
             ) {
                 val discSize = minOf(maxWidth, maxHeight).coerceAtMost(430.dp)
-                if (playerStyle == PlayerStyle.Spectrum) {
-                    PlayerSpectrumBands(
-                        spectrum = spectrumFrame,
-                        isPlaying = isPlaying,
-                        accent = placeholderAccent,
-                        modifier = Modifier.size(discSize),
-                    )
-                } else {
-                    DiscArtwork(artworkBitmap, placeholder, placeholderAccent, isPlaying, discSize)
-                }
+                DiscArtwork(artworkBitmap, placeholder, placeholderAccent, isPlaying, discSize)
             }
             PlayerDetails(
                 title = title,
@@ -812,9 +862,6 @@ private fun PlayerMainContent(
                 statusRetryReturnFocus = statusRetryReturnFocus,
                 onStatusInteraction = onStatusInteraction,
                 poster = false,
-                coverBitmap = if (playerStyle == PlayerStyle.Spectrum) artworkBitmap else null,
-                coverPlaceholder = if (playerStyle == PlayerStyle.Spectrum) placeholder else "",
-                coverAccent = placeholderAccent,
                 modifier = Modifier.weight(0.51f).fillMaxHeight()
                     .padding(
                         start = 26.dp,
@@ -829,14 +876,126 @@ private fun PlayerMainContent(
 }
 
 @Composable
+private fun PlayerSongInfoHeader(
+    title: String,
+    artist: String,
+    coverBitmap: Bitmap?,
+    coverPlaceholder: String,
+    coverAccent: Color,
+    modifier: Modifier = Modifier,
+) {
+    // 填充式: 封面占满调用方给定的整段高度, 歌名/歌手在右侧列内垂直撑开并水平居中。
+    Row(
+        modifier.fillMaxHeight(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        if (coverBitmap != null) {
+            Image(
+                coverBitmap.asImageBitmap(),
+                null,
+                Modifier
+                    .fillMaxHeight()
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(10.dp)),
+                contentScale = ContentScale.Crop,
+            )
+        } else {
+            PlayerArtworkPlaceholder(
+                coverPlaceholder,
+                coverAccent,
+                Modifier
+                    .fillMaxHeight()
+                    .aspectRatio(1f),
+                RoundedCornerShape(10.dp),
+            )
+        }
+        Column(
+            Modifier.weight(1f, fill = false).fillMaxHeight(),
+            verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                title,
+                fontSize = 30.sp,
+                lineHeight = 36.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                artist.ifBlank { "未知演唱者" },
+                color = FnColors.Muted,
+                fontSize = 18.sp,
+                lineHeight = 22.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlayerSpectrumLyricsPane(
+    lyrics: SyncedLyrics?,
+    positionMs: Long,
+    staticLyric: String?,
+    loading: Boolean,
+    failed: Boolean,
+    controlsVisible: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    BoxWithConstraints(modifier) {
+        val bottomReserve = if (controlsVisible) 148.dp else 48.dp
+        val window = maxHeight - bottomReserve
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(window)
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen },
+        ) {
+            // The active line stays pinned near the vertical center of the pane.
+            TvLyrics(
+                lyrics = lyrics,
+                positionMs = positionMs,
+                staticLyric = staticLyric,
+                loading = loading,
+                failed = failed,
+                poster = true,
+                viewportHeight = window,
+                lineOffset = window / 2f - 56.dp,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            // Soft-fade the extreme lines into the ambient backdrop.
+            Canvas(Modifier.matchParentSize()) {
+                val fadeHeight = 84.dp.toPx()
+                drawRect(
+                    brush = Brush.verticalGradient(0f to Color.Black, 1f to Color.Transparent),
+                    size = androidx.compose.ui.geometry.Size(size.width, fadeHeight),
+                    blendMode = BlendMode.DstOut,
+                )
+                drawRect(
+                    brush = Brush.verticalGradient(0f to Color.Transparent, 1f to Color.Black),
+                    topLeft = androidx.compose.ui.geometry.Offset(0f, size.height - fadeHeight),
+                    size = androidx.compose.ui.geometry.Size(size.width, fadeHeight),
+                    blendMode = BlendMode.DstOut,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun PlayerSpectrumBands(
     spectrum: State<PlaybackSpectrumFrame>,
     isPlaying: Boolean,
     accent: Color,
     modifier: Modifier = Modifier,
 ) {
-    // Vertically centered band over the poster's left area (1/3 of height, blank above and below);
-    // falls back to a quiet floor line when paused.
+    // Bars rise from the bottom edge of the given slot; they animate down to a quiet floor
+    // line while playback is paused.
     val activity by animateFloatAsState(
         targetValue = if (isPlaying) 1f else 0f,
         animationSpec = tween(durationMillis = 420, easing = LinearEasing),
@@ -895,88 +1054,31 @@ private fun PlayerDetails(
     poster: Boolean,
     controlsVisible: Boolean,
     modifier: Modifier = Modifier,
-    coverBitmap: Bitmap? = null,
-    coverPlaceholder: String = "",
-    coverAccent: Color = Color.Transparent,
 ) {
     Column(modifier) {
-        // The cover matches the measured height of the adjacent title+artist column, so the
-        // two blocks are always equally tall regardless of typography.
-        var infoColumnHeightPx by remember { mutableIntStateOf(0) }
-        val coverSize = if (infoColumnHeightPx > 0) {
-            with(LocalDensity.current) { infoColumnHeightPx.toDp() }
-        } else {
-            66.dp
-        }
-        if (coverBitmap != null || coverPlaceholder.isNotBlank()) {
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (coverBitmap != null) {
-                    Image(
-                        coverBitmap.asImageBitmap(),
-                        null,
-                        Modifier.size(coverSize).clip(RoundedCornerShape(8.dp)),
-                        contentScale = ContentScale.Crop,
-                    )
-                } else {
-                    PlayerArtworkPlaceholder(coverPlaceholder, coverAccent, Modifier.size(coverSize), RoundedCornerShape(8.dp))
-                }
-                Spacer(Modifier.width(18.dp))
-                Column(
-                    Modifier.onGloballyPositioned { coords -> infoColumnHeightPx = coords.size.height },
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            title,
-                            fontSize = if (poster) 22.sp else 32.sp,
-                            lineHeight = if (poster) 28.sp else 38.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        if (audioFormat.isNotBlank()) {
-                            Spacer(Modifier.width(12.dp))
-                            AudioFormatBadge(audioFormat, poster)
-                        }
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        artist.ifBlank { "未知演唱者" },
-                        color = FnColors.Muted,
-                        fontSize = if (poster) 16.sp else 20.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-        } else {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    title,
-                    fontSize = if (poster) 22.sp else 32.sp,
-                    lineHeight = if (poster) 28.sp else 38.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                if (audioFormat.isNotBlank()) {
-                    Spacer(Modifier.width(12.dp))
-                    AudioFormatBadge(audioFormat, poster)
-                }
-            }
-            Spacer(Modifier.height(4.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                artist.ifBlank { "未知演唱者" },
-                color = FnColors.Muted,
-                fontSize = if (poster) 16.sp else 20.sp,
+                title,
+                fontSize = if (poster) 22.sp else 32.sp,
+                lineHeight = if (poster) 28.sp else 38.sp,
+                fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
+            if (audioFormat.isNotBlank()) {
+                Spacer(Modifier.width(12.dp))
+                AudioFormatBadge(audioFormat, poster)
+            }
         }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            artist.ifBlank { "未知演唱者" },
+            color = FnColors.Muted,
+            fontSize = if (poster) 16.sp else 20.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
         Spacer(Modifier.height(if (poster) 44.dp else 34.dp))
         SmoothLyricProgress(
             progress = playbackProgress,
@@ -1053,10 +1155,11 @@ internal fun PlayerStatusRetryButton(
 }
 
 @Composable
-private fun AudioFormatBadge(audioFormat: String, poster: Boolean) {
+private fun AudioFormatBadge(audioFormat: String, poster: Boolean, modifier: Modifier = Modifier) {
     val color = FnColors.Text.copy(alpha = 0.72f)
     Box(
-        Modifier.border(1.dp, color, RoundedCornerShape(2.dp))
+        modifier
+            .border(1.dp, color, RoundedCornerShape(2.dp))
             .padding(horizontal = if (poster) 5.dp else 6.dp, vertical = 2.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -1198,6 +1301,7 @@ internal fun TvLyrics(
     modifier: Modifier = Modifier,
     controlsVisible: Boolean = false,
     viewportHeight: androidx.compose.ui.unit.Dp? = null,
+    lineOffset: androidx.compose.ui.unit.Dp? = null,
 ) {
     Box(
         modifier
@@ -1246,7 +1350,7 @@ internal fun TvLyrics(
                         useBlurEffect = false,
                         showTranslation = true,
                         showPhonetic = false,
-                        offset = if (poster) 42.dp else 48.dp,
+                        offset = lineOffset ?: if (poster) 42.dp else 48.dp,
                         keepAliveZone = 0.dp,
                         breathingDotsDefaults = KaraokeBreathingDotsDefaults(
                             number = 1,
