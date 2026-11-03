@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.LocalTextStyle
@@ -90,6 +91,9 @@ internal data class FocusState(
  * @param blendMode The blend mode used for rendering text (e.g., [BlendMode.Plus] for glowing effects).
  * @param useBlurEffect Whether to apply blur effect to non-active lines.
  * @param offset The vertical padding/offset at the start and end of the list.
+ * @param scrollAnchor Which point of the active line is pinned during auto scrolling (top edge or the vertical center).
+ * @param viewportPaddingOverride Overrides the list vertical padding; Center anchoring needs half-viewport padding so the first and last lines can reach the center pin.
+ * @param bottomFadeDistance Distance of the fade-in band at the bottom of the viewport.
  * @param showDebugRectangles Debug flag to draw bounding boxes around glyphs.
  */
 @OptIn(ExperimentalSharedTransitionApi::class)
@@ -130,6 +134,10 @@ fun KaraokeLyricsView(
     showPhonetic: Boolean = true,
     offset: Dp = 32.dp,
     keepAliveZone: Dp = 100.dp,
+    topFadeDistance: Dp = 20.dp,
+    bottomFadeDistance: Dp = 100.dp,
+    scrollAnchor: LyricsScrollAnchor = LyricsScrollAnchor.Top,
+    viewportPaddingOverride: Dp? = null,
     blurDelta: Float = 3f,
     showDebugRectangles: Boolean = false
 ) {
@@ -298,31 +306,48 @@ fun KaraokeLyricsView(
         }
     }
 
-    LaunchedEffect(
-        layoutCache,
-        stableOffsetPx,
-    ) {
-        androidx.compose.runtime.snapshotFlow { lyricsFocusState.firstIndex }
-            .collect { firstIndex ->
-                if (!scrollInCode.value) {
-                    val items = listState.layoutInfo.visibleItemsInfo
-                    val targetItem = items.firstOrNull { it.index == firstIndex }
-                    val scrollOffset =
-                        (targetItem?.offset?.minus(listState.layoutInfo.viewportStartOffset + stableOffsetPx + keepAliveZonePx))
-                    try {
-                        scrollInCode.value = true
-                        if (scrollOffset != null) {
-                            listState.scrollBy(scrollOffset.toFloat())
-                        } else {
-                            listState.animateScrollToItem(
-                                firstIndex,
-                                (-stableOffsetPx - keepAliveZonePx).toInt()
-                            )
+    fun anchorScrollDelta(targetItem: LazyListItemInfo): Float =
+        when (scrollAnchor) {
+            LyricsScrollAnchor.Top ->
+                targetItem.offset - listState.layoutInfo.viewportStartOffset -
+                    stableOffsetPx - keepAliveZonePx
+            LyricsScrollAnchor.Center ->
+                targetItem.offset + targetItem.size / 2f - listState.layoutInfo.viewportStartOffset -
+                    (listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset) / 2f
+        }
+
+    // Re-anchors whenever the active line changes, and also on time discontinuities (restore,
+    // seek, track change) so the pinned line never waits for the current sweep to end.
+    LaunchedEffect(layoutCache, stableOffsetPx, scrollAnchor, viewportPaddingOverride) {
+        var lastSeenTimeMs = Int.MIN_VALUE
+        var lastSeenIndex = Int.MIN_VALUE
+        androidx.compose.runtime.snapshotFlow { lyricsFocusState.firstIndex to timeProvider() }
+            .collect { (firstIndex, time) ->
+                val isInitial = lastSeenTimeMs == Int.MIN_VALUE
+                val timeJumped = !isInitial && (time - lastSeenTimeMs).absoluteValue > 2500
+                val indexChanged = !isInitial && firstIndex != lastSeenIndex
+                lastSeenTimeMs = time
+                lastSeenIndex = firstIndex
+                if (!isInitial && !timeJumped && !indexChanged) return@collect
+                val items = listState.layoutInfo.visibleItemsInfo
+                val targetItem = items.firstOrNull { it.index == firstIndex }
+                try {
+                    scrollInCode.value = true
+                    if (targetItem != null) {
+                        listState.scrollBy(anchorScrollDelta(targetItem))
+                    } else {
+                        val startOffset = when (scrollAnchor) {
+                            LyricsScrollAnchor.Center -> {
+                                val layoutInfo = listState.layoutInfo
+                                (layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset) / 2
+                            }
+                            LyricsScrollAnchor.Top -> (-stableOffsetPx - keepAliveZonePx).fastRoundToInt()
                         }
-                    } catch (_: Exception) {
-                    } finally {
-                        scrollInCode.value = false
+                        listState.animateScrollToItem(firstIndex, startOffset)
                     }
+                } catch (_: Exception) {
+                } finally {
+                    scrollInCode.value = false
                 }
             }
     }
@@ -339,13 +364,13 @@ fun KaraokeLyricsView(
                         .drawWithCache {
                             onDrawWithContent {
                                 drawContent()
-                                val topFade = 20.dp.toPx() / size.height
-                                val bottomFade = 100.dp.toPx() / size.height
+                                val topFadeFraction = topFadeDistance.toPx() / size.height
+                                val bottomFadeFraction = bottomFadeDistance.toPx() / size.height
                                 drawRect(
                                     brush = Brush.verticalGradient(
                                         0f to Color.Transparent,
-                                        topFade to Color.Black,
-                                        1f - bottomFade to Color.Black,
+                                        topFadeFraction to Color.Black,
+                                        1f - bottomFadeFraction to Color.Black,
                                         1f to Color.Transparent
                                     ),
                                     blendMode = BlendMode.DstIn
@@ -365,7 +390,9 @@ fun KaraokeLyricsView(
                                 placeable.place(0, -(keepAliveZone.roundToPx()))
                             }
                         },
-                    contentPadding = PaddingValues(vertical = stableOffset + keepAliveZone)
+                    contentPadding = PaddingValues(
+                        vertical = viewportPaddingOverride ?: (stableOffset + keepAliveZone),
+                    )
                 ) {
                     itemsIndexed(
                         items = lyrics.lines,

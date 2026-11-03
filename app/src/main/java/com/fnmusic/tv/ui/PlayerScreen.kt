@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.gestures.scrollBy as lazyListScrollBy
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -152,6 +153,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 import kotlin.math.pow
 import kotlin.math.sqrt
 
@@ -812,7 +814,6 @@ private fun PlayerMainContent(
                     staticLyric = staticLyric,
                     loading = lyricsLoading,
                     failed = lyricsFailed,
-                    controlsVisible = controlsVisible,
                     modifier = Modifier
                         .weight(0.51f)
                         .fillMaxHeight()
@@ -944,46 +945,17 @@ private fun PlayerSpectrumLyricsPane(
     staticLyric: String?,
     loading: Boolean,
     failed: Boolean,
-    controlsVisible: Boolean,
     modifier: Modifier = Modifier,
 ) {
     BoxWithConstraints(modifier) {
-        val bottomReserve = if (controlsVisible) 148.dp else 48.dp
-        val window = maxHeight - bottomReserve
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(window)
-                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen },
-        ) {
-            // The active line stays pinned near the vertical center of the pane.
-            TvLyrics(
-                lyrics = lyrics,
-                positionMs = positionMs,
-                staticLyric = staticLyric,
-                loading = loading,
-                failed = failed,
-                poster = true,
-                viewportHeight = window,
-                lineOffset = window / 2f - 56.dp,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            // Soft-fade the extreme lines into the ambient backdrop.
-            Canvas(Modifier.matchParentSize()) {
-                val fadeHeight = 84.dp.toPx()
-                drawRect(
-                    brush = Brush.verticalGradient(0f to Color.Black, 1f to Color.Transparent),
-                    size = androidx.compose.ui.geometry.Size(size.width, fadeHeight),
-                    blendMode = BlendMode.DstOut,
-                )
-                drawRect(
-                    brush = Brush.verticalGradient(0f to Color.Transparent, 1f to Color.Black),
-                    topLeft = androidx.compose.ui.geometry.Offset(0f, size.height - fadeHeight),
-                    size = androidx.compose.ui.geometry.Size(size.width, fadeHeight),
-                    blendMode = BlendMode.DstOut,
-                )
-            }
-        }
+        SpectrumLyricsRenderer(
+            lyrics = lyrics,
+            positionMs = positionMs,
+            loading = loading,
+            failed = failed,
+            staticLyric = staticLyric,
+            modifier = Modifier,
+        )
     }
 }
 
@@ -1301,7 +1273,10 @@ internal fun TvLyrics(
     modifier: Modifier = Modifier,
     controlsVisible: Boolean = false,
     viewportHeight: androidx.compose.ui.unit.Dp? = null,
-    lineOffset: androidx.compose.ui.unit.Dp? = null,
+    scrollAnchor: com.mocharealm.accompanist.lyrics.ui.composable.lyrics.LyricsScrollAnchor? = null,
+    viewportPaddingOverride: androidx.compose.ui.unit.Dp? = null,
+    lyricsTopFade: androidx.compose.ui.unit.Dp? = null,
+    lyricsBottomFade: androidx.compose.ui.unit.Dp? = null,
 ) {
     Box(
         modifier
@@ -1316,7 +1291,7 @@ internal fun TvLyrics(
     ) {
         when {
             lyrics != null && lyrics.lines.isNotEmpty() -> {
-                val listState = rememberLazyListState()
+                val viewListState = rememberLazyListState()
                 val positionState = rememberUpdatedState(positionMs.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt())
                 val currentPosition = remember { { positionState.value } }
                 androidx.compose.runtime.CompositionLocalProvider(
@@ -1327,12 +1302,16 @@ internal fun TvLyrics(
                     ),
                 ) {
                     KaraokeLyricsView(
-                        listState = listState,
+                        listState = viewListState,
                         lyrics = lyrics,
                         currentPosition = currentPosition,
                         onLineClicked = {},
                         onLinePressed = {},
                         modifier = Modifier.fillMaxSize().focusProperties { canFocus = false },
+                        topFadeDistance = lyricsTopFade ?: 20.dp,
+                        bottomFadeDistance = lyricsBottomFade ?: 100.dp,
+                        scrollAnchor = scrollAnchor ?: com.mocharealm.accompanist.lyrics.ui.composable.lyrics.LyricsScrollAnchor.Top,
+                        viewportPaddingOverride = viewportPaddingOverride,
                         normalLineTextStyle = TextStyle(
                             color = FnColors.Text,
                             fontSize = if (poster) 24.sp else 27.sp,
@@ -1350,7 +1329,7 @@ internal fun TvLyrics(
                         useBlurEffect = false,
                         showTranslation = true,
                         showPhonetic = false,
-                        offset = lineOffset ?: if (poster) 42.dp else 48.dp,
+                        offset = if (poster) 42.dp else 48.dp,
                         keepAliveZone = 0.dp,
                         breathingDotsDefaults = KaraokeBreathingDotsDefaults(
                             number = 1,
@@ -1359,6 +1338,12 @@ internal fun TvLyrics(
                         ),
                     )
                 }
+                LyricsDebugRuler(
+                    style = LyricsDebugFadeStyle.EdgeZones,
+                    topFadeDistance = lyricsTopFade ?: 20.dp,
+                    bottomFadeDistance = lyricsBottomFade ?: 100.dp,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
             !staticLyric.isNullOrBlank() -> Text(
                 staticLyric,
