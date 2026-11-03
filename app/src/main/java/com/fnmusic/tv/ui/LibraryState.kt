@@ -25,6 +25,7 @@ internal sealed interface LibraryRoute {
     data class ArtistDetail(val artist: Artist) : LibraryRoute
     data class AlbumDetail(val album: Album) : LibraryRoute
     data class Player(val track: Track?) : LibraryRoute
+    data object Search : LibraryRoute
     data object Settings : LibraryRoute
 }
 
@@ -298,6 +299,7 @@ internal fun LibraryRoute.storageKey(): String = when (this) {
     is LibraryRoute.ArtistDetail -> "artist:${artist.guid.value}"
     is LibraryRoute.AlbumDetail -> "album:${album.guid.value}"
     is LibraryRoute.Player -> "player"
+    LibraryRoute.Search -> "search"
     LibraryRoute.Settings -> "settings"
 }
 

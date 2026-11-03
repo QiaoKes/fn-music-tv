@@ -28,8 +28,43 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class PlaybackSnapshotCodecTest {
     @Test
-    fun `favorite queue source survives snapshot round trip`() {
+    fun `search queue source survives snapshot round trip with raw keyword`() {
         val snapshot = PlaybackSnapshot(
+            generation = 1,
+            revision = 2,
+            items = listOf(mediaItem("search-a")),
+            index = 0,
+            positionMs = 0,
+            source = QueueSource.SearchTracks("梦一场", "createdAt,desc"),
+            window = SlidingQueueState.fromSegments(
+                listOf(
+                    QueuePageSegment(
+                        page = 1,
+                        rawRowCount = 1,
+                        playableItems = listOf(QueuePageItem("search-a", 0)),
+                        sort = "createdAt,desc",
+                        knownTotal = 1,
+                    ),
+                ),
+                currentIndex = 0,
+            ),
+            kind = QueueKind.Normal,
+            mode = PlayMode.ListRepeat,
+            shuffleOrder = emptyList(),
+            roamWindow = null,
+            currentRoamId = null,
+            frozen = null,
+            playIntent = PlaybackPlayIntent.Pause,
+        )
+
+        val decoded = requireNotNull(PlaybackSnapshotCodec.decode(PlaybackSnapshotCodec.encode(snapshot)))
+
+        assertEquals(QueueSource.SearchTracks("梦一场", "createdAt,desc"), decoded.source)
+        assertEquals(listOf("search-a"), decoded.window?.guids)
+    }
+
+    @Test
+    fun `favorite queue source survives snapshot round trip`() {        val snapshot = PlaybackSnapshot(
             generation = 1,
             revision = 2,
             items = listOf(mediaItem("favorite-a")),

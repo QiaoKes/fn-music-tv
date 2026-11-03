@@ -4,11 +4,16 @@ import android.content.Context
 import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.audio.SonicAudioProcessor
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.audio.SilenceSkippingAudioProcessor
+import androidx.media3.exoplayer.audio.TeeAudioProcessor
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.ShuffleOrder.DefaultShuffleOrder
 import androidx.media3.session.MediaSession
@@ -23,6 +28,7 @@ import java.util.ArrayList
 
 internal const val FORWARD_BUFFER_DURATION_MS = 50_000
 internal const val BACK_BUFFER_DURATION_MS = 15_000
+internal const val PLAYBACK_USER_AGENT = "FnMusicTV/0.1"
 private const val LEGACY_AUDIO_CACHE_DIRECTORY = "media"
 private const val TAG = "PlaybackService"
 
@@ -56,15 +62,34 @@ internal fun createPlaybackLoadControl(): DefaultLoadControl = DefaultLoadContro
     .build()
 
 @androidx.annotation.OptIn(UnstableApi::class)
-internal fun createPlaybackRenderersFactory(context: Context): DefaultRenderersFactory =
-    DefaultRenderersFactory(context)
-        .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+internal fun createPlaybackRenderersFactory(context: Context): DefaultRenderersFactory {
+    val spectrumProcessor = TeeAudioProcessor(PlaybackSpectrumHub)
+    return object : DefaultRenderersFactory(context) {
+        override fun buildAudioSink(
+            context: Context,
+            enableFloatOutput: Boolean,
+            enableAudioTrackPlaybackParams: Boolean,
+        ): AudioSink = DefaultAudioSink.Builder(context)
+            .setAudioProcessorChain(
+                // The spectrum tap mirrors the default chain, so silence skipping and speed
+                // control keep behaving like the plain sink while PCM is sampled en route.
+                DefaultAudioSink.DefaultAudioProcessorChain(
+                    arrayOf(spectrumProcessor),
+                    SilenceSkippingAudioProcessor(),
+                    SonicAudioProcessor(),
+                ),
+            )
+            .setEnableFloatOutput(enableFloatOutput)
+            .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+            .build()
+    }.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+}
 
 @androidx.annotation.OptIn(UnstableApi::class)
 internal fun createPlaybackHttpDataSourceFactory(): DefaultHttpDataSource.Factory =
     DefaultHttpDataSource.Factory()
         .setAllowCrossProtocolRedirects(false)
-        .setUserAgent("FnMusicTV/0.1")
+        .setUserAgent(PLAYBACK_USER_AGENT)
 
 internal fun playbackRequestHeaders(token: String, accessCode: String?, relayMode: Boolean): Map<String, String> =
     buildMap {

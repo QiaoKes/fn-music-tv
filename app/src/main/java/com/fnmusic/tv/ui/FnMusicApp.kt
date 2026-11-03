@@ -1,5 +1,7 @@
 package com.fnmusic.tv.ui
 
+import android.app.Activity
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -57,6 +59,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
@@ -93,6 +96,7 @@ internal fun FnMusicApp(container: AppUiDependencies, onExitApplication: () -> U
     val session by container.sessionRepository.state.collectAsStateWithLifecycle()
     val playback by container.playbackController.state.collectAsStateWithLifecycle()
     val updateState by container.updateController.state.collectAsStateWithLifecycle()
+    KeepScreenOnWhilePlaying(playback.isPlaying)
     FnMusicTheme {
         Box(Modifier.fillMaxSize().background(FnColors.Background)) {
             when (val current = session) {
@@ -123,6 +127,21 @@ internal fun FnMusicApp(container: AppUiDependencies, onExitApplication: () -> U
                 }
             }
             UpdateDialogHost(updateState, container.updateController)
+        }
+    }
+}
+
+/**
+ * 播放歌曲时保持屏幕常亮（FLAG_KEEP_SCREEN_ON），避免电视屏保在无交互时被触发；
+ * 暂停/停止后清除标志，恢复系统默认的息屏与屏保行为。
+ */
+@Composable
+private fun KeepScreenOnWhilePlaying(isPlaying: Boolean) {
+    val context = LocalContext.current
+    LaunchedEffect(context, isPlaying) {
+        (context as? Activity)?.window?.let { window ->
+            if (isPlaying) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
 }
@@ -681,7 +700,7 @@ private fun VisibilityIcon(hidden: Boolean) {
 
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
-private fun TvTextField(
+internal fun TvTextField(
     value: String,
     onValueChange: (String) -> Unit,
     label: String,
@@ -693,14 +712,25 @@ private fun TvTextField(
     downFocus: FocusRequester? = null,
     leftFocus: FocusRequester? = null,
     rightFocus: FocusRequester? = null,
+    editingSignal: Int = 0,
+    onEditingChange: (Boolean) -> Unit = {},
+    onDone: () -> Unit = {},
 ) {
     var focused by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
     var imeWasVisible by remember { mutableStateOf(false) }
     val keyboard = LocalSoftwareKeyboardController.current
     val imeVisible = WindowInsets.isImeVisible
+    val fieldFocus = remember { FocusRequester() }
 
+    LaunchedEffect(editingSignal) {
+        if (editingSignal > 0) {
+            editing = true
+            runCatching { fieldFocus.requestFocus() }
+        }
+    }
     LaunchedEffect(editing) {
+        onEditingChange(editing)
         if (editing) {
             delay(200)
             keyboard?.show()
@@ -773,6 +803,7 @@ private fun TvTextField(
             onValueChange = onValueChange,
             modifier = inputModifier.fillMaxWidth().height(52.dp)
                 .semantics { contentDescription = label }
+                .focusRequester(fieldFocus)
                 .onFocusChanged {
                     focused = it.isFocused
                     if (!it.isFocused) {
@@ -797,7 +828,10 @@ private fun TvTextField(
             keyboardOptions = KeyboardOptions(imeAction = if (downFocus == null) ImeAction.Done else ImeAction.Next),
             keyboardActions = KeyboardActions(
                 onNext = { finishEditing(downFocus) },
-                onDone = { finishEditing(null) },
+                onDone = {
+                    finishEditing(null)
+                    onDone()
+                },
             ),
             visualTransformation = visualTransformation,
             decorationBox = { innerTextField ->

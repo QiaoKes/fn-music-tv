@@ -7,7 +7,9 @@ import android.os.Bundle
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionResult
 import androidx.media3.session.SessionToken
@@ -45,6 +47,18 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
+internal const val AUTO_ADVANCE_COUNTDOWN_SECONDS = 5
+
+internal fun autoAdvanceTargetIndex(
+    itemCount: Int,
+    currentIndex: Int,
+    nextIndex: Int,
+): Int? {
+    if (itemCount <= 0 || currentIndex !in 0 until itemCount) return null
+    if (itemCount == 1 || nextIndex !in 0 until itemCount || nextIndex == currentIndex) return null
+    return nextIndex
+}
 
 internal data class QueueRemovalPlan(
     val removeIndex: Int,
@@ -114,6 +128,12 @@ class PlaybackController(
     private val queueProjector = PlaybackQueueProjector(MAX_QUEUE_ITEMS)
     private var forceNextPresentationProjection = false
     private val autoAdvanceGate = RoamAutoAdvanceGate()
+    private var diagnosedFailure: PlaybackException? = null
+    private var streamDiagnosticsJob: Job? = null
+    private var autoAdvanceFailure: PlaybackException? = null
+    private var autoAdvanceJob: Job? = null
+    private val spectrumCapture = PlaybackSpectrumCapture()
+    val spectrum: StateFlow<PlaybackSpectrumFrame> = spectrumCapture.frame
 
     private val listener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -176,6 +196,14 @@ class PlaybackController(
             },
             ContextCompat.getMainExecutor(context),
         )
+    }
+
+    fun setSpectrumActive(active: Boolean) {
+        spectrumCapture.setActive(active)
+    }
+
+    fun setSpectrumRunning(running: Boolean) {
+        spectrumCapture.setRunning(running)
     }
 
     fun configure(credentials: PlaybackCredentials) {
@@ -449,6 +477,7 @@ class PlaybackController(
     }
 
     fun playPause() {
+        cancelAutoAdvanceCountdown()
         controller?.let { player ->
             when {
                 player.isPlaying -> player.pause()
@@ -466,22 +495,32 @@ class PlaybackController(
     }
 
     fun next() {
+        cancelAutoAdvanceCountdown()
         if (queueKind == QueueKind.Roam) advanceRoam(RoamDirection.Next)
-        else controller?.seekToNextMediaItem()
+        else controller?.let { player ->
+            if (!player.hasNextMediaItem() && player.mediaItemCount > 0) player.seekTo(0, 0L)
+            else player.seekToNextMediaItem()
+        }
     }
 
     fun previous() {
+        cancelAutoAdvanceCountdown()
         if (queueKind == QueueKind.Roam) {
             advanceRoam(RoamDirection.Previous)
             return
         }
         controller?.let { player ->
-            if (player.currentPosition > PREVIOUS_RESTART_THRESHOLD_MS) player.seekTo(0L)
-            else player.seekToPreviousMediaItem()
+            when {
+                player.currentPosition > PREVIOUS_RESTART_THRESHOLD_MS -> player.seekTo(0L)
+                player.hasPreviousMediaItem() -> player.seekToPreviousMediaItem()
+                player.mediaItemCount > 0 -> player.seekTo(player.mediaItemCount - 1, 0L)
+                else -> Unit
+            }
         }
     }
 
     fun seekBy(offsetMs: Long) = controller?.let { player ->
+        cancelAutoAdvanceCountdown()
         val upperBound = player.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
         player.seekTo((player.currentPosition + offsetMs).coerceIn(0L, upperBound))
     }
@@ -489,6 +528,7 @@ class PlaybackController(
     fun selectQueueItem(queueIndex: Int): PlaybackTransition? {
         val player = controller ?: return null
         if (queueKind != QueueKind.Normal || queueIndex !in 0 until player.mediaItemCount) return null
+        cancelAutoAdvanceCountdown()
         player.seekTo(queueIndex, 0L)
         player.play()
         return structuralSnapshot(player)
@@ -779,6 +819,7 @@ class PlaybackController(
         }
         val currentIndex = player.currentMediaItemIndex.coerceAtLeast(0)
         val queueItems = queueProjector.project(player, currentIndex, rebuildQueue)
+        val playerFailure = player.playerError
         _state.value = PlaybackUiState(
             connected = true,
             hasMedia = player.mediaItemCount > 0,
@@ -805,12 +846,14 @@ class PlaybackController(
             roamBusy = roamJob?.isActive == true || _state.value.roamBusy,
             roamError = roamError,
             canRetryRoam = failedRoamDirection != null,
-            error = player.playerError?.let { failure ->
+            error = playerFailure?.let { failure ->
                 PlaybackFailure(failure.errorCode, failure.errorCodeName)
             },
             queueError = queueError,
             canRetryQueue = failedDirection != null && queueWindow?.invalidated == false,
         )
+        maybeDiagnoseStreamFailure(player, playerFailure)
+        maybeAutoAdvanceOnFailure(player, playerFailure)
         updateProgress(player)
         maybeLoadQueueEdge(player)
     }
@@ -820,6 +863,89 @@ class PlaybackController(
             positionMs = player.currentPosition.coerceAtLeast(0),
             durationMs = player.duration.coerceAtLeast(0),
         )
+    }
+
+    @androidx.annotation.OptIn(UnstableApi::class)
+    private fun maybeDiagnoseStreamFailure(player: Player, failure: PlaybackException?) {
+        if (failure == null) {
+            diagnosedFailure = null
+            return
+        }
+        if (failure === diagnosedFailure || failure.errorCode !in playbackProbeErrorCodes) return
+        diagnosedFailure = failure
+        val current = player.currentMediaItem
+        val streamUrl = current?.localConfiguration?.uri?.toString() ?: return
+        val mediaId = current.mediaId
+        streamDiagnosticsJob?.cancel()
+        streamDiagnosticsJob = scope.launch {
+            val diagnosis = diagnosePlaybackStream(streamUrl, pendingCredentials, context.cacheDir, mediaId)
+            debugLogDiagnosis(mediaId, failure.errorCodeName, diagnosis)
+            val state = _state.value
+            val error = state.error
+            if (error?.code == failure.errorCode && error.diagnostics == null) {
+                _state.value = state.copy(error = error.copy(diagnostics = diagnosis.summary))
+            }
+        }
+    }
+
+    private fun maybeAutoAdvanceOnFailure(player: Player, failure: PlaybackException?) {
+        if (failure == null) {
+            autoAdvanceFailure = null
+            cancelAutoAdvanceCountdown()
+            return
+        }
+        if (failure === autoAdvanceFailure) return
+        autoAdvanceFailure = failure
+        startAutoAdvanceCountdown(player)
+    }
+
+    private fun startAutoAdvanceCountdown(player: Player) {
+        cancelAutoAdvanceCountdown()
+        val targetIndex = autoAdvanceTargetIndex(
+            itemCount = player.mediaItemCount,
+            currentIndex = player.currentMediaItemIndex,
+            nextIndex = player.nextMediaItemIndex,
+        ) ?: return
+        autoAdvanceJob = scope.launch {
+            for (remaining in AUTO_ADVANCE_COUNTDOWN_SECONDS downTo 1) {
+                publishAutoAdvanceRemaining(remaining)
+                delay(1_000L)
+            }
+            clearAutoAdvanceCountdown()
+            performAutoAdvance(player, targetIndex)
+        }
+    }
+
+    private fun performAutoAdvance(player: Player, targetIndex: Int) {
+        if (queueKind == QueueKind.Roam) {
+            advanceRoam(RoamDirection.Next)
+            return
+        }
+        if (queueKind != QueueKind.Normal || targetIndex !in 0 until player.mediaItemCount) return
+        if (targetIndex == player.currentMediaItemIndex) return
+        player.seekTo(targetIndex, 0L)
+        player.prepare()
+        player.play()
+    }
+
+    private fun cancelAutoAdvanceCountdown() {
+        val hadCountdown = autoAdvanceJob != null
+        autoAdvanceJob?.cancel()
+        autoAdvanceJob = null
+        if (hadCountdown) clearAutoAdvanceCountdown()
+    }
+
+    private fun clearAutoAdvanceCountdown() {
+        val state = _state.value
+        val error = state.error ?: return
+        if (error.autoAdvanceSeconds == null) return
+        _state.value = state.copy(error = error.copy(autoAdvanceSeconds = null))
+    }
+
+    private fun publishAutoAdvanceRemaining(remaining: Int) {
+        val state = _state.value
+        val error = state.error ?: return
+        _state.value = state.copy(error = error.copy(autoAdvanceSeconds = remaining))
     }
 
     private fun maybeLoadQueueEdge(player: Player) {

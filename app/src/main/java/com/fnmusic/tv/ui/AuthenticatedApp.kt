@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -225,6 +226,7 @@ internal fun AuthenticatedApp(
             container,
             playback,
             onMy = { root(LibraryRoute.My) },
+            onSearch = { open(LibraryRoute.Search) },
             onPlaylist = { open(LibraryRoute.PlaylistDetail(it)) },
             onFavorites = { open(LibraryRoute.Favorites) },
             onAll = { open(LibraryRoute.AllPlaylists) },
@@ -235,6 +237,7 @@ internal fun AuthenticatedApp(
             session,
             playback,
             onHome = { root(LibraryRoute.Home) },
+            onSearch = { open(LibraryRoute.Search) },
             onArtists = { open(LibraryRoute.Artists) },
             onAlbums = { open(LibraryRoute.Albums) },
             onAllTracks = { open(LibraryRoute.AllTracks) },
@@ -242,6 +245,13 @@ internal fun AuthenticatedApp(
             onAlbum = { open(LibraryRoute.AlbumDetail(it)) },
             onSettings = { open(LibraryRoute.Settings) },
             onPlayer = { open(LibraryRoute.Player(null)) },
+        )
+        LibraryRoute.Search -> SearchScreen(
+            container,
+            onOpenArtist = { open(LibraryRoute.ArtistDetail(it)) },
+            onOpenAlbum = { open(LibraryRoute.AlbumDetail(it)) },
+            onOpenPlaylist = { open(LibraryRoute.PlaylistDetail(it)) },
+            onPlayer = { open(LibraryRoute.Player(it)) },
         )
         LibraryRoute.AllPlaylists -> AllPlaylists(container, onOpen = { open(LibraryRoute.PlaylistDetail(it)) })
         is LibraryRoute.PlaylistDetail -> TrackCollection(
@@ -344,11 +354,13 @@ private fun LibraryTopBar(
     selectedHome: Boolean,
     onHome: () -> Unit,
     onMy: () -> Unit,
+    onSearch: () -> Unit,
     onPlayer: () -> Unit,
     modifier: Modifier = Modifier,
     nowPlayingFocus: FocusRequester,
     homeTabFocus: FocusRequester,
     myTabFocus: FocusRequester,
+    searchFocus: FocusRequester,
     contentDownFocus: FocusRequester,
 ) {
     Row(
@@ -370,15 +382,92 @@ private fun LibraryTopBar(
         } else {
             Spacer(Modifier)
         }
-        SegmentedLibraryTabs(
-            selectedHome = selectedHome,
-            playbackAvailable = playback.hasMedia,
-            homeFocus = homeTabFocus,
-            myFocus = myTabFocus,
-            nowPlayingFocus = nowPlayingFocus,
-            contentDownFocus = contentDownFocus,
-            onHome = onHome,
-            onMy = onMy,
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SegmentedLibraryTabs(
+                selectedHome = selectedHome,
+                playbackAvailable = playback.hasMedia,
+                homeFocus = homeTabFocus,
+                myFocus = myTabFocus,
+                searchFocus = searchFocus,
+                nowPlayingFocus = nowPlayingFocus,
+                contentDownFocus = contentDownFocus,
+                onHome = onHome,
+                onMy = onMy,
+            )
+            Spacer(Modifier.width(12.dp))
+            SearchTopBarIconButton(
+                myTabFocus = myTabFocus,
+                searchFocus = searchFocus,
+                contentDownFocus = contentDownFocus,
+                onClick = onSearch,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SearchTopBarIconButton(
+    myTabFocus: FocusRequester,
+    searchFocus: FocusRequester,
+    contentDownFocus: FocusRequester,
+    onClick: () -> Unit,
+) {
+    val shape = CircleShape
+    Button(
+        onClick = onClick,
+        modifier = Modifier
+            .size(49.dp)
+            .background(Color(0xFF171B1D), shape)
+            .border(0.5.dp, Color.White.copy(alpha = 0.12f), shape)
+            .focusProperties {
+                left = myTabFocus
+                down = contentDownFocus
+            }
+            .focusRequester(searchFocus)
+            .semantics { contentDescription = "搜索" },
+        shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
+        scale = ButtonDefaults.scale(focusedScale = 1.025f),
+        colors = ButtonDefaults.colors(
+            containerColor = Color.Transparent,
+            contentColor = FnColors.Text,
+            focusedContainerColor = FnColors.FocusFill,
+            focusedContentColor = FnColors.Text,
+            pressedContainerColor = FnColors.FocusFill,
+            pressedContentColor = FnColors.Text,
+        ),
+        contentPadding = PaddingValues(0.dp),
+    ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            SearchIconGlyph()
+        }
+    }
+}
+
+@Composable
+private fun SearchIconGlyph() {
+    val iconColor = LocalContentColor.current
+    Canvas(Modifier.size(24.dp)) {
+        val stroke = 2.2.dp.toPx()
+        val center = this.center
+        val radius = size.minDimension * 0.32f
+        drawCircle(
+            color = iconColor,
+            radius = radius,
+            center = center - androidx.compose.ui.geometry.Offset(radius * 0.18f, radius * 0.18f),
+            style = Stroke(stroke),
+        )
+        drawLine(
+            color = iconColor,
+            start = androidx.compose.ui.geometry.Offset(
+                center.x + radius * 0.62f,
+                center.y + radius * 0.62f,
+            ),
+            end = androidx.compose.ui.geometry.Offset(
+                center.x + radius * 1.08f,
+                center.y + radius * 1.08f,
+            ),
+            strokeWidth = stroke * 1.25f,
+            cap = StrokeCap.Round,
         )
     }
 }
@@ -389,6 +478,7 @@ private fun SegmentedLibraryTabs(
     playbackAvailable: Boolean,
     homeFocus: FocusRequester,
     myFocus: FocusRequester,
+    searchFocus: FocusRequester,
     nowPlayingFocus: FocusRequester,
     contentDownFocus: FocusRequester,
     onHome: () -> Unit,
@@ -421,7 +511,7 @@ private fun SegmentedLibraryTabs(
             modifier = Modifier
                 .focusProperties {
                     left = homeFocus
-                    right = FocusRequester.Cancel
+                    right = searchFocus
                     down = contentDownFocus
                 }
                 .focusRequester(myFocus),
@@ -583,6 +673,7 @@ private fun BrowseHome(
     container: AuthenticatedAppDependencies,
     playback: PlaybackUiState,
     onMy: () -> Unit,
+    onSearch: () -> Unit,
     onPlaylist: (Playlist) -> Unit,
     onFavorites: () -> Unit,
     onAll: () -> Unit,
@@ -617,6 +708,7 @@ private fun BrowseHome(
     val nowPlayingFocus = remember { FocusRequester() }
     val homeTabFocus = remember { FocusRequester() }
     val myTabFocus = remember { FocusRequester() }
+    val searchTabFocus = remember { FocusRequester() }
     val roamFocus = remember { FocusRequester() }
     val favoritesFocus = remember { FocusRequester() }
     val playlistRowFocus = remember { FocusRequester() }
@@ -661,6 +753,7 @@ private fun BrowseHome(
             selectedHome = true,
             onHome = {},
             onMy = onMy,
+            onSearch = onSearch,
             onPlayer = {
                 focusedKey = "now-playing"
                 onPlayer()
@@ -671,6 +764,7 @@ private fun BrowseHome(
             nowPlayingFocus = nowPlayingFocus,
             homeTabFocus = homeTabFocus,
             myTabFocus = myTabFocus,
+            searchFocus = searchTabFocus,
             contentDownFocus = roamFocus,
         )
         Spacer(Modifier.height(12.dp))
@@ -1058,6 +1152,7 @@ private fun BrowseMy(
     session: SessionState.SignedIn,
     playback: PlaybackUiState,
     onHome: () -> Unit,
+    onSearch: () -> Unit,
     onArtists: () -> Unit,
     onAlbums: () -> Unit,
     onAllTracks: () -> Unit,
@@ -1079,6 +1174,7 @@ private fun BrowseMy(
     val nowPlayingFocus = remember { FocusRequester() }
     val homeTabFocus = remember { FocusRequester() }
     val myTabFocus = remember { FocusRequester() }
+    val searchTabFocus = remember { FocusRequester() }
     val settingsFocus = remember { FocusRequester() }
     val switchAccountFocus = remember { FocusRequester() }
     val artistRowFocus = remember { FocusRequester() }
@@ -1132,6 +1228,7 @@ private fun BrowseMy(
             selectedHome = false,
             onHome = onHome,
             onMy = {},
+            onSearch = onSearch,
             onPlayer = {
                 focusedKey = "now-playing"
                 onPlayer()
@@ -1142,6 +1239,7 @@ private fun BrowseMy(
             nowPlayingFocus = nowPlayingFocus,
             homeTabFocus = homeTabFocus,
             myTabFocus = myTabFocus,
+            searchFocus = searchTabFocus,
             contentDownFocus = settingsFocus,
         )
         Spacer(Modifier.height(12.dp))
@@ -1616,7 +1714,7 @@ private fun AlbumGrid(container: AuthenticatedAppDependencies, onOpen: (Album) -
 }
 
 @Composable
-private fun <T> PagedCatalogPage(
+internal fun <T> PagedCatalogPage(
     stateKey: String,
     title: String,
     totalLabel: (Int) -> String,
@@ -1891,7 +1989,7 @@ private fun <T> GridPage(
 
 private enum class ArtistDetailSection { Songs, Albums }
 
-private data class TrackDetailTab(
+internal data class TrackDetailTab(
     val key: String,
     val label: String,
     val selected: Boolean,
@@ -1899,7 +1997,7 @@ private data class TrackDetailTab(
     val onSelect: () -> Unit,
 )
 
-private data class TrackDetailHeader(
+internal data class TrackDetailHeader(
     val kind: String,
     val declaredTrackCount: Int? = null,
     val extraMetadata: String? = null,
@@ -1908,9 +2006,8 @@ private data class TrackDetailHeader(
     val onBack: () -> Unit,
 )
 
-private enum class CollectionArtworkFallback { Initial, Artist, Favorites, Collection }
-
-private sealed interface TrackCollectionPrimaryAction {
+internal enum class CollectionArtworkFallback { Initial, Artist, Favorites, Collection }
+internal sealed interface TrackCollectionPrimaryAction {
     data object PlayAll : TrackCollectionPrimaryAction
     data class StartRoam(val onStarted: () -> Unit) : TrackCollectionPrimaryAction
 }
@@ -2155,7 +2252,7 @@ private fun DetailAlbumCard(album: Album, modifier: Modifier = Modifier, onClick
 }
 
 @Composable
-private fun TrackCollection(
+internal fun TrackCollection(
     container: AuthenticatedAppDependencies,
     stateKey: String,
     title: String,
@@ -2645,7 +2742,7 @@ private fun DetailTrackColumnHeader() {
 }
 
 @Composable
-private fun DetailTrackRow(
+internal fun DetailTrackRow(
     index: Int,
     track: Track,
     enabled: Boolean,
@@ -2677,34 +2774,48 @@ private fun DetailTrackRow(
         contentPadding = PaddingValues(horizontal = 15.dp, vertical = 0.dp),
     ) {
         val contentColor = LocalContentColor.current
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 (index + 1).toString().padStart(2, '0'),
                 color = contentColor.copy(alpha = 0.66f),
                 fontSize = 13.sp,
-                modifier = Modifier.width(54.dp),
+                modifier = Modifier.width(44.dp),
             )
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+            Column(
+                Modifier
+                    .weight(1f)
+                    .fillMaxHeight(),
+                verticalArrangement = Arrangement.spacedBy(4.dp, alignment = Alignment.CenterVertically),
+            ) {
                 Text(track.title, color = contentColor, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                track.albumName?.takeIf(String::isNotBlank)?.let {
-                    Text(it, color = contentColor.copy(alpha = 0.6f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                track.artistName.orEmpty().takeIf(String::isNotBlank)?.let {
+                    Text(it, color = contentColor.copy(alpha = 0.72f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            Text(
-                track.artistName.orEmpty(),
-                color = contentColor.copy(alpha = 0.72f),
-                fontSize = 14.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.width(220.dp),
-            )
-            Text(
-                if (track.isCue) "需兼容" else formatDuration(track.durationMs ?: 0),
-                color = contentColor.copy(alpha = 0.72f),
-                fontSize = 14.sp,
-                textAlign = TextAlign.End,
-                modifier = Modifier.width(70.dp),
-            )
+            Column(
+                Modifier
+                    .width(104.dp)
+                    .fillMaxHeight(),
+                verticalArrangement = Arrangement.spacedBy(4.dp, alignment = Alignment.CenterVertically),
+                horizontalAlignment = Alignment.End,
+            ) {
+                Text(
+                    if (track.isCue) "需兼容" else formatDuration(track.durationMs ?: 0),
+                    color = contentColor.copy(alpha = 0.72f),
+                    fontSize = 14.sp,
+                    textAlign = TextAlign.End,
+                )
+                track.albumName?.takeIf(String::isNotBlank)?.let {
+                    Text(
+                        it,
+                        color = contentColor.copy(alpha = 0.6f),
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.End,
+                    )
+                }
+            }
         }
     }
 }
@@ -2777,11 +2888,11 @@ internal fun exactTrackQueueWindow(
     return ExactTrackQueueWindow(items = bounded.items, segments = segments)
 }
 
-private fun isTrackPlayable(track: Track): Boolean =
+internal fun isTrackPlayable(track: Track): Boolean =
     !track.isCue && (track.accessStatus == null || track.accessStatus == 0)
 
 @Composable
-private fun PlaylistTile(
+internal fun PlaylistTile(
     title: String,
     subtitle: String,
     coverId: String?,
@@ -2870,7 +2981,7 @@ private fun PlaylistTileArtwork(
     }
 }
 
-private enum class HomeArtworkKind { Roam, Favorites, Collection, PlaylistGrid }
+internal enum class HomeArtworkKind { Roam, Favorites, Collection, PlaylistGrid }
 
 @Composable
 private fun HomeFeatureArtwork(kind: HomeArtworkKind, modifier: Modifier) {
@@ -3124,7 +3235,7 @@ private fun HomeFeatureArtwork(kind: HomeArtworkKind, modifier: Modifier) {
 }
 
 @Composable
-private fun ArtistLockup(
+internal fun ArtistLockup(
     title: String,
     subtitle: String,
     coverId: String?,
@@ -3190,7 +3301,7 @@ private fun ArtistAvatarPlaceholder(
 }
 
 @Composable
-private fun AlbumLockup(
+internal fun AlbumLockup(
     title: String,
     subtitle: String,
     coverId: String?,
@@ -3464,7 +3575,7 @@ private fun rememberRemoteArtworkBitmap(
 }
 
 @Composable
-private fun InlineError(error: AppError) {
+internal fun InlineError(error: AppError) {
     Text(appErrorMessage(error), color = FnColors.Coral, fontSize = 18.sp, modifier = Modifier.padding(top = 12.dp))
 }
 

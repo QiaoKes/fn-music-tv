@@ -43,9 +43,18 @@ data class PlaybackUiState(
 data class PlaybackFailure(
     val code: Int,
     val displayName: String,
+    val diagnostics: String? = null,
+    val autoAdvanceSeconds: Int? = null,
 ) {
     val requiresSessionVerification: Boolean
         get() = code == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS
+
+    val displayText: String
+        get() {
+            val base = diagnostics?.takeIf(String::isNotBlank)?.let { "$displayName\n$it" } ?: displayName
+            val remaining = autoAdvanceSeconds?.coerceAtLeast(0)
+            return remaining?.let { "$base，$it 秒后自动播放下一首" } ?: base
+        }
 }
 
 data class PlaybackProgressState(

@@ -293,6 +293,59 @@ class MusicRepository internal constructor(
         return result
     }
 
+    suspend fun searchTracks(keyword: String, page: Int): Page<Track> {
+        val response = session.authenticated { it.searchTracks(keyword, page) }
+        val result = Page(
+            items = response.list.map(TrackDto::toDomain),
+            page = page,
+            pageSize = response.list.size,
+            total = response.total,
+            sort = response.sort.ifBlank { SEARCH_TRACKS_SORT },
+        ).also {
+            observeFavoriteTracks(it, session.cacheNamespace())
+        }
+        return result
+    }
+
+    suspend fun searchArtists(keyword: String, page: Int): Page<Artist> {
+        val response = session.authenticated { it.searchArtists(keyword, page) }
+        return Page(
+            items = response.list.map(ArtistDto::toDomain),
+            page = page,
+            pageSize = response.list.size,
+            total = response.total,
+            sort = response.sort.ifBlank { SEARCH_SORT },
+        )
+    }
+
+    suspend fun searchAlbums(keyword: String, page: Int): Page<Album> {
+        val response = session.authenticated { it.searchAlbums(keyword, page) }
+        return Page(
+            items = response.list.map(AlbumDto::toDomain),
+            page = page,
+            pageSize = response.list.size,
+            total = response.total,
+            sort = response.sort.ifBlank { SEARCH_SORT },
+        )
+    }
+
+    /**
+     * Playlist search is a client-side name filter: the server `search/playlist` endpoint ignores
+     * the keyword (verified live), so relying on it would present an unfiltered list as results.
+     */
+    suspend fun searchPlaylists(keyword: String): Page<Playlist> {
+        val playlists = playlists()
+        val keywordNorm = keyword.trim()
+        val filtered = playlists.filter { it.name.contains(keywordNorm, ignoreCase = true) }
+        return Page(
+            items = filtered,
+            page = 1,
+            pageSize = filtered.size,
+            total = filtered.size,
+            sort = "name",
+        )
+    }
+
     suspend fun toggleFavorite(trackGuid: String, fallbackFavorite: Boolean): Result<Boolean> =
         favoriteMutationMutex.withLock {
             val namespace = session.cacheNamespace()
@@ -325,6 +378,7 @@ class MusicRepository internal constructor(
         is QueueSource.Album -> albumTracks(source.guid, page)
         is QueueSource.LibraryAllTracks -> allTracks(page)
         is QueueSource.Favorites -> favoriteTracks(page)
+        is QueueSource.SearchTracks -> searchTracks(source.keyword, page)
     }
 
     suspend fun sharedLibraries(): List<SharedLibrary> = cachedIndex<List<SharedLibraryDto>, List<SharedLibrary>>(
@@ -630,6 +684,8 @@ class MusicRepository internal constructor(
         const val PAGE_SIZE = 50
         const val FAVORITE_PAGE_SIZE = 50
         const val FAVORITE_SORT = "favoriteAt,desc"
+        const val SEARCH_SORT = "createdAt,desc"
+        const val SEARCH_TRACKS_SORT = SEARCH_SORT
 
         fun defaultOnlineLyricsMatcher(): suspend (LyricsMatchRequest) -> LyricsMatchResult {
             val client = okhttp3.OkHttpClient.Builder()

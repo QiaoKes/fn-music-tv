@@ -6,6 +6,7 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -18,6 +19,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -32,6 +34,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.gestures.scrollBy as lazyListScrollBy
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -46,10 +49,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -71,6 +76,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
@@ -89,7 +95,9 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -134,6 +142,7 @@ import com.fnmusic.tv.core.model.playback.QueuePageSegment
 import com.fnmusic.tv.core.model.playback.boundedQueueWindow
 import com.fnmusic.tv.core.playback.PlaybackUiState
 import com.fnmusic.tv.core.playback.PlaybackProgressState
+import com.fnmusic.tv.core.playback.PlaybackSpectrumFrame
 import com.mocharealm.accompanist.lyrics.core.model.SyncedLyrics
 import com.mocharealm.accompanist.lyrics.ui.composable.lyrics.KaraokeBreathingDotsDefaults
 import com.mocharealm.accompanist.lyrics.ui.composable.lyrics.KaraokeLyricsView
@@ -144,6 +153,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 import kotlin.math.pow
 import kotlin.math.sqrt
 
@@ -264,6 +274,7 @@ internal fun ImmersivePlayer(
     val favoritePending = playback.mediaId in favoriteLibraryState.pending
     var controlsVisible by remember { mutableStateOf(true) }
     var queueVisible by remember { mutableStateOf(false) }
+    var detailsVisible by remember { mutableStateOf(false) }
     var consumeBackKeyUp by remember { mutableStateOf(false) }
     var consumeCenterKeyUp by remember { mutableStateOf(false) }
     var interactionEpoch by remember { mutableStateOf(0) }
@@ -275,6 +286,7 @@ internal fun ImmersivePlayer(
     val modeFocus = remember { FocusRequester() }
     val favoriteFocus = remember { FocusRequester() }
     val queueFocus = remember { FocusRequester() }
+    val detailsFocus = remember { FocusRequester() }
     val exitRoamFocus = remember { FocusRequester() }
     val statusRetryFocus = remember { FocusRequester() }
     val context = LocalContext.current
@@ -287,6 +299,7 @@ internal fun ImmersivePlayer(
     }
     fun dismissPlayerChrome() {
         queueVisible = false
+        detailsVisible = false
         controlsVisible = false
         playerFocus.requestFocus()
     }
@@ -297,7 +310,24 @@ internal fun ImmersivePlayer(
         ?: playback.artist
     val audioFormat = metadata?.audioFormat?.takeUnless(String::isBlank)
         ?: playback.audioFormat
-    val poster = preferences.playerStyle == PlayerStyle.Poster
+    val style = preferences.playerStyle
+    val poster = style == PlayerStyle.Poster
+    val spectrum = style == PlayerStyle.Spectrum
+    val spectrumFrame = container.playbackController.spectrum.collectAsStateWithLifecycle()
+    DisposableEffect(spectrum) {
+        if (spectrum) {
+            container.playbackController.setSpectrumActive(true)
+        }
+        onDispose {
+            container.playbackController.setSpectrumActive(false)
+            container.playbackController.setSpectrumRunning(false)
+        }
+    }
+    LaunchedEffect(spectrum, playback.isPlaying) {
+        if (spectrum) {
+            container.playbackController.setSpectrumRunning(playback.isPlaying)
+        }
+    }
     val artwork = rememberCurrentArtwork(
         identity = playback.nowPlayingIdentity,
         playerStyle = preferences.playerStyle,
@@ -316,20 +346,29 @@ internal fun ImmersivePlayer(
         canRetryQueue = playback.canRetryQueue,
         presentationError = presentation.retryableFailure,
         canRetryPresentation = presentation.canRetry,
-        playbackError = playback.error?.displayName,
+        playbackError = playback.error?.displayText,
     )?.retry != null
-    LaunchedEffect(interactionEpoch, controlsVisible, queueVisible) {
-        if (controlsVisible && !queueVisible) {
+    var wasDetailsVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(interactionEpoch, controlsVisible, queueVisible, detailsVisible) {
+        if (controlsVisible && !queueVisible && !detailsVisible) {
             delay(5_000)
             controlsVisible = false
         }
     }
-    LaunchedEffect(controlsVisible, queueVisible) {
+    LaunchedEffect(controlsVisible, queueVisible, detailsVisible) {
         when {
-            queueVisible -> Unit
-            controlsVisible -> playFocus.requestFocus()
+            queueVisible || detailsVisible -> Unit
+            controlsVisible -> {
+                if (wasDetailsVisible) {
+                    yield()
+                    runCatching { detailsFocus.requestFocus() }
+                } else {
+                    playFocus.requestFocus()
+                }
+            }
             else -> playerFocus.requestFocus()
         }
+        wasDetailsVisible = detailsVisible
     }
     LaunchedEffect(roaming) {
         if (!roaming && controlsVisible) playFocus.requestFocus()
@@ -342,7 +381,7 @@ internal fun ImmersivePlayer(
             runCatching { queueFocus.requestFocus() }
         }
     }
-    BackHandler(queueVisible || controlsVisible) {
+    BackHandler(queueVisible || controlsVisible || detailsVisible) {
         dismissPlayerChrome()
     }
     Box(
@@ -350,7 +389,7 @@ internal fun ImmersivePlayer(
             .background(FnColors.Background)
             .focusRequester(playerFocus)
             .dismissPlayerChromeOnBack(
-                chromeVisible = controlsVisible || queueVisible,
+                chromeVisible = controlsVisible || queueVisible || detailsVisible,
                 consumeBackKeyUp = consumeBackKeyUp,
                 setConsumeBackKeyUp = { consumeBackKeyUp = it },
                 onDismiss = ::dismissPlayerChrome,
@@ -359,11 +398,15 @@ internal fun ImmersivePlayer(
                 chromeVisible = controlsVisible,
                 shouldConsumeCenterKeyUp = { consumeCenterKeyUp },
                 setConsumeCenterKeyUp = { consumeCenterKeyUp = it },
+                canPrevious = previousEnabled,
+                canNext = nextEnabled,
                 onCenter = container.playbackController::playPause,
+                onPrevious = container.playbackController::previous,
+                onNext = container.playbackController::next,
                 onReveal = ::revealControls,
             )
-            .pointerInput(controlsVisible, queueVisible) {
-                if (!controlsVisible && !queueVisible) {
+            .pointerInput(controlsVisible, queueVisible, detailsVisible) {
+                if (!controlsVisible && !queueVisible && !detailsVisible) {
                     detectTapGestures { revealControls() }
                 }
             }
@@ -375,7 +418,7 @@ internal fun ImmersivePlayer(
             PlayerBackdrop(ambienceColor, Modifier.fillMaxSize())
         }
         PlayerMainContent(
-            poster = poster,
+            playerStyle = style,
             controlsVisible = controlsVisible,
             artworkBitmap = artworkBitmap,
             placeholderAccent = ambienceColor,
@@ -386,11 +429,12 @@ internal fun ImmersivePlayer(
             isPlaying = playback.isPlaying,
             lyricIdentity = playback.nowPlayingIdentity,
             syncedLyrics = syncedLyrics,
+            spectrumFrame = spectrumFrame,
             playbackProgress = playbackProgress,
             staticLyric = staticLyric,
             lyricsLoading = lyricsLoading,
             lyricsFailed = lyricsFailed,
-            playbackError = playback.error?.displayName,
+            playbackError = playback.error?.displayText,
             queueError = playback.queueError,
             canRetryQueue = playback.canRetryQueue,
             onRetryQueue = container.playbackController::retryQueuePage,
@@ -404,7 +448,7 @@ internal fun ImmersivePlayer(
             statusRetryReturnFocus = progressFocus,
             onStatusInteraction = ::revealControls,
         )
-        if (controlsVisible && !queueVisible) {
+        if (controlsVisible && !queueVisible && !detailsVisible) {
             PlaybackProgressValues(playbackProgress) { positionMs, durationMs ->
                 PlayerControlOverlay(
                     positionMs = positionMs,
@@ -420,6 +464,7 @@ internal fun ImmersivePlayer(
                     favoriteFocus = favoriteFocus,
                     modeFocus = modeFocus,
                     queueFocus = queueFocus,
+                    detailsFocus = detailsFocus,
                     exitRoamFocus = exitRoamFocus,
                     statusRetryFocus = statusRetryFocus,
                     statusRetryAvailable = statusRetryAvailable,
@@ -459,6 +504,7 @@ internal fun ImmersivePlayer(
                             queueVisible = true
                         }
                     },
+                    onOpenDetails = { detailsVisible = true },
                     onExitRoam = onExitRoam,
                     modifier = Modifier.align(Alignment.BottomCenter),
                 )
@@ -474,6 +520,21 @@ internal fun ImmersivePlayer(
                 onSelect = container.playbackController::selectQueueItem,
                 onRemove = container.playbackController::removeQueueItem,
                 onInteraction = ::revealControls,
+            )
+        }
+        if (detailsVisible) {
+            SongDetailsOverlay(
+                title = title,
+                artist = artist,
+                album = metadata?.albumName ?: playback.nowPlayingIdentity?.album,
+                audioFormat = audioFormat,
+                durationMs = metadata?.durationMs ?: playback.durationMs.takeIf { it > 0L },
+                songId = playback.mediaId,
+                onInteraction = ::revealControls,
+                onDismiss = {
+                    detailsVisible = false
+                    revealControls()
+                },
             )
         }
     }
@@ -513,7 +574,11 @@ internal fun Modifier.revealPlayerChromeOnKey(
     chromeVisible: Boolean,
     shouldConsumeCenterKeyUp: () -> Boolean,
     setConsumeCenterKeyUp: (Boolean) -> Unit,
+    canPrevious: Boolean,
+    canNext: Boolean,
     onCenter: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
     onReveal: () -> Unit,
 ): Modifier = onPreviewKeyEvent { event ->
     val isCenter = event.key == Key.Enter || event.key == Key.DirectionCenter
@@ -529,10 +594,15 @@ internal fun Modifier.revealPlayerChromeOnKey(
             onReveal()
             true
         }
-        event.key == Key.DirectionLeft ||
-            event.key == Key.DirectionRight ||
-            event.key == Key.DirectionUp ||
-            event.key == Key.DirectionDown -> {
+        event.key == Key.DirectionLeft -> {
+            if (canPrevious) onPrevious() else onReveal()
+            true
+        }
+        event.key == Key.DirectionRight -> {
+            if (canNext) onNext() else onReveal()
+            true
+        }
+        event.key == Key.DirectionUp || event.key == Key.DirectionDown -> {
             onReveal()
             true
         }
@@ -598,7 +668,7 @@ private fun PlayerPosterBackdrop(targetColor: Color, modifier: Modifier = Modifi
 
 @Composable
 private fun PlayerMainContent(
-    poster: Boolean,
+    playerStyle: PlayerStyle,
     controlsVisible: Boolean,
     artworkBitmap: Bitmap?,
     placeholderAccent: Color,
@@ -609,6 +679,7 @@ private fun PlayerMainContent(
     isPlaying: Boolean,
     lyricIdentity: NowPlayingIdentity?,
     syncedLyrics: SyncedLyrics?,
+    spectrumFrame: State<PlaybackSpectrumFrame>,
     playbackProgress: State<PlaybackProgressState>,
     staticLyric: String?,
     lyricsLoading: Boolean,
@@ -628,6 +699,7 @@ private fun PlayerMainContent(
     onStatusInteraction: () -> Unit,
 ) {
     val placeholder = title.take(1).ifBlank { "音" }
+    val poster = playerStyle == PlayerStyle.Poster
     if (poster) {
         Box(Modifier.fillMaxSize()) {
             if (artworkBitmap != null) {
@@ -701,6 +773,62 @@ private fun PlayerMainContent(
                 controlsVisible = controlsVisible,
             )
         }
+    } else if (playerStyle == PlayerStyle.Spectrum) {
+        // Spectrum: the page splits into exact quarters — blank / info / spectrum / blank.
+        // The info block (cover + title + artist) fills its quarter and is centered.
+        Box(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxSize()) {
+            Column(
+                Modifier.weight(0.49f).fillMaxHeight().padding(end = 14.dp),
+            ) {
+                Spacer(Modifier.weight(1f))
+                Box(
+                    Modifier.weight(1f).fillMaxWidth(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    PlayerSongInfoHeader(
+                        title = title,
+                        artist = artist,
+                        coverBitmap = artworkBitmap,
+                        coverPlaceholder = placeholder,
+                        coverAccent = placeholderAccent,
+                        modifier = Modifier.fillMaxHeight(),
+                    )
+                }
+                PlayerSpectrumBands(
+                    spectrum = spectrumFrame,
+                    isPlaying = isPlaying,
+                    accent = placeholderAccent,
+                    modifier = Modifier.weight(1f).fillMaxWidth().padding(start = 30.dp),
+                )
+                Spacer(Modifier.weight(1f))
+            }
+            SmoothLyricProgress(
+                progress = playbackProgress,
+                isPlaying = isPlaying,
+                identity = lyricIdentity,
+            ) { positionMs ->
+                PlayerSpectrumLyricsPane(
+                    lyrics = syncedLyrics,
+                    positionMs = positionMs,
+                    staticLyric = staticLyric,
+                    loading = lyricsLoading,
+                    failed = lyricsFailed,
+                    modifier = Modifier
+                        .weight(0.51f)
+                        .fillMaxHeight()
+                        .padding(start = 26.dp, end = 44.dp),
+                )
+            }
+            }
+            if (audioFormat.isNotBlank()) {
+                AudioFormatBadge(
+                    audioFormat,
+                    poster = true,
+                    Modifier.align(Alignment.TopEnd).padding(top = 30.dp, end = 44.dp),
+                )
+            }
+        }
     } else {
         Row(Modifier.fillMaxSize()) {
             BoxWithConstraints(
@@ -743,6 +871,128 @@ private fun PlayerMainContent(
                         bottom = if (controlsVisible) 132.dp else 48.dp,
                     ),
                 controlsVisible = controlsVisible,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlayerSongInfoHeader(
+    title: String,
+    artist: String,
+    coverBitmap: Bitmap?,
+    coverPlaceholder: String,
+    coverAccent: Color,
+    modifier: Modifier = Modifier,
+) {
+    // 填充式: 封面占满调用方给定的整段高度, 歌名/歌手在右侧列内垂直撑开并水平居中。
+    Row(
+        modifier.fillMaxHeight(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        if (coverBitmap != null) {
+            Image(
+                coverBitmap.asImageBitmap(),
+                null,
+                Modifier
+                    .fillMaxHeight()
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(10.dp)),
+                contentScale = ContentScale.Crop,
+            )
+        } else {
+            PlayerArtworkPlaceholder(
+                coverPlaceholder,
+                coverAccent,
+                Modifier
+                    .fillMaxHeight()
+                    .aspectRatio(1f),
+                RoundedCornerShape(10.dp),
+            )
+        }
+        Column(
+            Modifier.weight(1f, fill = false).fillMaxHeight(),
+            verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                title,
+                fontSize = 30.sp,
+                lineHeight = 36.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                artist.ifBlank { "未知演唱者" },
+                color = FnColors.Muted,
+                fontSize = 18.sp,
+                lineHeight = 22.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlayerSpectrumLyricsPane(
+    lyrics: SyncedLyrics?,
+    positionMs: Long,
+    staticLyric: String?,
+    loading: Boolean,
+    failed: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    BoxWithConstraints(modifier) {
+        SpectrumLyricsRenderer(
+            lyrics = lyrics,
+            positionMs = positionMs,
+            loading = loading,
+            failed = failed,
+            staticLyric = staticLyric,
+            modifier = Modifier,
+        )
+    }
+}
+
+@Composable
+private fun PlayerSpectrumBands(
+    spectrum: State<PlaybackSpectrumFrame>,
+    isPlaying: Boolean,
+    accent: Color,
+    modifier: Modifier = Modifier,
+) {
+    // Bars rise from the bottom edge of the given slot; they animate down to a quiet floor
+    // line while playback is paused.
+    val activity by animateFloatAsState(
+        targetValue = if (isPlaying) 1f else 0f,
+        animationSpec = tween(durationMillis = 420, easing = LinearEasing),
+        label = "spectrumActivity",
+    )
+    Canvas(modifier) {
+        val bands = spectrum.value.bands
+        val count = bands.size
+        if (count == 0) return@Canvas
+        val barCount = count * 1.5f - 0.5f
+        val barWidth = size.width / barCount
+        val gap = barWidth * 0.5f
+        val step = barWidth + gap
+        val floorHeight = 2.dp.toPx()
+        for (band in 0 until count) {
+            val level = (bands[band].coerceIn(0f, 1f) * activity).coerceAtLeast(0.018f)
+            val height = (size.height * level).coerceAtLeast(floorHeight)
+            drawRoundRect(
+                brush = Brush.verticalGradient(
+                    0f to FnColors.Teal.copy(alpha = 0.88f),
+                    1f to accent.copy(alpha = 0.72f),
+                ),
+                topLeft = androidx.compose.ui.geometry.Offset(band * step, size.height - height),
+                size = androidx.compose.ui.geometry.Size(barWidth, height),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(barWidth / 2f),
             )
         }
     }
@@ -877,10 +1127,11 @@ internal fun PlayerStatusRetryButton(
 }
 
 @Composable
-private fun AudioFormatBadge(audioFormat: String, poster: Boolean) {
+private fun AudioFormatBadge(audioFormat: String, poster: Boolean, modifier: Modifier = Modifier) {
     val color = FnColors.Text.copy(alpha = 0.72f)
     Box(
-        Modifier.border(1.dp, color, RoundedCornerShape(2.dp))
+        modifier
+            .border(1.dp, color, RoundedCornerShape(2.dp))
             .padding(horizontal = if (poster) 5.dp else 6.dp, vertical = 2.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -898,11 +1149,13 @@ private fun AudioFormatBadge(audioFormat: String, poster: Boolean) {
 @Composable
 private fun PlayerArtworkPlaceholder(text: String, accent: Color, modifier: Modifier, shape: Shape) {
     val background = androidx.compose.ui.graphics.lerp(accent, FnColors.Background, 0.58f)
-    Box(modifier.clip(shape).background(background), contentAlignment = Alignment.Center) {
+    BoxWithConstraints(modifier.clip(shape).background(background), contentAlignment = Alignment.Center) {
+        // The glyph scales with the slot; small squares (right-side info cover) stay legible.
+        val glyphValue = with(LocalDensity.current) { (maxWidth * 0.38f).toSp() }
         Text(
             text.take(1).ifBlank { "音" },
             color = FnColors.Text.copy(alpha = 0.9f),
-            fontSize = 64.sp,
+            fontSize = glyphValue.value.coerceIn(16f, 64f).sp,
             fontWeight = FontWeight.Bold,
         )
     }
@@ -1019,11 +1272,16 @@ internal fun TvLyrics(
     poster: Boolean,
     modifier: Modifier = Modifier,
     controlsVisible: Boolean = false,
+    viewportHeight: androidx.compose.ui.unit.Dp? = null,
+    scrollAnchor: com.mocharealm.accompanist.lyrics.ui.composable.lyrics.LyricsScrollAnchor? = null,
+    viewportPaddingOverride: androidx.compose.ui.unit.Dp? = null,
+    lyricsTopFade: androidx.compose.ui.unit.Dp? = null,
+    lyricsBottomFade: androidx.compose.ui.unit.Dp? = null,
 ) {
     Box(
         modifier
             .fillMaxWidth()
-            .height(defaultLyricsViewportHeight(poster, controlsVisible))
+            .height(viewportHeight ?: defaultLyricsViewportHeight(poster, controlsVisible))
             .focusProperties {
                 canFocus = false
                 onEnter = { cancelFocusChange() }
@@ -1033,7 +1291,7 @@ internal fun TvLyrics(
     ) {
         when {
             lyrics != null && lyrics.lines.isNotEmpty() -> {
-                val listState = rememberLazyListState()
+                val viewListState = rememberLazyListState()
                 val positionState = rememberUpdatedState(positionMs.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt())
                 val currentPosition = remember { { positionState.value } }
                 androidx.compose.runtime.CompositionLocalProvider(
@@ -1044,12 +1302,16 @@ internal fun TvLyrics(
                     ),
                 ) {
                     KaraokeLyricsView(
-                        listState = listState,
+                        listState = viewListState,
                         lyrics = lyrics,
                         currentPosition = currentPosition,
                         onLineClicked = {},
                         onLinePressed = {},
                         modifier = Modifier.fillMaxSize().focusProperties { canFocus = false },
+                        topFadeDistance = lyricsTopFade ?: 20.dp,
+                        bottomFadeDistance = lyricsBottomFade ?: 100.dp,
+                        scrollAnchor = scrollAnchor ?: com.mocharealm.accompanist.lyrics.ui.composable.lyrics.LyricsScrollAnchor.Top,
+                        viewportPaddingOverride = viewportPaddingOverride,
                         normalLineTextStyle = TextStyle(
                             color = FnColors.Text,
                             fontSize = if (poster) 24.sp else 27.sp,
@@ -1076,6 +1338,12 @@ internal fun TvLyrics(
                         ),
                     )
                 }
+                LyricsDebugRuler(
+                    style = LyricsDebugFadeStyle.EdgeZones,
+                    topFadeDistance = lyricsTopFade ?: 20.dp,
+                    bottomFadeDistance = lyricsBottomFade ?: 100.dp,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
             !staticLyric.isNullOrBlank() -> Text(
                 staticLyric,
@@ -1367,6 +1635,93 @@ internal fun PlaybackQueueOverlay(
 }
 
 @Composable
+internal fun SongDetailsOverlay(
+    title: String,
+    artist: String,
+    album: String?,
+    audioFormat: String,
+    durationMs: Long?,
+    songId: String,
+    onInteraction: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val closeFocus = remember { FocusRequester() }
+    LaunchedEffect(closeFocus) {
+        yield()
+        runCatching { closeFocus.requestFocus() }
+    }
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.34f))) {
+        Column(
+            Modifier.align(Alignment.Center)
+                .width(430.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xF3121717))
+                .padding(horizontal = 28.dp, vertical = 24.dp),
+        ) {
+            Text("歌曲详情", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(16.dp))
+            SongDetailsRow("歌曲", title.ifBlank { "未知歌曲" })
+            SongDetailsRow("演唱者", artist.ifBlank { "未知演唱者" })
+            SongDetailsRow("专辑", album.orEmpty().ifBlank { "未知专辑" })
+            SongDetailsRow("时长", durationMs?.takeIf { it > 0L }?.let(::formatDuration) ?: "未知")
+            if (audioFormat.isNotBlank()) {
+                SongDetailsRow("音频格式", audioFormat)
+            }
+            SongDetailsRow("歌曲 ID", songId.ifBlank { "未知" })
+            Spacer(Modifier.height(20.dp))
+            TvMaterialButton(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth().height(42.dp)
+                    .focusProperties {
+                        up = FocusRequester.Cancel
+                        down = FocusRequester.Cancel
+                        left = FocusRequester.Cancel
+                        right = FocusRequester.Cancel
+                    }
+                    .focusRequester(closeFocus)
+                    .onFocusChanged { if (it.isFocused) onInteraction() }
+                    .semantics { contentDescription = "关闭歌曲详情" },
+                scale = ButtonDefaults.scale(focusedScale = 1.02f),
+                colors = ButtonDefaults.colors(
+                    containerColor = Color.White.copy(alpha = 0.07f),
+                    contentColor = FnColors.Text,
+                    focusedContainerColor = FnColors.Coral,
+                    focusedContentColor = FnColors.Background,
+                    pressedContainerColor = FnColors.Coral,
+                    pressedContentColor = FnColors.Background,
+                ),
+                contentPadding = PaddingValues(0.dp),
+            ) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("关闭", fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SongDetailsRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
+        Text(
+            label,
+            color = FnColors.Muted,
+            fontSize = 14.sp,
+            lineHeight = 18.sp,
+            modifier = Modifier.width(90.dp),
+        )
+        Text(
+            value,
+            fontSize = 15.sp,
+            lineHeight = 19.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
 private fun QueueDeleteIcon() {
     val color = LocalContentColor.current
     Canvas(Modifier.size(14.dp)) {
@@ -1403,6 +1758,7 @@ internal fun PlayerControlOverlay(
     favoriteFocus: FocusRequester,
     modeFocus: FocusRequester,
     queueFocus: FocusRequester,
+    detailsFocus: FocusRequester,
     exitRoamFocus: FocusRequester,
     statusRetryFocus: FocusRequester,
     statusRetryAvailable: Boolean,
@@ -1418,6 +1774,7 @@ internal fun PlayerControlOverlay(
     onToggleFavorite: () -> Unit,
     onCyclePlayMode: () -> Unit,
     onOpenQueue: () -> Unit,
+    onOpenDetails: () -> Unit,
     onExitRoam: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1509,11 +1866,8 @@ internal fun PlayerControlOverlay(
                     description = if (favorite) "取消收藏当前歌曲" else "收藏当前歌曲",
                     focusRequester = favoriteFocus,
                     upFocus = progressFocus,
-                    rightFocus = when {
-                        !roaming -> modeFocus
-                        previousEnabled -> previousFocus
-                        else -> playFocus
-                    },
+                    leftFocus = if (roaming) exitRoamFocus else queueFocus,
+                    rightFocus = if (!roaming) modeFocus else detailsFocus,
                     selected = favorite,
                     onFocus = onInteraction,
                     onClick = {
@@ -1528,7 +1882,7 @@ internal fun PlayerControlOverlay(
                         focusRequester = modeFocus,
                         upFocus = progressFocus,
                         leftFocus = favoriteFocus,
-                        rightFocus = if (previousEnabled) previousFocus else playFocus,
+                        rightFocus = detailsFocus,
                         onFocus = onInteraction,
                         onClick = {
                             onInteraction()
@@ -1536,6 +1890,19 @@ internal fun PlayerControlOverlay(
                         },
                     )
                 }
+                PlayerSideActionButton(
+                    glyph = PlayerSideActionGlyph.Info,
+                    description = "歌曲详情",
+                    focusRequester = detailsFocus,
+                    upFocus = progressFocus,
+                    leftFocus = if (!roaming) modeFocus else favoriteFocus,
+                    rightFocus = if (previousEnabled) previousFocus else playFocus,
+                    onFocus = onInteraction,
+                    onClick = {
+                        onInteraction()
+                        onOpenDetails()
+                    },
+                )
             }
             Row(
                 Modifier.align(Alignment.Center),
@@ -1548,7 +1915,7 @@ internal fun PlayerControlOverlay(
                     enabled = previousEnabled,
                     focusRequester = previousFocus,
                     upFocus = progressFocus,
-                    leftFocus = if (roaming) favoriteFocus else modeFocus,
+                    leftFocus = if (roaming) detailsFocus else modeFocus,
                     rightFocus = playFocus,
                     onFocus = onInteraction,
                     onClick = onPrevious,
@@ -1560,7 +1927,7 @@ internal fun PlayerControlOverlay(
                     upFocus = progressFocus,
                     leftFocus = when {
                         previousEnabled -> previousFocus
-                        roaming -> favoriteFocus
+                        roaming -> detailsFocus
                         else -> modeFocus
                     },
                     rightFocus = when {
@@ -1591,6 +1958,7 @@ internal fun PlayerControlOverlay(
                 focusRequester = if (roaming) exitRoamFocus else queueFocus,
                 upFocus = progressFocus,
                 leftFocus = if (nextEnabled) nextFocus else playFocus,
+                rightFocus = favoriteFocus,
                 onFocus = onInteraction,
                 onClick = {
                     onInteraction()
@@ -1698,6 +2066,7 @@ private enum class PlayerSideActionGlyph {
     RepeatOne,
     Sequence,
     Queue,
+    Info,
 }
 
 private fun playModeGlyph(mode: PlayMode): PlayerSideActionGlyph = when (mode) {
@@ -1781,6 +2150,16 @@ private fun PlayerSideActionIcon(glyph: PlayerSideActionGlyph) {
                     close()
                 }
                 drawPath(play, iconColor)
+            }
+            PlayerSideActionGlyph.Info -> {
+                drawCircle(
+                    color = iconColor,
+                    radius = size.width * 0.34f,
+                    center = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2f),
+                    style = Stroke(width = stroke, cap = StrokeCap.Round),
+                )
+                line(0.50f, 0.27f, 0.50f, 0.32f)
+                line(0.50f, 0.45f, 0.50f, 0.72f)
             }
         }
     }

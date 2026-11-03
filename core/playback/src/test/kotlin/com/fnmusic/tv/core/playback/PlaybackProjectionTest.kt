@@ -8,6 +8,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -98,5 +99,35 @@ class PlaybackProjectionTest {
 
         assertTrue(badStatus.requiresSessionVerification)
         assertFalse(unavailable.requiresSessionVerification)
+    }
+
+    @Test
+    fun `auto advance only targets a different existing queue index`() {
+        assertEquals(3, autoAdvanceTargetIndex(itemCount = 5, currentIndex = 2, nextIndex = 3))
+        assertNull(autoAdvanceTargetIndex(itemCount = 5, currentIndex = 2, nextIndex = 2))
+        assertNull(autoAdvanceTargetIndex(itemCount = 1, currentIndex = 0, nextIndex = 0))
+        assertNull(autoAdvanceTargetIndex(itemCount = 0, currentIndex = 0, nextIndex = 0))
+        assertNull(autoAdvanceTargetIndex(itemCount = 4, currentIndex = 3, nextIndex = 3))
+    }
+
+    @Test
+    fun `display text appends diagnostics and auto advance countdown`() {
+        val plain = PlaybackFailure(
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+            "ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED",
+        )
+        assertEquals("ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED", plain.displayText)
+
+        val withDiagnostics = plain.copy(diagnostics = "HTTP 200, type=application/json")
+        assertEquals(
+            "ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED\nHTTP 200, type=application/json",
+            withDiagnostics.displayText,
+        )
+
+        val withCountdown = withDiagnostics.copy(autoAdvanceSeconds = 3)
+        assertEquals(
+            "ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED\nHTTP 200, type=application/json，3 秒后自动播放下一首",
+            withCountdown.displayText,
+        )
     }
 }

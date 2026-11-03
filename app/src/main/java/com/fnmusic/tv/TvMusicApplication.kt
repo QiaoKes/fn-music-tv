@@ -4,6 +4,7 @@ import android.app.Application
 import com.fnmusic.tv.core.data.repository.SessionRepository
 import com.fnmusic.tv.core.data.repository.MusicRepository
 import com.fnmusic.tv.core.data.preferences.AppPreferences
+import com.fnmusic.tv.core.data.preferences.SearchHistoryStore
 import com.fnmusic.tv.core.playback.PlaybackController
 import com.fnmusic.tv.core.data.local.LocalStore
 import kotlinx.coroutines.CoroutineScope
@@ -24,6 +25,7 @@ internal class AppContainer(private val application: Application) : AppUiDepende
     private val localStore = LocalStore(application)
     override val sessionRepository = SessionRepository(application)
     override val appPreferences = AppPreferences(application, localStore)
+    override val searchHistory = SearchHistoryStore(application)
     override val musicRepository = MusicRepository(application, sessionRepository, appPreferences, localStore)
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     override val updateController: UpdateCoordinator = UpdateCoordinator(application, applicationScope)

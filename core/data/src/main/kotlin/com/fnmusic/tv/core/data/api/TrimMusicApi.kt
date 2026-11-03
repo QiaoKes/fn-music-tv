@@ -83,6 +83,15 @@ class TrimMusicApi(
     suspend fun allTracks(page: Int, size: Int = 50): SortedPageListDto<TrackDto> =
         get("track/list", "page" to page, "size" to size, "sort" to "createdAt,desc")
 
+    suspend fun searchTracks(keyword: String, page: Int, size: Int = 50): SortedPageListDto<TrackDto> =
+        get("search/track", KEYWORD_PARAM to keyword, "page" to page, "size" to size, "sort" to SEARCH_SORT)
+
+    suspend fun searchArtists(keyword: String, page: Int, size: Int = 50): SortedPageListDto<ArtistDto> =
+        get("search/artist", KEYWORD_PARAM to keyword, "page" to page, "size" to size, "sort" to SEARCH_SORT)
+
+    suspend fun searchAlbums(keyword: String, page: Int, size: Int = 50): SortedPageListDto<AlbumDto> =
+        get("search/album", KEYWORD_PARAM to keyword, "page" to page, "size" to size, "sort" to SEARCH_SORT)
+
     suspend fun favoriteTracks(page: Int, size: Int = 50): PageListDto<TrackDto> =
         get("favorite-track/list", "page" to page, "size" to size, "sort" to "favoriteAt,desc")
 
@@ -263,6 +272,16 @@ class TrimMusicApi(
 
     companion object {
         private const val MAX_RELAY_REDIRECTS = 5
+
+        /**
+         * Search keyword query parameter name. Verified against a live NAS (2026-10-31):
+         * `search/track`, `search/artist` and `search/album` filter by `q`; the values verified via
+         * `q` — the change is centralized here on purpose.
+         */
+        const val KEYWORD_PARAM: String = "q"
+
+        /** Relevance ordering for search endpoints; swap here if the server expects a different sort key. */
+        const val SEARCH_SORT: String = "createdAt,desc"
 
         fun client(): OkHttpClient = OkHttpClient.Builder()
             .followRedirects(false)
