@@ -8,7 +8,6 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import android.util.Log
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
@@ -121,20 +120,6 @@ internal fun SpectrumLyricsRenderer(
             label = "spectrumLyricsPulse",
         )
 
-        LaunchedEffect(Unit, lyrics) {
-            var lastLogAt = 0L
-            withFrameNanos { }
-            while (isActive) {
-                withFrameNanos {
-                    val now = System.currentTimeMillis()
-                    if (now - lastLogAt > 1500 && lyrics != null) {
-                        // 调试: 观察行几何与时间clared, 用于验证居中 (发布前移除)
-                        lastLogAt = now
-                    }
-                }
-            }
-        }
-
         LaunchedEffect(Unit) {
             var jumpedNow = false
             while (isActive) {
@@ -229,15 +214,6 @@ internal fun SpectrumLyricsRenderer(
                 targetScroll += (nextCenterY - activeCenterY) * glideFraction
             }
 
-            if (System.currentTimeMillis() % 1000 < 40) {
-                android.util.Log.d(
-                    "spectrumLyrics",
-                    "canvasH=" + size.height.toInt() + " centerY=" + viewCenterY.toInt() + " active=" + activeIndex +
-                        " topPx=" + active.topPx.toInt() + " h=" + active.heightPx +
-                        " target=" + targetScroll.toInt() + " drawTop=" + (active.topPx - targetScroll + entryTranslatePx).toInt() +
-                        " time=" + time,
-                )
-            }
             for (row in measuredRows) {
                 val topSafe = row.topPx - targetScroll + entryTranslatePx
                 if (topSafe + row.heightPx < -64f || topSafe > size.height + 64f) continue
@@ -285,20 +261,6 @@ internal fun SpectrumLyricsRenderer(
                             textLayoutResult = translation,
                             color = FnColors.Text.copy(alpha = 0.55f * fade),
                             topLeft = Offset(sidePadPx, translationTop),
-                        )
-                    }
-
-                    // 当前行的主行文字中心标记(绿色圆点, 调试用, 发布前移除)
-                    if (System.currentTimeMillis() % 4000 < 48) {
-                        drawCircle(
-                            color = androidx.compose.ui.graphics.Color(0xFF40FF40),
-                            radius = 9f,
-                            center = Offset(x = size.width * 0.6f, y = mainTop + row.mainHeight / 2f),
-                        )
-                        android.util.Log.d(
-                            "spectrumLyrics",
-                            "activeRowCenterY=" + (mainTop + row.mainHeight / 2f).toInt() +
-                                " screenCenter=" + (size.height / 2f).toInt(),
                         )
                     }
                 } else {
